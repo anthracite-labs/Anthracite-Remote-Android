@@ -483,9 +483,6 @@ jobs:
           COMPILE_RESULT: ${{ needs.compile.result }}
           GIT_RESULT: ${{ needs.git_integration.result }}
           STATIC_RESULT: ${{ needs.static_checks.result }}
-          COMPILE_RESULT: ${{ needs.compile.result }}
-          GIT_RESULT: ${{ needs.git_integration.result }}
-          STATIC_RESULT: ${{ needs.static_checks.result }}
           UNIT_RESULT: ${{ needs.unit_tests.result }}
           DEPENDENCY_RESULT: ${{ needs.dependencies.result }}
           LINT_RESULT: ${{ needs.lint.result }}

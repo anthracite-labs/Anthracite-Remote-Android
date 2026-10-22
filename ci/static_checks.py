@@ -6,6 +6,9 @@ reference or secret-hygiene problem, and so a resource problem is reported with
 a file and line instead of as one more Kotlin "unresolved reference".
 
 Checks:
+  0. Workflow files have no duplicate mapping keys and keep the security
+     baseline. GitHub rejects a duplicate key with "workflow file issue" and
+     runs no job at all, which is the most expensive failure there is.
   1. Every XML file under app/src/main/res and the manifest is well formed.
   2. No duplicate resource name inside the same resource type and qualifier.
   3. Every R.<type>.<name> used from Kotlin resolves to a declared resource or id.
@@ -32,6 +35,52 @@ problems: list[tuple[str, str]] = []
 
 def problem(where: str, message: str) -> None:
     problems.append((where, message))
+
+
+def check_workflows() -> None:
+    """Duplicate keys make GitHub skip the whole workflow; a loader hides them."""
+    for path in sorted(glob(os.path.join(ROOT, ".github/workflows/*.yml"))):
+        relative = os.path.relpath(path, ROOT)
+        source = open(path, encoding="utf-8").read()
+
+        # Track the indentation stack so a sibling key at the same level can be
+        # compared. A "- " line starts a new sequence item, which closes every
+        # key at or below the dash, otherwise the item's own keys look like
+        # siblings of the previous item's.
+        stack: list[tuple[int, str]] = []
+        for number, line in enumerate(source.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip())
+            if stripped.startswith("- "):
+                stack = [(level, key) for level, key in stack if level < indent]
+                stripped = stripped[2:].strip()
+                indent += 2
+                if not stripped:
+                    continue
+            match = re.match(r"([A-Za-z0-9_./$\-{}\[\] ]+):", stripped)
+            if not match:
+                continue
+            key = match.group(1).strip()
+            while stack and stack[-1][0] > indent:
+                stack.pop()
+            if stack and stack[-1][0] == indent:
+                if stack[-1][1] == key:
+                    problem(relative, f"line {number}: duplicate key '{key}' makes GitHub skip the workflow")
+                stack[-1] = (indent, key)
+            else:
+                stack.append((indent, key))
+
+        # Write permissions are only acceptable where pull-request code cannot
+        # run. A PR-triggered workflow with a write token is a supply-chain risk,
+        # except the one scope code scanning itself requires to upload results.
+        runs_untrusted = re.search(r"^  pull_request(_target)?:", source, re.MULTILINE) is not None
+        if runs_untrusted:
+            writes = re.findall(r"^\s+([a-z-]+):\s*write", source, re.MULTILINE)
+            unexpected = sorted({scope for scope in writes if scope != "security-events"})
+            if unexpected:
+                problem(relative, f"a pull-request workflow requests write permissions: {', '.join(unexpected)}")
 
 
 def check_xml() -> None:
@@ -189,6 +238,7 @@ def check_secrets() -> None:
 
 def main() -> int:
     global declared
+    check_workflows()
     check_xml()
     check_duplicates()
     declared.update(declared_resources())
