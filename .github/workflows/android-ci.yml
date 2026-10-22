@@ -129,6 +129,8 @@ jobs:
           mkdir -p ci-diagnostics
           ./gradlew :app:dependencies --configuration debugRuntimeClasspath --stacktrace \
             > ci-diagnostics/debug-runtime-classpath.log 2>&1
+          ./gradlew cyclonedxBom --stacktrace > ci-diagnostics/sbom-build.log 2>&1
+          test -s build/reports/cyclonedx/bom.json
       - name: Report dependency errors
         if: steps.resolve.outcome == 'failure'
         run: bash .github/workflows/emit-failure.sh ci-diagnostics/debug-runtime-classpath.log
@@ -139,7 +141,9 @@ jobs:
           name: pr1-dependencies-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: warn
-          path: ci-diagnostics/
+          path: |
+            ci-diagnostics/
+            build/reports/cyclonedx/bom.json
       - name: Mark dependency failures
         if: always()
         env:
