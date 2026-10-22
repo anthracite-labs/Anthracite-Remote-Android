@@ -70,13 +70,34 @@ jobs:
             | tee ci-diagnostics/debug-runtime-classpath.txt
 
       - name: Android unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
+        run: |
+          set +e
+          ./gradlew testDebugUnitTest --stacktrace > ci-diagnostics/unit-tests.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            bash .github/workflows/emit-failure.sh ci-diagnostics/unit-tests.log
+            exit "$code"
+          fi
 
       - name: Android lint
-        run: ./gradlew lintDebug --stacktrace
+        run: |
+          set +e
+          ./gradlew lintDebug --stacktrace > ci-diagnostics/lint.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            bash .github/workflows/emit-failure.sh ci-diagnostics/lint.log
+            exit "$code"
+          fi
 
       - name: Assemble debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          set +e
+          ./gradlew assembleDebug --stacktrace > ci-diagnostics/assemble.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            bash .github/workflows/emit-failure.sh ci-diagnostics/assemble.log
+            exit "$code"
+          fi
 
       - name: Inspect APK
         run: |

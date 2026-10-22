@@ -944,7 +944,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun forbiddenResponse(): WebResourceResponse =
-        WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+        WebResourceResponse(
+            "text/plain",
+            "utf-8",
+            403,
+            "Forbidden",
+            emptyMap<String, String>(),
+            ByteArrayInputStream(ByteArray(0)),
+        )
 
     private fun destroyWebView() {
         webView?.let {

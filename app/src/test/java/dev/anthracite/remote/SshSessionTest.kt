@@ -2,7 +2,6 @@ package dev.anthracite.remote
 
 import com.jcraft.jsch.JSch
 import org.apache.sshd.common.config.keys.KeyUtils
-import org.apache.sshd.common.session.SessionContext
 import org.apache.sshd.common.util.security.SecurityUtils
 import org.apache.sshd.server.SshServer
 import org.apache.sshd.server.auth.password.PasswordAuthenticator
@@ -146,9 +145,7 @@ class SshSessionTest {
         val server = SshServer.setUpDefaultServer()
         server.host = LOOPBACK
         server.port = 0
-        server.keyPairProvider = object : KeyPairProvider {
-            override fun loadKeys(session: SessionContext?): Iterable<java.security.KeyPair> = listOf(hostKey)
-        }
+        server.keyPairProvider = KeyPairProvider.wrap(hostKey)
         server.passwordAuthenticator = PasswordAuthenticator { username, password, _ ->
             attempts.incrementAndGet()
             username == USER && password == PASSWORD
