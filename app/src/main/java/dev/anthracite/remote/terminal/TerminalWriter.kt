@@ -10,7 +10,7 @@ internal class TerminalWriter(
     private val onFailure: (Exception) -> Unit,
 ) {
     private val closed = AtomicBoolean(false)
-    private val queue = ArrayBlockingQueue<ByteArray>(MAX_PENDING_CHUNKS)
+    private val queue = ArrayBlockingQueue<() -> Unit>(MAX_PENDING_CHUNKS)
     private val worker = Thread({ drain() }, "anthracite-pty-writer").apply {
         isDaemon = true
         start()
@@ -19,10 +19,17 @@ internal class TerminalWriter(
     fun enqueue(bytes: ByteArray): Boolean {
         if (bytes.isEmpty() || bytes.size > MAX_CHUNK_BYTES || closed.get()) return false
         // Copy because IMEs and callers can reuse the buffer after this returns.
-        return queue.offer(bytes.copyOf()).also { accepted ->
+        val copy = bytes.copyOf()
+        return offer { output.write(copy); output.flush() }
+    }
+
+    /** PTY resize is network I/O too: serialize it with input, never on the UI thread. */
+    fun enqueueResize(resize: () -> Unit): Boolean = offer(resize)
+
+    private fun offer(operation: () -> Unit): Boolean =
+        !closed.get() && queue.offer(operation).also { accepted ->
             if (accepted && closed.get()) queue.clear()
         } && !closed.get()
-    }
 
     fun close() {
         if (!closed.compareAndSet(false, true)) return
@@ -33,10 +40,9 @@ internal class TerminalWriter(
     private fun drain() {
         try {
             while (!closed.get()) {
-                val bytes = queue.take()
+                val operation = queue.take()
                 if (closed.get()) break
-                output.write(bytes)
-                output.flush()
+                operation()
             }
         } catch (_: InterruptedException) {
             // Shutdown: the channel owner also disconnects the underlying PTY.

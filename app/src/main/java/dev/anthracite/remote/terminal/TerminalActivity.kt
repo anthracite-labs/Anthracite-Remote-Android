@@ -319,7 +319,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
         terminalView.requestFocus()
         scheduleRender()
         updateStatus()
-        TerminalTabs.get(index)?.session?.resize(gridCols, gridRows)
+        if (!tab.session.resize(gridCols, gridRows)) showNotice(getString(R.string.terminal_input_not_sent))
     }
 
     private fun closeActiveTab() {
@@ -510,7 +510,9 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
     override fun onGridChanged(cols: Int, rows: Int, widthPx: Int, heightPx: Int) {
         gridCols = cols
         gridRows = rows
-        activeSession?.resize(cols, rows, widthPx, heightPx)
+        if (activeSession?.resize(cols, rows, widthPx, heightPx) == false) {
+            showNotice(getString(R.string.terminal_input_not_sent))
+        }
         scheduleRender()
     }
 

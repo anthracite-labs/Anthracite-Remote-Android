@@ -99,11 +99,9 @@ internal class TerminalSession(
     /** Nonblocking; false means input was not accepted (closed, too large or backpressured). */
     fun write(bytes: ByteArray): Boolean = !closed.get() && writer.enqueue(bytes)
 
-    fun resize(cols: Int, rows: Int, widthPx: Int = 0, heightPx: Int = 0) {
+    fun resize(cols: Int, rows: Int, widthPx: Int = 0, heightPx: Int = 0): Boolean {
         emulator.resize(cols, rows)
-        if (!closed.get()) {
-            runCatching { pty.resize(cols, rows, widthPx, heightPx) }
-        }
+        return !closed.get() && writer.enqueueResize { pty.resize(cols, rows, widthPx, heightPx) }
     }
 
     /** Sends Ctrl-C. Whether the program stops is the host program's decision. */

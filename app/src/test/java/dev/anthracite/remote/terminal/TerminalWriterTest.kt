@@ -49,7 +49,7 @@ class TerminalWriterTest {
                 output.write(bytes, off, len)
             }
             override fun flush() {
-                if (output.size() >= 3) written.countDown()
+                if (output.size() >= 4) written.countDown()
             }
         }
         val writer = TerminalWriter(stream) { error("Unexpected failure: $it") }
@@ -57,11 +57,63 @@ class TerminalWriterTest {
             val bytes = byteArrayOf(1, 2)
             assertTrue(writer.enqueue(bytes))
             bytes[0] = 9
+            assertTrue(writer.enqueueResize { output.write(4) })
             assertTrue(writer.enqueue(byteArrayOf(3)))
             assertTrue(written.await(2, TimeUnit.SECONDS))
-            assertArrayEquals(byteArrayOf(1, 2, 3), output.toByteArray())
+            assertArrayEquals(byteArrayOf(1, 2, 4, 3), output.toByteArray())
         } finally {
             writer.close()
+        }
+    }
+
+    @Test
+    fun `a blocked PTY resize cannot block the caller`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val writer = TerminalWriter(ByteArrayOutputStream()) { error("Unexpected failure: $it") }
+        try {
+            assertTrue(writer.enqueueResize {
+                entered.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            })
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            val start = System.nanoTime()
+            assertTrue(writer.enqueue(byteArrayOf(1)))
+            assertTrue("input waited for resize", System.nanoTime() - start < TimeUnit.SECONDS.toNanos(1))
+        } finally {
+            writer.close()
+            release.countDown()
+        }
+    }
+
+    @Test
+    fun `one stalled terminal cannot hold another terminal's input`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val stalled = TerminalWriter(object : OutputStream() {
+            override fun write(value: Int) {
+                entered.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
+        }) { error("Unexpected stalled writer failure: $it") }
+        val independent = ByteArrayOutputStream()
+        val wrote = CountDownLatch(1)
+        val other = TerminalWriter(object : OutputStream() {
+            override fun write(value: Int) {
+                independent.write(value)
+                wrote.countDown()
+            }
+        }) { error("Unexpected second writer failure: $it") }
+        try {
+            assertTrue(stalled.enqueue(byteArrayOf(1)))
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            assertTrue(other.enqueue(byteArrayOf(7)))
+            assertTrue(wrote.await(2, TimeUnit.SECONDS))
+            assertArrayEquals(byteArrayOf(7), independent.toByteArray())
+        } finally {
+            stalled.close()
+            other.close()
+            release.countDown()
         }
     }
 
