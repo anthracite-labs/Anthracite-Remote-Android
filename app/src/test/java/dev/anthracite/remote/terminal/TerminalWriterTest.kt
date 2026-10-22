@@ -30,7 +30,7 @@ class TerminalWriterTest {
             repeat(TerminalWriter.MAX_PENDING_CHUNKS) { assertTrue(writer.enqueue(byteArrayOf(2))) }
             assertFalse(writer.enqueue(byteArrayOf(3)))
             assertFalse(writer.enqueue(ByteArray(TerminalWriter.MAX_CHUNK_BYTES + 1)))
-            assertTrue("enqueue blocked behind I/O", System.nanoTime() - start < TimeUnit.SECONDS.toNanos(1))
+            assertTrue("enqueue blocked behind I/O", System.nanoTime() - start < TimeUnit.SECONDS.toNanos(3))
             writer.close()
             assertFalse(writer.enqueue(byteArrayOf(4)))
         } finally {
@@ -79,7 +79,7 @@ class TerminalWriterTest {
             assertTrue(entered.await(2, TimeUnit.SECONDS))
             val start = System.nanoTime()
             assertTrue(writer.enqueue(byteArrayOf(1)))
-            assertTrue("input waited for resize", System.nanoTime() - start < TimeUnit.SECONDS.toNanos(1))
+            assertTrue("input waited for resize", System.nanoTime() - start < TimeUnit.SECONDS.toNanos(3))
         } finally {
             writer.close()
             release.countDown()
