@@ -3,7 +3,7 @@ package dev.anthracite.remote
 import com.jcraft.jsch.ChannelDirectTCPIP
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.ChannelSftp
-import com.jcraft.jsch.ChannelSession
+import com.jcraft.jsch.Channel
 import com.jcraft.jsch.ChannelShell
 import com.jcraft.jsch.HostKey
 import com.jcraft.jsch.HostKeyRepository
@@ -284,7 +284,7 @@ internal class SshClient {
         val channel = active.openChannel("shell") as ChannelShell
         configurePty(channel, term, cols, rows, widthPx, heightPx)
         channel.connect(CONNECT_TIMEOUT_MS)
-        return SshPty(channel, "shell")
+        return SshPty(channel, "shell", ptyResizer(channel))
     }
 
     /**
@@ -311,27 +311,79 @@ internal class SshClient {
         channel.setCommand(command)
         configurePty(channel, term, cols, rows, widthPx, heightPx)
         channel.connect(CONNECT_TIMEOUT_MS)
-        return SshPty(channel, command)
+        return SshPty(channel, command, ptyResizer(channel))
     }
 
+    /**
+     * PTY setup for both channel kinds.
+     *
+     * JSch declares the pty methods on `ChannelSession`, which is package-private,
+     * so the calls are made through the public subclasses and the resize callback
+     * is captured here rather than stored as a `ChannelSession` field.
+     */
     private fun configurePty(
-        channel: ChannelSession,
+        channel: ChannelShell,
         term: String,
         cols: Int,
         rows: Int,
         widthPx: Int,
         heightPx: Int,
     ) {
-        val type = if (TERM_PATTERN.matches(term)) term else DEFAULT_TERM
+        val type = ptyType(term)
         channel.setPtyType(
             type,
-            cols.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE),
-            rows.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE),
+            clampColumns(cols),
+            clampRows(rows),
             widthPx.coerceAtLeast(0),
             heightPx.coerceAtLeast(0),
         )
         channel.setPty(true)
     }
+
+    private fun configurePty(
+        channel: ChannelExec,
+        term: String,
+        cols: Int,
+        rows: Int,
+        widthPx: Int,
+        heightPx: Int,
+    ) {
+        val type = ptyType(term)
+        channel.setPtyType(
+            type,
+            clampColumns(cols),
+            clampRows(rows),
+            widthPx.coerceAtLeast(0),
+            heightPx.coerceAtLeast(0),
+        )
+        channel.setPty(true)
+    }
+
+    private fun ptyType(term: String): String = if (TERM_PATTERN.matches(term)) term else DEFAULT_TERM
+
+    private fun clampColumns(cols: Int): Int = cols.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE)
+
+    private fun clampRows(rows: Int): Int = rows.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE)
+
+    private fun ptyResizer(channel: ChannelShell): (Int, Int, Int, Int) -> Unit =
+        { cols, rows, widthPx, heightPx ->
+            channel.setPtySize(
+                cols.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE),
+                rows.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE),
+                widthPx.coerceAtLeast(0),
+                heightPx.coerceAtLeast(0),
+            )
+        }
+
+    private fun ptyResizer(channel: ChannelExec): (Int, Int, Int, Int) -> Unit =
+        { cols, rows, widthPx, heightPx ->
+            channel.setPtySize(
+                cols.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE),
+                rows.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE),
+                widthPx.coerceAtLeast(0),
+                heightPx.coerceAtLeast(0),
+            )
+        }
 
     /**
      * Runs [block] with the live JSch session so feature packages can open their
@@ -549,8 +601,9 @@ internal class SshClient {
  * full-screen TUI redraw is transported exactly as the host emitted it.
  */
 internal class SshPty internal constructor(
-    private val channel: ChannelSession,
+    private val channel: Channel,
     val description: String,
+    private val resizePty: (Int, Int, Int, Int) -> Unit,
 ) {
     val input: InputStream get() = channel.inputStream
 
@@ -568,12 +621,7 @@ internal class SshPty internal constructor(
      * value JSch resends here, so the host sees a real SIGWINCH.
      */
     fun resize(cols: Int, rows: Int, widthPx: Int = 0, heightPx: Int = 0) {
-        channel.setPtySize(
-            cols.coerceIn(2, 1000),
-            rows.coerceIn(2, 1000),
-            widthPx.coerceAtLeast(0),
-            heightPx.coerceAtLeast(0),
-        )
+        resizePty(cols, rows, widthPx, heightPx)
     }
 
     /**

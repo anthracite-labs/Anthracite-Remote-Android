@@ -83,10 +83,10 @@ internal object TerminalKeys {
             TerminalKey.ARROW_DOWN -> cursor(modes, modifiers, 'B')
             TerminalKey.ARROW_RIGHT -> cursor(modes, modifiers, 'C')
             TerminalKey.ARROW_LEFT -> cursor(modes, modifiers, 'D')
-            TerminalKey.F1 -> function(modes, modifiers, 1, "P")
-            TerminalKey.F2 -> function(modes, modifiers, 2, "Q")
-            TerminalKey.F3 -> function(modes, modifiers, 3, "R")
-            TerminalKey.F4 -> function(modes, modifiers, 4, "S")
+            TerminalKey.F1 -> function(modifiers, "P")
+            TerminalKey.F2 -> function(modifiers, "Q")
+            TerminalKey.F3 -> function(modifiers, "R")
+            TerminalKey.F4 -> function(modifiers, "S")
             TerminalKey.F5 -> modified("15~", parameter)
             TerminalKey.F6 -> modified("17~", parameter)
             TerminalKey.F7 -> modified("18~", parameter)
@@ -120,10 +120,8 @@ internal object TerminalKeys {
      * F1–F4 always use the SS3 form xterm sends them in; the application cursor
      * key mode applies to the cursor keys, not to the function keys.
      */
-    private fun function(modes: KeyModes, modifiers: KeyModifiers, number: Int, final: Char): String {
-        if (modifiers.any) return CSI + "1;" + modifiers.csiParameter + final
-        return SS3 + final
-    }
+    private fun function(modifiers: KeyModifiers, final: Char): String =
+        if (modifiers.any) "$CSI" + "1;" + modifiers.csiParameter + final else SS3 + final
 
     /**
      * Ctrl+letter and Ctrl+symbol mapping. Returns null for combinations that do

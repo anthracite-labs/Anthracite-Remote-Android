@@ -191,7 +191,7 @@ class GitHubActivity : AppCompatActivity() {
     private fun validateToken(candidate: String) {
         progress.visibility = View.VISIBLE
         lifecycleScope.launch {
-            val result = runCatching { io { auth.identity(candidate) } }
+            val result = io { auth.identity(candidate) }
             progress.visibility = View.GONE
             result.onSuccess { observed ->
                 token = candidate
@@ -207,10 +207,7 @@ class GitHubActivity : AppCompatActivity() {
 
     private fun startDeviceFlow() {
         lifecycleScope.launch {
-            val requested = runCatching { io { auth.requestDeviceCode() } }.getOrElse { error ->
-                showStatus(error.message ?: getString(R.string.github_device_failed))
-                return@launch
-            }
+            val requested = io { auth.requestDeviceCode() }
             requested.onFailure { error ->
                 showStatus(error.message ?: getString(R.string.github_device_failed))
             }.onSuccess { code ->
@@ -269,7 +266,7 @@ class GitHubActivity : AppCompatActivity() {
         val current = token ?: return showSignedOut()
         progress.visibility = View.VISIBLE
         lifecycleScope.launch {
-            val result = runCatching { io { auth.identity(current) } }
+            val result = io { auth.identity(current) }
             progress.visibility = View.GONE
             result.onSuccess { observed ->
                 identity = observed
