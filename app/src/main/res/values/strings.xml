@@ -63,6 +63,8 @@
     <string name="error_credentials_unavailable">Saved SSH credentials are unavailable. Re-enter the credential to replace them.</string>
     <string name="error_save_failed">Could not save SSH credentials.</string>
     <string name="error_key_unreadable">Could not read that private key.</string>
+    <string name="error_host_key_refused">Host key was not approved.</string>
+    <string name="error_forget_failed">Could not erase saved credentials.</string>
 
     <!-- Verify server identity -->
     <string name="host_key_title">Verify host key</string>
@@ -153,6 +155,7 @@
     <string name="phase_state_active">In progress</string>
     <string name="phase_state_failed">Failed</string>
     <string name="phase_state_pending">Pending</string>
+    <string name="phase_state_skipped">Skipped</string>
     <string name="progress_details">Technical details</string>
     <string name="progress_failed_title">Step failed</string>
     <string name="progress_stopped_title">Operation stopped</string>

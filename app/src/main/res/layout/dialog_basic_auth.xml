@@ -26,7 +26,7 @@
             android:id="@+id/auth_username_input"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:autofillHints="username"
+            android:importantForAutofill="no"
             android:imeOptions="actionNext"
             android:inputType="textNoSuggestions"
             android:minHeight="@dimen/touch_target_min" />
@@ -45,7 +45,7 @@
             android:id="@+id/auth_password_input"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:autofillHints="password"
+            android:importantForAutofill="no"
             android:imeOptions="actionDone"
             android:inputType="textPassword"
             android:minHeight="@dimen/touch_target_min" />
