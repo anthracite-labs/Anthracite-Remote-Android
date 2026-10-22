@@ -14,7 +14,8 @@ Picker and WebView behavior was adapted from [anthracite-labs/OpenCode-Android](
 | Adapted OpenCode-Android picker/WebView policy | — | MIT, Copyright (c) 2026 anthracite-labs |
 | [mwiede/jsch](https://github.com/mwiede/jsch) | 2.28.8 | BSD-3-Clause, including bundled JZlib and jBCrypt |
 | [Bouncy Castle](https://www.bouncycastle.org) `bcprov-jdk18on` | 1.86 | MIT |
-| AndroidX activity, core, lifecycle | 1.13.0, 1.19.1, 2.11.0 | Apache-2.0 |
+| AndroidX activity, appcompat, core, lifecycle | 1.13.0, 1.7.1, 1.19.1, 2.11.0 | Apache-2.0 |
+| [Material Components for Android](https://github.com/material-components/material-components-android) | 1.13.0 | Apache-2.0 |
 | kotlinx-coroutines-android | 1.11.0 | Apache-2.0 |
 | Kotlin standard library, pulled by the Android Gradle plugin | AGP 9.4.1 default | Apache-2.0 |
 
@@ -123,7 +124,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## Apache-2.0 components
 
-AndroidX, Kotlin, kotlinx-coroutines, and the Gradle wrapper are under the Apache License, Version 2.0. The full license is at https://www.apache.org/licenses/LICENSE-2.0.
+AndroidX, Material Components for Android, Kotlin, kotlinx-coroutines, and the Gradle wrapper are under the Apache License, Version 2.0. The full license is at https://www.apache.org/licenses/LICENSE-2.0.
 
 ```text
 Copyright notices for those components are in their upstream artifacts.
