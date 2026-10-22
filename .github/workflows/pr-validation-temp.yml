@@ -233,7 +233,8 @@ jobs:
             echo "APK must not bundle the OpenCode runtime" >&2
             exit 1
           fi
-          sdk_dir="${{ env.ANDROID_HOME }}"
+          sdk_dir="$ANDROID_HOME"
+          test -n "$sdk_dir"
           aapt=$(find "$sdk_dir/build-tools" -type f -name aapt | sort | tail -n 1)
           test -n "$aapt"
           "$aapt" dump badging "$apk" | tee ci-diagnostics/apk-badging.txt
