@@ -119,13 +119,20 @@ class TerminalWriterTest {
 
     @Test
     fun `write failure closes the queue and reports it`() {
-        val failed = CountDownLatch(1)
-        val writer = TerminalWriter(object : OutputStream() {
-            override fun write(value: Int) { throw IOException("offline") }
-        }) { failed.countDown() }
-        assertTrue(writer.enqueue(byteArrayOf(1)))
-        assertTrue(failed.await(2, TimeUnit.SECONDS))
-        assertFalse(writer.enqueue(byteArrayOf(2)))
-        writer.close()
+        // A fast worker can report failure before enqueue returns. Admission is
+        // still true; the later failure must be delivered separately.
+        repeat(20) {
+            val failed = CountDownLatch(1)
+            val writer = TerminalWriter(object : OutputStream() {
+                override fun write(value: Int) { throw IOException("offline") }
+            }) { failed.countDown() }
+            try {
+                assertTrue(writer.enqueue(byteArrayOf(1)))
+                assertTrue(failed.await(2, TimeUnit.SECONDS))
+                assertFalse(writer.enqueue(byteArrayOf(2)))
+            } finally {
+                writer.close()
+            }
+        }
     }
 }
