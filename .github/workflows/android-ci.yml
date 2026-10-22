@@ -183,6 +183,8 @@ jobs:
           persist-credentials: false
       - name: Resource, id, manifest and secret checks
         run: python3 ci/static_checks.py
+      - name: Unimported symbols in test sources
+        run: python3 ci/unused-check.py
       - name: Every committed shell script parses
         run: |
           set -euo pipefail

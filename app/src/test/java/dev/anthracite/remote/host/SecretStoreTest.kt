@@ -1,5 +1,6 @@
 package dev.anthracite.remote.host
 
+import dev.anthracite.remote.CredentialCrypto
 import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertArrayEquals
