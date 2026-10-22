@@ -7,9 +7,6 @@ on:
   push:
     branches:
       - main
-      # Stacked PR #7 cannot match the main-only pull_request trigger.
-      # Exercise the permanent gate on its own development branch.
-      - arena/53b81d55-anthracite-remote-android
   workflow_dispatch:
 
 permissions:
