@@ -74,6 +74,21 @@ class TmuxParsingTest {
             ExecResult(0, "", "permission denied"),
         )) assertThrows(IllegalStateException::class.java) { tmuxListing("3.4", failure) }
         assertTrue(tmuxNoSessions(ExecResult(1, "", "no server running on /tmp/tmux-1/default\n")))
+        // tmux prints this before its first server has created a socket.
+        val firstSession = ExecResult(1, "", "error connecting to /tmp/tmux-1000/default (No such file or directory)\n")
+        assertTrue(tmuxMissingSocket(firstSession))
+        assertTrue(tmuxListing("3.4", firstSession).sessions.isEmpty())
+        // A deleted socket can strand a live server; absence is not proven for STOP.
+        assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(firstSession, "work", "\\$1"))
+        for (failure in listOf(
+            ExecResult(1, "", "error connecting to /tmp/tmux-1000/default (Permission denied)"),
+            ExecResult(1, "", "error connecting to /tmp/tmux-1000/default (Connection refused)"),
+            ExecResult(255, "", "error connecting to /tmp/tmux-1000/default (No such file or directory)"),
+            ExecResult(1, "", "error connecting to /tmp/tmux-1000/default (No such file or directory)\npermission denied"),
+        )) {
+            assertTrue(!tmuxMissingSocket(failure))
+            assertThrows(IllegalStateException::class.java) { tmuxListing("3.4", failure) }
+        }
         for (failure in listOf(
             ExecResult(255, "", "SSH disconnected"), ExecResult(1, "", "permission denied"),
             ExecResult(2, "", "no sessions"), ExecResult(1, "", "no sessions\npermission denied"),
