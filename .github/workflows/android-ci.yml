@@ -247,7 +247,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ci-diagnostics
-          ./gradlew :app:testDebugUnitTest --tests "dev.anthracite.remote.${{ matrix.test_class }}" --stacktrace \
+          ./gradlew :app:testDebugUnitTest --tests "*.${{ matrix.test_class }}" --stacktrace \
             > ci-diagnostics/unit-tests.log 2>&1
       - name: Report test errors
         if: steps.test.outcome == 'failure'
@@ -338,6 +338,9 @@ jobs:
       - name: Report lint errors
         if: steps.lint.outcome == 'failure'
         run: bash .github/workflows/emit-failure.sh ci-diagnostics/lint.log
+      - name: Report lint findings
+        if: steps.lint.outcome == 'failure'
+        run: python3 ci/lint-report.py app/build/reports/lint-results-debug.xml
       - name: Upload lint reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

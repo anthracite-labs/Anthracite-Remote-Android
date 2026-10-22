@@ -140,7 +140,7 @@ check "happy path exit code" "0" "$rc"
 check "happy path status" "SUCCEEDED" "$(job_status "$home" "$job")"
 check "packages recorded" "curl git tmux" "$(ls "$home/installed" | tr '\n' ' ' | sed 's/ $//')"
 check_contains "install used no-recommends" "--no-install-recommends" "$(cat "$home/apt.log")"
-check "job lock removed" "no" "$([ -d "$home/.anthracite/locks/provision.lock" ] && echo yes || echo no)"
+check "job lock removed" "no" "$([[ -d "$home/.anthracite/locks/provision.lock" ]] && echo yes || echo no)"
 
 home=$(new_home failure)
 job=$(make_job "$home" apt 0 "1	install	git
@@ -150,7 +150,7 @@ rc=$(run_job "$home" "$job")
 export FAKE_FAIL=0
 check "install failure status" "FAILED" "$(job_status "$home" "$job")"
 check_contains "failure reason recorded" "install_failed" "$(cat "$job/result")"
-check "lock released after failure" "no" "$([ -d "$home/.anthracite/locks/provision.lock" ] && echo yes || echo no)"
+check "lock released after failure" "no" "$([[ -d "$home/.anthracite/locks/provision.lock" ]] && echo yes || echo no)"
 
 home=$(new_home verify)
 job=$(make_job "$home" apt 0 "1	install	ghostpkg
@@ -225,7 +225,7 @@ job=$(make_job "$home" apt 0 "1	install	\$(touch /tmp/anthracite-pwned)
 rm -f /tmp/anthracite-pwned
 rc=$(run_job "$home" "$job")
 check "substitution package rejected" "FAILED" "$(job_status "$home" "$job")"
-check "no command substitution ran" "absent" "$([ -e /tmp/anthracite-pwned ] && echo present || echo absent)"
+check "no command substitution ran" "absent" "$([[ -e /tmp/anthracite-pwned ]] && echo present || echo absent)"
 home=$(new_home injection3)
 job=$(make_job "$home" apt 0 "1	install	../etc/passwd
 ")
@@ -262,7 +262,7 @@ observation=$(cat "$home/cancel-observation")
 check "job reports RUNNING while installing" "RUNNING|yes" "$(echo "$observation" | cut -d'|' -f1,2)"
 final=$(job_status "$home" "$job")
 check "cancel writes a terminal state" "CANCELLED" "$final"
-check "cancel releases the lock" "no" "$([ -d "$home/.anthracite/locks/provision.lock" ] && echo yes || echo no)"
+check "cancel releases the lock" "no" "$([[ -d "$home/.anthracite/locks/provision.lock" ]] && echo yes || echo no)"
 
 home=$(new_home missing)
 check "missing job dir is unknown" "UNKNOWN" "$(job_status "$home" "$home/none")"
@@ -284,8 +284,8 @@ job=$(make_job "$home" apt 0 "1	install	git
     wait "$runner_pid"
     grep -q 'start_ticks_match=yes' "$home/status.txt" || echo 'start_ticks_match=no' >"$home/status.txt.bad"
 )
-check "process start ticks match" "absent" "$([ -e "$home/status.txt.bad" ] && echo present || echo absent)"
+check "process start ticks match" "absent" "$([[ -e "$home/status.txt.bad" ]] && echo present || echo absent)"
 check_contains "status exposes a bounded log" "log_bytes=" "$(cat "$home/status.txt")"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+[[ "$fail" -eq 0 ]]

@@ -39,10 +39,11 @@ PY
   # first so a resource error is not hidden behind a wall of `e:` lines.
   grep -E 'ERROR:|: error:|error: ' "$file" || true
   grep -E 'Dependency |requires |requires libraries|minCompileSdk|AAR metadata|e: |FAILED|What went wrong|Execution failed' "$file" || true
-  if ! grep -qE 'ERROR:|e: |FAILED|What went wrong|Execution failed' "$file"; then
-    printf -- '--- log tail ---\n'
-    tail -n 20 "$file" || true
-  fi
+  # The reason for a task-level failure ("No tests found for given includes",
+  # "Lint found 3 errors", an OOM) never matches a compile pattern, so the tail
+  # is always included: without it the annotation says only "task FAILED".
+  printf -- '--- log tail ---\n'
+  tail -n 15 "$file" || true
 )
 
 count=0

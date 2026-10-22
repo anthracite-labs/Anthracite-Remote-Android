@@ -83,13 +83,12 @@ internal data class HostFacts(
                 detail = "tmux is not installed. Terminal tabs work, but nothing can outlive the SSH channel.",
             )
         }
-        val logout = when {
-            containerized -> CapabilityState.UNKNOWN
-            supervision != Supervision.SYSTEMD -> CapabilityState.UNKNOWN
-            linger == true -> CapabilityState.UNKNOWN
-            linger == false -> CapabilityState.UNKNOWN
-            else -> CapabilityState.UNKNOWN
-        }
+        // Logout survival is never claimed, whatever the host reports: linger
+        // only permits a user manager to keep running, and a host may still end
+        // detached processes (KillUserProcesses) on logout. Nothing observed from
+        // inside the session can prove otherwise, so the state is UNKNOWN and the
+        // detail below explains which specific fact is missing.
+        val logout = CapabilityState.UNKNOWN
         val logoutDetail = when {
             containerized -> "This session runs in a container; host logout policy cannot be observed from it."
             supervision != Supervision.SYSTEMD ->

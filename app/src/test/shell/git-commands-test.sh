@@ -189,7 +189,7 @@ else
 fi
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
-if [ "$failed" -ne 0 ]; then
+if [[ "$failed" -ne 0 ]]; then
   printf 'failures:\n' >&2
   for failure in "${failures[@]}"; do printf ' - %s\n' "$failure" >&2; done
   exit 1
