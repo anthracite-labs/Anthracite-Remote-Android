@@ -1,12 +1,12 @@
-name: PR validation — parallel
+name: Android CI — parallel
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
-      - arena/c3af986f-anthracite-remote-android
-      # Arena remediation work is validated independently before it is merged
-      # into the PR head branch.
-      - arena/d3363dcd-anthracite-remote-android
+      - main
   workflow_dispatch:
 
 permissions:
