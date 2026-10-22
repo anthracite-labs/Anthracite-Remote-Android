@@ -65,6 +65,9 @@ class TmuxParsingTest {
         assertTrue(tmuxListing("3.4", ExecResult(1, "", "no sessions\n")).sessions.isEmpty())
         assertEquals("work", tmuxListing("3.4", ExecResult(0, "work\t\$1\t1700000000\t0\t1\n", ""))
             .sessions.single().name)
+        assertThrows(IllegalStateException::class.java) {
+            tmuxListing("3.4", ExecResult(0, "work\tbad-id\t1700000000\t0\t1\n", ""))
+        }
         for (failure in listOf(
             ExecResult(255, "", "SSH disconnected"), ExecResult(1, "", "permission denied"),
             ExecResult(2, "", "no sessions"), ExecResult(0, "garbled", ""),
@@ -74,6 +77,7 @@ class TmuxParsingTest {
         for (failure in listOf(
             ExecResult(255, "", "SSH disconnected"), ExecResult(1, "", "permission denied"),
             ExecResult(2, "", "no sessions"), ExecResult(1, "", "no sessions\npermission denied"),
+            ExecResult(1, "", "no server running on /tmp/socket permission denied"),
             ExecResult(1, "work\t\$1\t1\t0\t1", "no sessions"),
         )) assertTrue("unexpected absence: $failure", !tmuxNoSessions(failure))
     }

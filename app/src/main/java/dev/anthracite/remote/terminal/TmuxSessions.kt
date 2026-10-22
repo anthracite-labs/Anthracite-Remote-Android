@@ -143,7 +143,7 @@ internal fun tmuxVersion(result: ExecResult): String? {
 internal fun tmuxNoSessions(result: ExecResult): Boolean =
     result.exitCode == 1 && result.stdout.isBlank() &&
         (result.stderr.trim() == "no sessions" ||
-            Regex("no server running on /[^\\r\\n]+").matches(result.stderr.trim()))
+            Regex("no server running on /[A-Za-z0-9_./-]+").matches(result.stderr.trim()))
 
 /** A failed enumeration is never silently turned into an empty list. */
 internal fun tmuxListing(version: String, listed: ExecResult): TmuxListResult {

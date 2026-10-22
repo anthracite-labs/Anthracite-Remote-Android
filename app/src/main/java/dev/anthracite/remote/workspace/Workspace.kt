@@ -88,24 +88,24 @@ internal object Workspace {
         val legacy = legacyStore.load()
         val secrets = runCatching { legacyStore.secrets() }.getOrNull()
         return store.importLegacyIfNeeded(
-                legacy = HostProfile(
-                    id = store.newId(),
-                    label = legacy.username + "@" + legacy.host,
-                    host = legacy.host,
-                    port = legacy.sshPort,
-                    username = legacy.username,
-                    auth = legacy.auth,
-                    remotePort = legacy.remotePort,
-                    keyName = legacy.keyName,
-                    hostKey = legacy.hostKey,
-                    hostKeyType = legacy.hostKeyType,
-                    fingerprint = legacy.fingerprint,
-                    origin = HostOrigin.IMPORTED_LEGACY,
-                    lastUsedAtMillis = 0,
-                ),
-                legacySecrets = secrets,
-                key = key(),
-            )
+            legacy = HostProfile(
+                id = store.newId(),
+                label = legacy.username + "@" + legacy.host,
+                host = legacy.host,
+                port = legacy.sshPort,
+                username = legacy.username,
+                auth = legacy.auth,
+                remotePort = legacy.remotePort,
+                keyName = legacy.keyName,
+                hostKey = legacy.hostKey,
+                hostKeyType = legacy.hostKeyType,
+                fingerprint = legacy.fingerprint,
+                origin = HostOrigin.IMPORTED_LEGACY,
+                lastUsedAtMillis = 0,
+            ),
+            legacySecrets = secrets,
+            key = key(),
+        )
     }
 
     fun disconnect() {
@@ -186,7 +186,10 @@ internal suspend fun connectWorkspace(activity: Activity, profile: HostProfile):
                 io { Workspace.ssh.disconnect() }
                 return "Could not save and verify the approved host key: ${error.message ?: "storage error"}. Connection stopped."
             }
-            val pinned = saved.hostKey ?: return "Approved host key was not saved; connection stopped"
+            val pinned = saved.hostKey ?: run {
+                io { Workspace.ssh.disconnect() }
+                return "Approved host key was not saved; connection stopped"
+            }
             val retry = io { Workspace.ssh.connect(target, pinned) }
             if (retry is ConnectOutcome.Connected) {
                 Workspace.adopt(saved)
