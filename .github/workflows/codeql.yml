@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   analyze:
-    name: CodeQL (${{ matrix.language })
+    name: CodeQL (${{ matrix.language }})
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     permissions:
@@ -54,8 +54,8 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
-          languages: ${{ matrix.language }
-          build-mode: ${{ matrix.build-mode }
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
           queries: security-extended
 
       # Do not reuse Gradle build outputs: CodeQL must observe Kotlin compilation.
@@ -66,4 +66,4 @@ jobs:
       - name: Analyze and upload results
         uses: github/codeql-action/analyze@v4
         with:
-          category: /language:${{ matrix.language }
+          category: /language:${{ matrix.language }}
