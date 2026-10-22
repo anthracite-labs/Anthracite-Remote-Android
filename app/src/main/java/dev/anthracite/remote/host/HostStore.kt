@@ -204,7 +204,9 @@ internal class HostStore(
         key: SecretKey,
     ): HostProfile? {
         if (preferences.boolean(KEY_LEGACY_IMPORTED, false)) return null
-        val existing = runCatching { list() }.getOrElse { emptyList() }
+        // An unreadable list is not an empty list. In particular, never replace
+        // corrupt saved profiles merely because a legacy profile is available.
+        val existing = list()
         var imported: HostProfile? = null
         if (existing.none { it.origin == HostOrigin.IMPORTED_LEGACY && it.endpoint == legacy.endpoint }) {
             val profile = legacy.copy(

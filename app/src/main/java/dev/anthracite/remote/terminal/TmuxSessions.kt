@@ -64,6 +64,13 @@ internal object TmuxCommands {
 
     fun killSession(name: String): String = "tmux kill-session -t ${quoteName(name)}"
 
+    // tmux's host-issued session id stays unique when a name is reused. Never
+    // kill a new session which acquired the old name after the user's selection.
+    fun killSessionId(id: String): String {
+        require(id.matches(Regex("\\$[0-9]+"))) { "invalid tmux session id" }
+        return "tmux kill-session -t ${PosixShell.quote(id)}"
+    }
+
     /**
      * tmux reads `:` as a session/window separator and `.` as a window/pane
      * separator, so a name containing either addresses something other than the
@@ -113,6 +120,26 @@ internal fun parseTmuxVersion(stdout: String): String? {
     return version.takeIf { candidate -> candidate.any { it.isDigit() } }
 }
 
+/** Verification is distinct from a failed SSH command or unparseable host output. */
+internal enum class TmuxPresence { PRESENT, ABSENT, UNKNOWN }
+
+internal fun tmuxPresence(result: ExecResult, name: String, id: String): TmuxPresence {
+    if (result.exitCode != 0) {
+        // tmux reports this when its server has no sessions at all. An arbitrary
+        // nonzero exit (including permission or transport failure) is unknown.
+        return if (result.exitCode == 1 &&
+            (result.stderr.trim().startsWith("no server running on ") ||
+                result.stderr.trim() == "no sessions")) TmuxPresence.ABSENT else TmuxPresence.UNKNOWN
+    }
+    val (sessions, unparsed) = parseTmuxSessions(result.stdout)
+    if (unparsed != 0) return TmuxPresence.UNKNOWN
+    if (sessions.any { it.name == name && it.id == id }) return TmuxPresence.PRESENT
+    // A replacement under the same name is not evidence that the selected
+    // session ended as intended; tell the user verification was inconclusive.
+    if (sessions.any { it.name == name || it.id == id }) return TmuxPresence.UNKNOWN
+    return TmuxPresence.ABSENT
+}
+
 /**
  * Host-side session operations over the existing SSH connection.
  *
@@ -142,18 +169,27 @@ internal class TmuxManager(private val ssh: SshClient) {
     fun create(name: String, workingDirectory: String?): ExecResult =
         ssh.exec(TmuxCommands.createDetached(name, workingDirectory), timeoutMs = TIMEOUT_MS)
 
-    fun hasSession(name: String): Boolean =
-        ssh.exec(TmuxCommands.hasSession(name), timeoutMs = TIMEOUT_MS).exitCode == 0
+    /** A successful listing establishes identity; an error can never mean absent. */
+    fun sessionState(name: String, id: String): TmuxPresence =
+        tmuxPresence(ssh.exec(TmuxCommands.LIST, timeoutMs = TIMEOUT_MS), name, id)
 
     /**
-     * Requests a graceful end of the session and then observes the host.
-     * Returns true only when the session is verified gone.
+     * Fail closed unless the exact selected host-issued id still belongs to the
+     * selected name. Kill by id, not by a name which another client may reuse.
      */
-    fun killAndVerify(name: String, attempts: Int = 3): Boolean {
-        ssh.exec(TmuxCommands.killSession(name), timeoutMs = TIMEOUT_MS)
+    fun killAndVerify(name: String, id: String, attempts: Int = 3): Boolean {
+        require(attempts > 0)
+        TmuxCommands.quoteName(name)
+        TmuxCommands.killSessionId(id)
+        if (sessionState(name, id) != TmuxPresence.PRESENT) return false
+        val killed = ssh.exec(TmuxCommands.killSessionId(id), timeoutMs = TIMEOUT_MS)
+        if (killed.exitCode != 0) return false
         repeat(attempts) { attempt ->
-            if (!hasSession(name)) return true
-            if (attempt < attempts - 1) Thread.sleep(250)
+            when (sessionState(name, id)) {
+                TmuxPresence.ABSENT -> return true
+                TmuxPresence.UNKNOWN -> return false
+                TmuxPresence.PRESENT -> if (attempt < attempts - 1) Thread.sleep(250)
+            }
         }
         return false
     }

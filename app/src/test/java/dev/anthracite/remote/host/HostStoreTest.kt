@@ -128,6 +128,23 @@ class HostStoreTest {
     }
 
     @Test
+    fun `legacy import refuses corrupt hosts without changing data or import marker`() {
+        val (hostStore, preferences, secrets) = store()
+        val corrupt = "unreadable existing profiles"
+        preferences.values[HostStore.KEY_HOSTS] = corrupt
+        assertThrows(HostStoreException::class.java) {
+            hostStore.importLegacyIfNeeded(profile(), SavedSecrets("secret", null, null), key)
+        }
+        assertEquals(corrupt, preferences.values[HostStore.KEY_HOSTS])
+        assertFalse(preferences.boolean(HostStore.KEY_LEGACY_IMPORTED, false))
+        assertTrue(secrets.blobs.isEmpty())
+        // After an explicit recovery of the saved list, import is still possible.
+        preferences.values[HostStore.KEY_HOSTS] = ProfileCodec.encode(listOf(profile()))
+        hostStore.importLegacyIfNeeded(profile(), null, key)
+        assertEquals(2, hostStore.list().size)
+    }
+
+    @Test
     fun `save seals the credential and forget erases it before the list`() {
         val secrets = FakeSecretStore()
         val (hostStore, _, _) = store(secrets = secrets)

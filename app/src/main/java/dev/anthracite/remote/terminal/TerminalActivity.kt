@@ -153,8 +153,11 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     // One quoted `cd` for the initial directory only. The shell
                     // decides what to do with it; Anthracite does not parse the
                     // shell's response.
-                    session.write(("cd " + PosixShell.quote(directory) + "\n").toByteArray(Charsets.UTF_8))
-                    pendingDirectory = null
+                    if (session.write(("cd " + PosixShell.quote(directory) + "\n").toByteArray(Charsets.UTF_8))) {
+                        pendingDirectory = null
+                    } else {
+                        showNotice(getString(R.string.terminal_input_not_sent))
+                    }
                 }
             }.onFailure { showNotice(getString(R.string.terminal_open_failed, it.message ?: "")) }
         }
@@ -195,10 +198,14 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     if (created.exitCode != 0) {
                         throw IllegalStateException(created.text.ifBlank { "tmux could not create the session" })
                     }
-                    tmux.attach(name, Workspace.TERM, gridCols, gridRows) to name
+                    val identity = tmux.probe().sessions.singleOrNull { it.name == name }
+                        ?: throw IllegalStateException("Could not establish the tmux session identity")
+                    if (identity.id.isBlank()) throw IllegalStateException("tmux returned no session id")
+                    tmux.attach(name, Workspace.TERM, gridCols, gridRows) to identity
                 }
             }
-            result.onSuccess { (pty, sessionName) ->
+            result.onSuccess { (pty, identity) ->
+                val sessionName = identity.name
                 val emulator = TerminalEmulator(gridCols, gridRows)
                 val session = TerminalSession(
                     kind = TerminalSession.Kind.TMUX,
@@ -206,6 +213,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     emulator = emulator,
                     pty = pty,
                     tmuxSession = sessionName,
+                    tmuxId = identity.id,
                 )
                 attachSession(session, getString(R.string.terminal_tab_session, sessionName))
             }.onFailure { showNotice(getString(R.string.terminal_session_failed, it.message ?: "")) }
@@ -261,6 +269,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     emulator = emulator,
                     pty = pty,
                     tmuxSession = target.name,
+                    tmuxId = target.id,
                 )
                 attachSession(session, getString(R.string.terminal_tab_session, target.name))
             }.onFailure { showNotice(getString(R.string.terminal_session_failed, it.message ?: "")) }
@@ -362,12 +371,17 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
             .setMessage(getString(R.string.terminal_stop_detail, name))
             .setPositiveButton(R.string.stop) { _, _ ->
                 lifecycleScope.launch {
-                    val stopped = runCatching { io { TmuxManager(Workspace.ssh).killAndVerify(name) } }
-                        .getOrDefault(false)
-                    if (stopped) {
-                        TerminalTabs.remove(activeIndex)
+                    val stopped = runCatching {
+                        val id = session.tmuxId ?: error("Missing selected tmux identity")
+                        io { TmuxManager(Workspace.ssh).killAndVerify(name, id) }
+                    }.getOrDefault(false)
+                    if (stopped && TerminalTabs.indexOf(session) >= 0) {
+                        val removedIndex = TerminalTabs.indexOf(session)
+                        val selected = activeSession
+                        TerminalTabs.remove(removedIndex)
                         activeIndex = -1
-                        if (TerminalTabs.size() > 0) selectTab(0) else renderTabs()
+                        val next = selected?.let(TerminalTabs::indexOf) ?: -1
+                        if (TerminalTabs.size() > 0) selectTab(next.takeIf { it >= 0 } ?: 0) else renderTabs()
                         Toast.makeText(this@TerminalActivity, R.string.terminal_stopped, Toast.LENGTH_SHORT).show()
                     } else {
                         showNotice(getString(R.string.terminal_stop_unconfirmed, name))
@@ -501,7 +515,8 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
     }
 
     override fun onInput(bytes: ByteArray) {
-        activeSession?.write(bytes)
+        val session = activeSession ?: return
+        if (!session.write(bytes)) showNotice(getString(R.string.terminal_input_not_sent))
     }
 
     override fun onUserScroll(offset: Int) {

@@ -9,6 +9,9 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyPairGenerator
 import java.security.spec.ECGenParameterSpec
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.apache.sshd.common.file.virtualfs.VirtualFileSystemFactory
 import org.apache.sshd.common.keyprovider.KeyPairProvider
 import org.apache.sshd.server.SshServer
@@ -121,6 +124,30 @@ class SftpBrowserTest {
             ?.filter { it.name.contains("anthracite.tmp") }
             .orEmpty()
         assertTrue("temporary upload files were left behind: $leftovers", leftovers.isEmpty())
+    }
+
+    @Test
+    fun `concurrent uploads use separate temporary names and clean them up`() {
+        val pool = Executors.newFixedThreadPool(2)
+        val start = CountDownLatch(1)
+        try {
+            val tasks = (1..2).map { number ->
+                pool.submit<Boolean> {
+                    start.await()
+                    browser.upload("/concurrent-$number.txt", ByteArray(128 * 1024) { number.toByte() }, false)
+                    true
+                }
+            }
+            start.countDown()
+            tasks.forEach { assertTrue(it.get(30, TimeUnit.SECONDS)) }
+            for (number in 1..2) {
+                assertArrayEquals(ByteArray(128 * 1024) { number.toByte() },
+                    Files.readAllBytes(root.resolve("concurrent-$number.txt")))
+            }
+            assertTrue(root.toFile().listFiles().orEmpty().none { it.name.endsWith(".anthracite.tmp") })
+        } finally {
+            pool.shutdownNow()
+        }
     }
 
     @Test

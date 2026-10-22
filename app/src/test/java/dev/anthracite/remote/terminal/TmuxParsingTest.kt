@@ -1,5 +1,6 @@
 package dev.anthracite.remote.terminal
 
+import dev.anthracite.remote.ExecResult
 import dev.anthracite.remote.host.PosixShell
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -61,6 +62,22 @@ class TmuxParsingTest {
                 TmuxCommands.quoteName(bad)
             }
         }
+    }
+
+    @Test
+    fun `only a successful exact identity listing proves presence or absence`() {
+        val id = "\$1"
+        val listed = ExecResult(0, "work\t$id\t1700000000\t0\t1\n", "")
+        assertEquals(TmuxPresence.PRESENT, tmuxPresence(listed, "work", id))
+        assertEquals(TmuxPresence.ABSENT, tmuxPresence(ExecResult(0, "", ""), "work", id))
+        assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(ExecResult(255, "", "SSH disconnected"), "work", id))
+        assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(ExecResult(1, "", "permission denied"), "work", id))
+        assertEquals(TmuxPresence.ABSENT, tmuxPresence(ExecResult(1, "", "no server running on /tmp/tmux.sock"), "work", id))
+        assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(ExecResult(0, "garbled", ""), "work", id))
+        assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(listed, "work", "\$2"))
+        assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(listed, "other", id))
+        assertEquals("tmux kill-session -t '\$1'", TmuxCommands.killSessionId(id))
+        assertThrows(IllegalArgumentException::class.java) { TmuxCommands.killSessionId("work") }
     }
 
     @Test

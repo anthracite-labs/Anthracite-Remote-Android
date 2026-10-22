@@ -50,6 +50,7 @@
     <string name="terminal_mode_tmux">tmux %1$s</string>
     <string name="terminal_mode_command">command</string>
     <string name="terminal_scrolled">scrollback %1$d of %2$d</string>
+    <string name="terminal_input_not_sent">Input was not sent. The terminal is disconnected or its input buffer is full; try again after it responds.</string>
     <string name="terminal_ctrl_latched">Ctrl is latched for the next key.</string>
     <string name="terminal_ctrl_released">Ctrl is released.</string>
     <string name="terminal_alt_latched">Alt is latched for the next key.</string>
