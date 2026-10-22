@@ -145,10 +145,23 @@ internal fun tmuxNoSessions(result: ExecResult): Boolean =
         (result.stderr.trim() == "no sessions" ||
             Regex("no server running on /[A-Za-z0-9_./-]+").matches(result.stderr.trim()))
 
+/**
+ * On a never-used account, tmux may have no socket directory yet and reports
+ * "error connecting to /tmp/tmux-UID/default (No such file or directory)".
+ * This means no sessions are accessible through that socket for discovery.
+ * It does NOT prove an older process stopped: the socket itself may have
+ * disappeared while its server was still running.
+ */
+internal fun tmuxMissingSocket(result: ExecResult): Boolean =
+    result.exitCode == 1 && result.stdout.isBlank() &&
+        Regex("error connecting to /[^\\r\\n()]+ \\(No such file or directory\\)").matches(result.stderr.trim())
+
 /** A failed enumeration is never silently turned into an empty list. */
 internal fun tmuxListing(version: String, listed: ExecResult): TmuxListResult {
     if (listed.exitCode != 0) {
-        if (tmuxNoSessions(listed)) return TmuxListResult(true, version, emptyList(), 0)
+        if (tmuxNoSessions(listed) || tmuxMissingSocket(listed)) {
+            return TmuxListResult(true, version, emptyList(), 0)
+        }
         throw IllegalStateException("tmux session discovery failed; the session state is unknown")
     }
     val (sessions, unparsed) = parseTmuxSessions(listed.stdout)
