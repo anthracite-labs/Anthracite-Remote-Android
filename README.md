@@ -43,4 +43,4 @@ bash -n app/src/main/assets/install-opencode.sh
 ./gradlew assembleDebug
 ```
 
-The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. This checkout does not vendor a JDK or Android SDK.
+The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. This checkout does not vendor a JDK or Android SDK. `compileSdk` is 37 because `androidx.core` 1.19.1 requires it. `targetSdk` stays 36, which is the Play requirement for phone and tablet updates.

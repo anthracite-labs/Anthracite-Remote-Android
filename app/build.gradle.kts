@@ -4,7 +4,9 @@ plugins {
 
 android {
     namespace = "dev.anthracite.remote"
-    compileSdk = 36
+    // androidx.core 1.19.1 requires compileSdk 37. targetSdk stays 36.
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "dev.anthracite.remote"
