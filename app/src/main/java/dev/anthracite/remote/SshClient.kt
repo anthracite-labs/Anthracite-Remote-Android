@@ -1,5 +1,6 @@
 package dev.anthracite.remote
 
+import com.jcraft.jsch.ChannelDirectTCPIP
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.HostKey
@@ -41,42 +42,74 @@ internal data class ExecResult(val exitCode: Int, val stdout: String, val stderr
     val text: String get() = listOf(stdout, stderr).filter { it.isNotBlank() }.joinToString("\n")
 }
 
+/**
+ * A single-session JSch facade.
+ *
+ * Session setup deliberately happens outside [stateLock], because network I/O can
+ * block. The generation token makes a concurrent disconnect cancel both an
+ * already-connected session and a session still negotiating its SSH banner.
+ */
 internal class SshClient {
+    private val stateLock = Any()
+    private val forwardingLock = Any()
     private var session: Session? = null
+    private var connecting: Session? = null
     private var localPort: Int = -1
+    private var generation = 0L
 
-    fun isConnected(): Boolean = session?.isConnected == true
+    fun isConnected(): Boolean = synchronized(stateLock) { session?.isConnected == true }
 
-    fun localForwardPort(): Int = localPort
+    fun localForwardPort(): Int = synchronized(stateLock) { localPort }
 
     fun connect(target: SshTarget, approvedKey: ByteArray?): ConnectOutcome {
-        disconnect()
+        val prior = detachSessions()
+        closeSessions(prior)
         val gate = HostKeyGate(approvedKey)
         val jsch = JSch()
-        if (target.privateKey != null) {
-            jsch.addIdentity(
-                "anthracite",
-                target.privateKey,
-                null,
-                target.passphrase?.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8),
-            )
+        try {
+            if (target.privateKey != null) {
+                jsch.addIdentity(
+                    "anthracite",
+                    target.privateKey,
+                    null,
+                    target.passphrase?.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8),
+                )
+            }
+        } catch (error: Exception) {
+            return ConnectOutcome.Failed(error.message ?: "Could not load the SSH private key")
         }
-        val created = jsch.getSession(target.username, target.host, target.port)
-        created.hostKeyRepository = gate
-        created.setConfig(sessionConfig(target.privateKey != null))
-        if (!target.password.isNullOrEmpty()) created.setPassword(target.password)
-        created.userInfo = PasswordPrompts(target.password, target.passphrase)
-        created.setServerAliveInterval(15_000)
-        created.setServerAliveCountMax(3)
-        created.timeout = CONNECT_TIMEOUT_MS
-        created.setDaemonThread(true)
+
+        val created = try {
+            jsch.getSession(target.username, target.host, target.port).apply {
+                hostKeyRepository = gate
+                setConfig(sessionConfig(target.privateKey != null))
+                if (!target.password.isNullOrEmpty()) setPassword(target.password)
+                userInfo = PasswordPrompts(target.password, target.passphrase)
+                setServerAliveInterval(15_000)
+                setServerAliveCountMax(3)
+                timeout = CONNECT_TIMEOUT_MS
+                setDaemonThread(true)
+            }
+        } catch (error: Exception) {
+            return ConnectOutcome.Failed(error.message ?: "Could not create the SSH session")
+        }
+
+        val ticket = prior.generation
+        if (!registerConnecting(created, ticket)) {
+            created.disconnect()
+            return ConnectOutcome.Failed("SSH connection cancelled")
+        }
         return try {
             created.connect(CONNECT_TIMEOUT_MS)
-            session = created
-            ConnectOutcome.Connected(
-                gate.presented?.let { sha256Fingerprint(it) } ?: "",
-                gate.presented?.let { sshKeyType(it) } ?: "",
-            )
+            if (!promoteConnected(created, ticket)) {
+                created.disconnect()
+                ConnectOutcome.Failed("SSH connection cancelled")
+            } else {
+                ConnectOutcome.Connected(
+                    gate.presented?.let { sha256Fingerprint(it) } ?: "",
+                    gate.presented?.let { sshKeyType(it) } ?: "",
+                )
+            }
         } catch (error: JSchChangedHostKeyException) {
             created.disconnect()
             hostKeyOutcome(gate, approvedKey, changed = true, error.message)
@@ -85,29 +118,82 @@ internal class SshClient {
             hostKeyOutcome(gate, approvedKey, changed = false, error.message)
         } catch (error: JSchException) {
             created.disconnect()
-            val message = error.message ?: "SSH failed"
-            if (message.contains("Auth fail", ignoreCase = true) || message.contains("Auth cancel", ignoreCase = true)) {
-                ConnectOutcome.AuthFailed(message)
-            } else {
-                ConnectOutcome.Failed(message)
-            }
+            connectFailure(error.message)
+        } catch (error: Exception) {
+            created.disconnect()
+            ConnectOutcome.Failed(error.message ?: "SSH failed")
+        } finally {
+            clearConnecting(created)
         }
     }
 
-    fun forward(remotePort: Int): Int {
-        val current = session ?: error("SSH is not connected")
-        if (localPort > 0) {
-            runCatching { current.delPortForwardingL(LOOPBACK, localPort) }
-            localPort = -1
+    fun forward(remotePort: Int): Int = synchronized(forwardingLock) {
+        require(remotePort in 1..65535) { "remote port is invalid" }
+        val snapshot = currentSession()
+        val current = snapshot.session ?: error("SSH is not connected")
+        if (snapshot.port > 0) {
+            runCatching { current.delPortForwardingL(LOOPBACK, snapshot.port) }
+            synchronized(stateLock) {
+                if (isCurrent(snapshot)) localPort = -1
+            }
         }
         val assigned = current.setPortForwardingL(LOOPBACK, 0, LOOPBACK, remotePort)
         check(assigned in 1..65535) { "forwarder did not bind a local port" }
-        localPort = assigned
-        return assigned
+        val retained = synchronized(stateLock) {
+            if (isCurrent(snapshot)) {
+                localPort = assigned
+                true
+            } else {
+                false
+            }
+        }
+        if (!retained) {
+            runCatching { current.delPortForwardingL(LOOPBACK, assigned) }
+            error("SSH session was disconnected while creating the loopback forward")
+        }
+        assigned
+    }
+
+    /**
+     * Verifies the remote WebUI through authenticated SSH before [forward] creates
+     * a device-loopback listener. This closes the interval in which another app
+     * could otherwise reach an unauthenticated remote control plane via a newly
+     * created local forward.
+     */
+    fun probeRemoteLoopbackHttp(remotePort: Int, timeoutMs: Long = HTTP_PROBE_TIMEOUT_MS): RemoteHttpProbe {
+        require(remotePort in 1..65535) { "remote port is invalid" }
+        val current = currentSession().session ?: error("SSH is not connected")
+        val channel = current.openChannel("direct-tcpip") as ChannelDirectTCPIP
+        channel.setHost(LOOPBACK)
+        channel.setPort(remotePort)
+        channel.setOrgIPAddress(LOOPBACK)
+        channel.setOrgPort(0)
+        val input = channel.inputStream
+        val output = channel.outputStream
+        val response = ByteArrayOutputStream()
+        val buffer = ByteArray(1024)
+        try {
+            channel.connect(minOf(CONNECT_TIMEOUT_MS.toLong(), timeoutMs).toInt())
+            output.write(
+                "GET / HTTP/1.1\r\nHost: $LOOPBACK\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII),
+            )
+            output.flush()
+            val deadline = System.nanoTime() + timeoutMs * 1_000_000
+            while (System.nanoTime() < deadline) {
+                drain(input, response, buffer)
+                val complete = completeHttpHeaders(response.toByteArray())
+                if (complete > 0) return parseHttpProbe(response.toByteArray(), complete)
+                if (response.size() > HTTP_HEADER_CAP || (channel.isClosed && input.available() == 0)) break
+                Thread.sleep(20)
+            }
+            return RemoteHttpProbe(-1, emptyList())
+        } finally {
+            channel.disconnect()
+        }
     }
 
     fun exec(command: String, stdin: ByteArray? = null, timeoutMs: Long = 30_000): ExecResult {
-        val current = session ?: error("SSH is not connected")
+        val current = currentSession().session ?: error("SSH is not connected")
         val channel = current.openChannel("exec") as ChannelExec
         channel.setCommand(command)
         val stdout = ByteArrayOutputStream()
@@ -145,14 +231,18 @@ internal class SshClient {
                 status = channel.exitStatus
                 spins++
             }
-            return ExecResult(status, stdout.toString(Charsets.UTF_8), stderr.toString(Charsets.UTF_8))
+            return ExecResult(
+                status,
+                String(stdout.toByteArray(), Charsets.UTF_8),
+                String(stderr.toByteArray(), Charsets.UTF_8),
+            )
         } finally {
             channel.disconnect()
         }
     }
 
     fun upload(bytes: ByteArray, remotePath: String) {
-        val current = session ?: error("SSH is not connected")
+        val current = currentSession().session ?: error("SSH is not connected")
         val sftp = current.openChannel("sftp") as ChannelSftp
         sftp.connect(CONNECT_TIMEOUT_MS)
         try {
@@ -163,15 +253,65 @@ internal class SshClient {
         }
     }
 
+    /** Safe to invoke concurrently with connect, forwarding, or channel I/O. */
     fun disconnect() {
-        val current = session
-        session = null
-        if (current != null && localPort > 0) {
-            runCatching { current.delPortForwardingL(LOOPBACK, localPort) }
-        }
-        localPort = -1
-        current?.disconnect()
+        closeSessions(detachSessions())
     }
+
+    private fun connectFailure(message: String?): ConnectOutcome {
+        val value = message ?: "SSH failed"
+        return if (value.contains("Auth fail", ignoreCase = true) || value.contains("Auth cancel", ignoreCase = true)) {
+            ConnectOutcome.AuthFailed(value)
+        } else {
+            ConnectOutcome.Failed(value)
+        }
+    }
+
+    private fun detachSessions(): SessionState = synchronized(stateLock) {
+        generation += 1
+        SessionState(session, connecting, localPort, generation).also {
+            session = null
+            connecting = null
+            localPort = -1
+        }
+    }
+
+    private fun closeSessions(state: SessionState) {
+        val active = state.session
+        if (active != null && state.port > 0) {
+            runCatching { active.delPortForwardingL(LOOPBACK, state.port) }
+        }
+        active?.disconnect()
+        if (state.connecting != null && state.connecting !== active) state.connecting.disconnect()
+    }
+
+    private fun registerConnecting(created: Session, ticket: Long): Boolean = synchronized(stateLock) {
+        if (ticket != generation) return@synchronized false
+        connecting = created
+        true
+    }
+
+    private fun promoteConnected(created: Session, ticket: Long): Boolean = synchronized(stateLock) {
+        if (ticket != generation || connecting !== created) return@synchronized false
+        connecting = null
+        session = created
+        true
+    }
+
+    private fun clearConnecting(created: Session) {
+        synchronized(stateLock) {
+            if (connecting === created) connecting = null
+        }
+    }
+
+    private fun currentSession(): SessionState = synchronized(stateLock) {
+        val active = session
+        check(active?.isConnected == true) { "SSH is not connected" }
+        SessionState(active, null, localPort, generation)
+    }
+
+    private fun isCurrent(snapshot: SessionState): Boolean =
+        session === snapshot.session && generation == snapshot.generation && session?.isConnected == true
 
     private fun hostKeyOutcome(
         gate: HostKeyGate,
@@ -188,6 +328,36 @@ internal class SshClient {
         } else {
             ConnectOutcome.UnknownHostKey(presented, fingerprint, type)
         }
+    }
+
+    private fun completeHttpHeaders(bytes: ByteArray): Int {
+        for (index in 3 until bytes.size) {
+            if (
+                bytes[index - 3] == '\r'.code.toByte() &&
+                bytes[index - 2] == '\n'.code.toByte() &&
+                bytes[index - 1] == '\r'.code.toByte() &&
+                bytes[index] == '\n'.code.toByte()
+            ) return index + 1
+        }
+        for (index in 1 until bytes.size) {
+            if (bytes[index - 1] == '\n'.code.toByte() && bytes[index] == '\n'.code.toByte()) return index + 1
+        }
+        return -1
+    }
+
+    private fun parseHttpProbe(bytes: ByteArray, headerEnd: Int): RemoteHttpProbe {
+        val lines = String(bytes, 0, headerEnd, Charsets.US_ASCII).split("\r\n", "\n")
+        val status = lines.firstOrNull()
+            ?.trim()
+            ?.let { Regex("^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})(?:\\s|$)").find(it)?.groupValues?.getOrNull(1) }
+            ?.toIntOrNull()
+            ?: -1
+        val challenges = lines.drop(1).mapNotNull { line ->
+            val separator = line.indexOf(':')
+            if (separator <= 0 || !line.substring(0, separator).equals("WWW-Authenticate", ignoreCase = true)) null
+            else line.substring(separator + 1).trim()
+        }
+        return RemoteHttpProbe(status, challenges)
     }
 
     private fun drain(input: java.io.InputStream, output: ByteArrayOutputStream, buffer: ByteArray) {
@@ -251,8 +421,17 @@ internal class SshClient {
         }
     }
 
+    private data class SessionState(
+        val session: Session?,
+        val connecting: Session?,
+        val port: Int,
+        val generation: Long,
+    )
+
     private companion object {
         const val CONNECT_TIMEOUT_MS = 20_000
+        const val HTTP_PROBE_TIMEOUT_MS = 5_000L
+        const val HTTP_HEADER_CAP = 16 * 1024
         const val OUTPUT_CAP = 200_000
     }
 }

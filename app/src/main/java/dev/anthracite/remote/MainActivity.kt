@@ -99,7 +99,10 @@ class MainActivity : ComponentActivity() {
             val accepted = withContext(Dispatchers.IO) {
                 val parsed = params?.let { WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data) }.orEmpty()
                 parsed.filter { uri -> params != null && runCatching { isSafePickerResult(uri, params) }.getOrDefault(false) }
-                    .takeIf { params?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE || it.size == 1 }
+                    .takeIf {
+                        it.isNotEmpty() &&
+                            (params?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE || it.size == 1)
+                    }
                     ?.toTypedArray()
             }
             if (fileCallback === callback) {
@@ -130,8 +133,14 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 showWebStatus("Network lost. The tunnel will reconnect when the network returns.")
                 if (!wantConnected) return@runOnUiThread
+                // Disconnect is generation-safe inside SshClient and also aborts a
+                // connect that is waiting on a network handshake. Cancelling the
+                // current provisioning action prevents it from continuing over a
+                // newly selected network with a half-open session.
+                job?.cancel()
                 ssh.disconnect()
                 localPort = -1
+                destroyWebView()
                 append("Network lost. The tunnel will reconnect when the network returns.")
                 scheduleReconnect()
             }
@@ -310,7 +319,7 @@ class MainActivity : ComponentActivity() {
         wantConnected = true
         val token = reconnectGate.networkChanged() ?: return
         autoReconnectJob?.cancel()
-        reconnectSerialized(token)
+        reconnectNow(token)
     }
 
     private fun scheduleReconnect() {
@@ -327,20 +336,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun reconnectSerialized(token: Int) {
-        tunnelLock.withLock {
-            if (!reconnectGate.stillCurrent(token) || !wantConnected) return
-            val remote = tunneledRemotePort
-            withContext(Dispatchers.IO) { ssh.disconnect() }
-            destroyWebView()
-            localPort = -1
-            if (!reconnectGate.stillCurrent(token)) return
-            if (!ensureSsh()) return
-            if (!reconnectGate.stillCurrent(token)) {
-                ssh.disconnect()
-                return
-            }
-            openTunnel(remote)
+        tunnelLock.withLock { reconnectNow(token) }
+    }
+
+    /** Called only while [tunnelLock] is held. */
+    private suspend fun reconnectNow(token: Int) {
+        if (!reconnectGate.stillCurrent(token) || !wantConnected) return
+        val remote = tunneledRemotePort
+        withContext(Dispatchers.IO) { ssh.disconnect() }
+        destroyWebView()
+        localPort = -1
+        if (!reconnectGate.stillCurrent(token)) return
+        if (!ensureSsh()) return
+        if (!reconnectGate.stillCurrent(token)) {
+            ssh.disconnect()
+            return
         }
+        openTunnel(remote)
     }
 
     private fun defaultNetworkUp(): Boolean {
@@ -354,9 +366,7 @@ class MainActivity : ComponentActivity() {
         reconnectGate.userDisconnected()
         wantConnected = false
         ssh.disconnect()
-        localPort = -1
-        destroyWebView()
-        clearWebCredentials()
+        invalidateTunnelAuthentication()
         acceptedIdentity = null
         append("Disconnected")
         showManage()
@@ -364,10 +374,17 @@ class MainActivity : ComponentActivity() {
 
     private fun forget() {
         disconnect()
+        try {
+            store.forget()
+        } catch (error: Exception) {
+            append("Could not erase saved SSH credentials: ${error.message ?: "storage error"}")
+            toast("Could not erase saved credentials")
+            showManage()
+            return
+        }
         pendingKey?.fill(0)
         pendingKey = null
         tunneledRemotePort = MANAGED_PORT
-        store.forget()
         findViewById<EditText>(R.id.host_input).text.clear()
         findViewById<EditText>(R.id.username_input).text.clear()
         findViewById<EditText>(R.id.password_input).text.clear()
@@ -378,8 +395,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun ensureSsh(): Boolean {
-        if (ssh.isConnected()) return true
+        // Persist and compare the current form before trusting an existing
+        // session; otherwise an edited host could accidentally reuse the prior
+        // server's tunnel and WebUI credentials.
         val target = buildTarget() ?: return false
+        if (ssh.isConnected()) {
+            target.privateKey?.fill(0)
+            return true
+        }
         val savedKey = store.load().hostKey
         val outcome = withContext(Dispatchers.IO) { ssh.connect(target, savedKey) }
         target.privateKey?.fill(0)
@@ -415,6 +438,9 @@ class MainActivity : ComponentActivity() {
             append("Host key was not approved.")
             return false
         }
+        // A first approval can also follow a profile switch. Never let an old
+        // WebView authentication context cross that trust boundary.
+        invalidateTunnelAuthentication()
         store.saveHostKey(outcome.key, outcome.keyType, outcome.fingerprint)
         return ensureSsh()
     }
@@ -432,6 +458,10 @@ class MainActivity : ComponentActivity() {
             showManage()
             return false
         }
+        // Host-key rotation establishes a distinct server identity. Destroy the
+        // previous WebView and every credential/cache associated with its tunnel
+        // before accepting the replacement key and creating a new session.
+        invalidateTunnelAuthentication()
         store.saveHostKey(outcome.key, outcome.keyType, outcome.fingerprint)
         return ensureSsh()
     }
@@ -440,47 +470,37 @@ class MainActivity : ComponentActivity() {
         wantConnected = false
         reconnectGate.userDisconnected()
         autoReconnectJob?.cancel()
+        localPort = -1
+        destroyWebView()
     }
 
     private suspend fun openTunnel(remotePort: Int) {
         syncTunnelIdentity(remotePort)
+        // Direct-tcpip has no device listener. Verify that the remote service
+        // requires HTTP Basic *before* creating a local forward that another app
+        // could otherwise reach.
+        val probe = withContext(Dispatchers.IO) {
+            runCatching { ssh.probeRemoteLoopbackHttp(remotePort) }.getOrDefault(RemoteHttpProbe(-1, emptyList()))
+        }
+        if (!authenticatedTunnelReady(probe.statusCode, probe.authenticateHeaders)) {
+            stopWantingConnection()
+            append(
+                "Tunnel refused: OpenCode must challenge an unauthenticated request with HTTP Basic authentication " +
+                    "(received HTTP ${probe.statusCode}).",
+            )
+            showManage()
+            return
+        }
         val assigned = withContext(Dispatchers.IO) { ssh.forward(remotePort) }
         localPort = assigned
         tunneledRemotePort = remotePort
-        val code = withContext(Dispatchers.IO) { awaitHttp(assigned) }
         yield()
         reconnectGate.userConnected()
         wantConnected = true
-        append("Tunnel 127.0.0.1:$assigned -> 127.0.0.1:$remotePort HTTP $code")
-        when (code) {
-            401 -> {
-                append("Service is up and requires authentication. The browser session is not authenticated yet.")
-                showWeb(assigned)
-            }
-            200, 301, 302, 303, 307, 308 -> showWeb(assigned)
-            else -> {
-                append("Service unavailable. SSH is connected, but OpenCode did not respond on the remote loopback port.")
-                showManage()
-            }
-        }
+        append("Tunnel 127.0.0.1:$assigned -> 127.0.0.1:$remotePort HTTP ${probe.statusCode}")
+        append("Service is up and requires authentication. The browser session is not authenticated yet.")
+        showWeb(assigned)
     }
-
-    private fun awaitHttp(port: Int): Int {
-        repeat(10) {
-            val code = probe(port)
-            if (code > 0) return code
-            Thread.sleep(400)
-        }
-        return probe(port)
-    }
-
-    private fun probe(port: Int): Int = runCatching {
-        val connection = URL("http://$LOOPBACK:$port/").openConnection() as HttpURLConnection
-        connection.instanceFollowRedirects = false
-        connection.connectTimeout = 3000
-        connection.readTimeout = 3000
-        connection.responseCode.also { connection.disconnect() }
-    }.getOrDefault(-1)
 
     private suspend fun runScript(path: String, command: String, stdin: ByteArray? = null, timeoutMs: Long): ExecResult {
         require(command in SCRIPT_COMMANDS)
@@ -495,7 +515,9 @@ class MainActivity : ComponentActivity() {
         }
         job = lifecycleScope.launch {
             try {
-                block()
+                // User actions and automatic reconnects must not interleave SSH
+                // setup, forwarding, or teardown sequences.
+                tunnelLock.withLock { block() }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -517,7 +539,18 @@ class MainActivity : ComponentActivity() {
         }
         val typedPassword = findViewById<EditText>(R.id.password_input).text.toString()
         val typedPassphrase = findViewById<EditText>(R.id.passphrase_input).text.toString()
-        val existing = runCatching { store.secrets() }.getOrDefault(SavedSecrets(null, null, null))
+        val existing = runCatching { store.secrets() }.getOrElse { _ ->
+            // Do not silently replace an unreadable Keystore blob unless the user
+            // actually supplied a full replacement credential for this method.
+            val replacing = (auth == AuthMethod.PASSWORD && typedPassword.isNotBlank()) ||
+                (auth == AuthMethod.KEY && pendingKey != null)
+            if (!replacing) {
+                append("Saved SSH credentials are unavailable. Re-enter the credential to replace them.")
+                toast("Re-enter the SSH credential")
+                return false
+            }
+            SavedSecrets(null, null, null)
+        }
         val password = typedPassword.ifBlank { existing.password }
         val passphrase = typedPassphrase.ifBlank { existing.passphrase }
         val key = pendingKey ?: existing.privateKey
@@ -529,14 +562,28 @@ class MainActivity : ComponentActivity() {
             toast("Choose a private key")
             return false
         }
-        store.saveProfile(host, sshPort, username, auth, remotePort, findViewById<TextView>(R.id.key_name).text.toString())
-        store.saveSecrets(
-            SavedSecrets(
-                password = if (auth == AuthMethod.PASSWORD) password else null,
-                privateKey = if (auth == AuthMethod.KEY) key else null,
-                passphrase = if (auth == AuthMethod.KEY) passphrase else null,
+        val previous = store.load()
+        val changed = profileRequiresNewSession(previous, host, sshPort, username, auth, remotePort)
+        try {
+            store.saveConnection(
+                host,
+                sshPort,
+                username,
+                auth,
+                remotePort,
+                findViewById<TextView>(R.id.key_name).text.toString(),
+                SavedSecrets(
+                    password = if (auth == AuthMethod.PASSWORD) password else null,
+                    privateKey = if (auth == AuthMethod.KEY) key else null,
+                    passphrase = if (auth == AuthMethod.KEY) passphrase else null,
+                ),
             )
-        )
+        } catch (error: Exception) {
+            append("Could not save SSH credentials: ${error.message ?: "Keystore or storage error"}")
+            toast("Could not save SSH credentials")
+            return false
+        }
+        if (changed) invalidateConnectionContext()
         if (typedPassword.isNotEmpty()) findViewById<EditText>(R.id.password_input).text.clear()
         if (typedPassphrase.isNotEmpty()) findViewById<EditText>(R.id.passphrase_input).text.clear()
         refreshSummary()
@@ -546,7 +593,12 @@ class MainActivity : ComponentActivity() {
     private fun buildTarget(): SshTarget? {
         if (!saveForm()) return null
         val saved = store.load()
-        val secrets = store.secrets()
+        val secrets = try {
+            store.secrets()
+        } catch (error: StoredSecretsException) {
+            append("Saved SSH credentials are unavailable. Re-enter the credential.")
+            return null
+        }
         return SshTarget(
             host = saved.host,
             port = saved.sshPort,
@@ -625,6 +677,8 @@ class MainActivity : ComponentActivity() {
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
             allowFileAccess = false
+            // SAF grants are returned directly to the file-input callback; normal
+            // content:// navigations and subresources remain blocked below.
             allowContentAccess = false
             @Suppress("DEPRECATION")
             allowFileAccessFromFileURLs = false
@@ -636,7 +690,7 @@ class MainActivity : ComponentActivity() {
             textZoom = (resources.configuration.fontScale * 100).toInt()
         }
         CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(page, true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(page, false)
         page.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val target = request.url?.toString() ?: return true
@@ -722,8 +776,9 @@ class MainActivity : ComponentActivity() {
         }
         page.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
             if (!loopbackHttp(url, localPort)) return@setDownloadListener
+            val identity = acceptedIdentity ?: return@setDownloadListener
             val name = URLUtil.guessFileName(url, contentDisposition, mimeType)
-            pendingDownload = PendingDownload(url, mimeType ?: "application/octet-stream", name)
+            pendingDownload = PendingDownload(url, mimeType ?: "application/octet-stream", name, identity)
             saveDownload.launch(
                 Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mimeType ?: "*/*")
                     .putExtra(Intent.EXTRA_TITLE, name)
@@ -876,21 +931,57 @@ class MainActivity : ComponentActivity() {
         dialog.show()
     }
 
-    private fun saveDownload(request: PendingDownload, destination: Uri): Boolean = runCatching {
-        val connection = URL(request.url).openConnection() as HttpURLConnection
-        connection.connectTimeout = 20_000
-        connection.readTimeout = 60_000
-        CookieManager.getInstance().getCookie(request.url)?.let { connection.setRequestProperty("Cookie", it) }
+    private fun saveDownload(request: PendingDownload, destination: Uri): Boolean =
+        runCatching { saveDownloadSafely(request, destination) }.getOrDefault(false)
+
+    private fun saveDownloadSafely(request: PendingDownload, destination: Uri): Boolean {
+        if (request.identity != acceptedIdentity) return false
+        var current = URL(request.url)
+        repeat(MAX_DOWNLOAD_REDIRECTS + 1) {
+            val currentUrl = current.toExternalForm()
+            if (!loopbackHttp(currentUrl, localPort) || request.identity != acceptedIdentity) return false
+            val connection = current.openConnection() as HttpURLConnection
+            try {
+                // Do not let HttpURLConnection replay Cookie or Authorization to a
+                // redirect target. Every hop is validated before it is opened.
+                connection.instanceFollowRedirects = false
+                connection.connectTimeout = 20_000
+                connection.readTimeout = 60_000
+                applyDownloadCredentials(connection, currentUrl)
+                when (connection.responseCode) {
+                    in 200..299 -> {
+                        connection.inputStream.use { input ->
+                            contentResolver.openOutputStream(destination)?.use { output -> input.copyTo(output) }
+                                ?: error("no output")
+                        }
+                        return true
+                    }
+                    301, 302, 303, 307, 308 -> {
+                        val location = connection.getHeaderField("Location") ?: return false
+                        val next = URL(current, location)
+                        if (!downloadRedirectAllowed(currentUrl, next.toExternalForm(), localPort)) return false
+                        current = next
+                    }
+                    else -> return false
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
+        return false
+    }
+
+    private fun applyDownloadCredentials(connection: HttpURLConnection, url: String) {
+        // This method is invoked only after loopbackHttp(url, localPort) succeeds.
+        CookieManager.getInstance().getCookie(url)?.let { connection.setRequestProperty("Cookie", it) }
         webPassword?.let { secret ->
-            val token = Base64.encodeToString("${webUser}:${secret.concatToString()}".toByteArray(), Base64.NO_WRAP)
+            val token = Base64.encodeToString(
+                "${webUser}:${secret.concatToString()}".toByteArray(Charsets.UTF_8),
+                Base64.NO_WRAP,
+            )
             connection.setRequestProperty("Authorization", "Basic $token")
         }
-        connection.inputStream.use { input ->
-            contentResolver.openOutputStream(destination)?.use { output -> input.copyTo(output) }
-                ?: error("no output")
-        }
-        true
-    }.getOrDefault(false)
+    }
 
     private fun confirm(title: Int, message: Int, action: () -> Unit) {
         AlertDialog.Builder(this)
@@ -916,16 +1007,53 @@ class MainActivity : ComponentActivity() {
 
     private fun syncTunnelIdentity(remotePort: Int) {
         val saved = store.load()
-        val next = tunnelIdentity(saved.host, saved.sshPort, saved.username, remotePort)
-        if (acceptedIdentity != null && acceptedIdentity != next) clearWebCredentials()
+        val next = tunnelIdentity(saved.host, saved.sshPort, saved.username, remotePort, saved.hostKey)
+        if (acceptedIdentity != null && acceptedIdentity != next) invalidateTunnelAuthentication()
         acceptedIdentity = next
+    }
+
+    private fun profileRequiresNewSession(
+        previous: SavedConnection,
+        host: String,
+        sshPort: Int,
+        username: String,
+        auth: AuthMethod,
+        remotePort: Int,
+    ): Boolean =
+        previous.host != host.trim() ||
+            previous.sshPort != sshPort ||
+            previous.username != username.trim() ||
+            previous.auth != auth ||
+            previous.remotePort != remotePort
+
+    /** Clears the WebUI authority state but leaves the SSH decision to the caller. */
+    private fun invalidateTunnelAuthentication() {
+        pendingDownload = null
+        destroyWebView()
+        localPort = -1
+        clearWebCredentials()
+    }
+
+    /** Used when form edits select a different endpoint or SSH principal. */
+    private fun invalidateConnectionContext() {
+        reconnectGate.userDisconnected()
+        wantConnected = false
+        autoReconnectJob?.cancel()
+        ssh.disconnect()
+        invalidateTunnelAuthentication()
+        acceptedIdentity = null
     }
 
     private fun clearWebCredentials() {
         webPassword?.fill('\u0000')
         webPassword = null
+        webUser = "opencode"
         usedSavedWebPassword = false
-        CookieManager.getInstance().removeAllCookies(null)
+        // removeAllCookies is asynchronous. The deprecated sibling is used at a
+        // trust-boundary transition so a new WebView cannot race an old cookie.
+        @Suppress("DEPRECATION")
+        runCatching { CookieManager.getInstance().removeAllCookie() }
+        runCatching { CookieManager.getInstance().flush() }
         @Suppress("DEPRECATION")
         runCatching { WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword() }
     }
@@ -966,12 +1094,13 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
-    private data class PendingDownload(val url: String, val mimeType: String, val name: String)
+    private data class PendingDownload(val url: String, val mimeType: String, val name: String, val identity: String)
 
     private companion object {
         const val MANAGED_PORT = 4096
         const val RECONNECT_SETTLE_MS = 400L
         const val MAX_KEY = 256 * 1024
+        const val MAX_DOWNLOAD_REDIRECTS = 5
         val SCRIPT_COMMANDS = setOf("preflight", "install", "status", "restart", "update", "uninstall")
         const val MKTEMP =
             "mkdir -p \"\$HOME/.local/share/anthracite\" && mktemp -d \"\$HOME/.local/share/anthracite/upload.XXXXXX\""

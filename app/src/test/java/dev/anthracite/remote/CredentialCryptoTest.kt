@@ -49,6 +49,25 @@ class CredentialCryptoTest {
     }
 
     @Test
+    fun `malformed plaintext fields are rejected instead of partially decoded`() {
+        val truncated = byteArrayOf(0, 0, 0, 1, 7)
+        try {
+            CredentialCrypto.decode(truncated)
+            throw AssertionError("truncated plaintext was accepted")
+        } catch (_: IllegalStateException) {
+            // expected
+        }
+
+        val valid = CredentialCrypto.encode(SavedSecrets("CorrectHorse1", null, null))
+        try {
+            CredentialCrypto.decode(valid + byteArrayOf(0))
+            throw AssertionError("trailing plaintext was accepted")
+        } catch (_: IllegalStateException) {
+            // expected
+        }
+    }
+
+    @Test
     fun `aes gcm does not select the bouncy castle jce provider`() {
         val cipher = CredentialCrypto.cipher()
         assertFalse(cipher.provider.name.equals("BC", ignoreCase = true))

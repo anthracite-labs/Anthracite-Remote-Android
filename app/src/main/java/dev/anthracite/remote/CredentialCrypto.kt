@@ -15,7 +15,9 @@ import javax.crypto.spec.GCMParameterSpec
 internal object CredentialCrypto {
     const val TRANSFORMATION = "AES/GCM/NoPadding"
     private val AAD = "anthracite-remote-ssh-v1".toByteArray()
-    private const val MAX_FIELD = 256 * 1024
+    internal const val MAX_FIELD = 256 * 1024
+    // Three length-prefixed fields, a maximum IV, and a GCM tag.
+    internal const val MAX_CIPHERTEXT_BYTES = 1 + 16 + (3 * (4 + MAX_FIELD)) + 16
 
     fun cipher(): Cipher {
         for (name in listOf("AndroidKeyStoreBCWorkaround", "AndroidOpenSSL")) {
@@ -39,7 +41,7 @@ internal object CredentialCrypto {
     }
 
     fun open(blob: ByteArray, key: SecretKey): SavedSecrets {
-        if (blob.size < 13) error("secret blob is too short")
+        if (blob.size !in 13..MAX_CIPHERTEXT_BYTES) error("secret blob length is invalid")
         val ivLength = blob[0].toInt() and 0xff
         if (ivLength !in 12..16 || blob.size < 1 + ivLength + 16) error("secret blob iv is invalid")
         val iv = blob.copyOfRange(1, 1 + ivLength)
@@ -72,14 +74,18 @@ internal object CredentialCrypto {
             offset += size
             return bytes
         }
-        val password = read().takeIf { it.isNotEmpty() }?.toString(Charsets.UTF_8)
+        val passwordBytes = read()
         val key = read().takeIf { it.isNotEmpty() }
-        val passphrase = read().takeIf { it.isNotEmpty() }?.toString(Charsets.UTF_8)
+        val passphraseBytes = read()
+        if (offset != plain.size) error("secret blob has trailing data")
+        val password = passwordBytes.takeIf { it.isNotEmpty() }?.let { String(it, Charsets.UTF_8) }
+        val passphrase = passphraseBytes.takeIf { it.isNotEmpty() }?.let { String(it, Charsets.UTF_8) }
         return SavedSecrets(password, key, passphrase)
     }
 
     private fun writeField(out: java.io.ByteArrayOutputStream, bytes: ByteArray) {
         val size = bytes.size
+        require(size <= MAX_FIELD) { "secret field is too large" }
         out.write(size ushr 24)
         out.write(size ushr 16)
         out.write(size ushr 8)

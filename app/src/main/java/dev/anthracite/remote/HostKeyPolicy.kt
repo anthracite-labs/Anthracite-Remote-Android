@@ -25,5 +25,5 @@ internal fun sshKeyType(blob: ByteArray): String {
         ((blob[2].toInt() and 0xff) shl 8) or
         (blob[3].toInt() and 0xff)
     if (length <= 0 || length > blob.size - 4 || length > 64) return "unknown"
-    return blob.copyOfRange(4, 4 + length).toString(Charsets.US_ASCII)
+    return String(blob, 4, length, Charsets.US_ASCII)
 }

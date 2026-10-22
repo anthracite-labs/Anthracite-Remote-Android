@@ -181,10 +181,17 @@ sha_matches() {
 
 download_to() {
   local url=$1 dest=$2
+  case "$url" in
+    "$DOWNLOAD_BASE"/*) ;;
+    *) die 3 "refusing a download outside the pinned OpenCode release base" ;;
+  esac
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 3 --retry-delay 2 -o "$dest" "$url"
+    # The pinned SHA-256 protects artifact integrity; restricting both the
+    # initial URL and every redirect to HTTPS also prevents a downgrade path.
+    curl -fsSL --proto '=https' --proto-redir '=https' --max-redirs 5 \
+      --retry 3 --retry-delay 2 -o "$dest" "$url"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$dest" "$url"
+    wget --https-only --max-redirect=5 -q -O "$dest" "$url"
   else
     die 2 "curl or wget is required"
   fi

@@ -4,12 +4,15 @@ on:
   push:
     branches:
       - arena/c3af986f-anthracite-remote-android
+      # Arena remediation work is validated independently before it is merged
+      # into the PR head branch.
+      - arena/d3363dcd-anthracite-remote-android
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# The six existing JVM test classes run on separate hosted runners.
+# JVM test classes run on separate hosted runners.
 # Test shards, shell checks, dependency resolution, lint, and APK assembly
 # have no job dependencies, so a failing check cannot prevent other checks.
 # max-parallel is a ceiling, not a reservation of 20 runners.
@@ -57,6 +60,7 @@ jobs:
       max-parallel: 20
       matrix:
         include:
+          - test_class: AtomicFileStoreTest
           - test_class: CredentialCryptoTest
           - test_class: InstallScriptTest
           - test_class: PickerPolicyTest

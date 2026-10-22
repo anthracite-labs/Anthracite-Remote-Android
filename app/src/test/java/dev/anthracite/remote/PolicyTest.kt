@@ -25,36 +25,70 @@ class PolicyTest {
     }
 
     @Test
-    fun `webview loads only the forwarded loopback origin`() {
+    fun `webview accepts only the explicit forwarded origin and websocket`() {
         assertEquals(WebNavigation.LOAD, classifyNavigation("http://127.0.0.1:4096/", 4096))
-        assertEquals(WebNavigation.LOAD, classifyNavigation("http://localhost:4096/session", 4096))
+        assertEquals(WebNavigation.LOAD, classifyNavigation("ws://127.0.0.1:4096/events", 4096))
+        assertTrue(loopbackHttp("http://127.0.0.1:4096/download", 4096))
+        assertTrue(loopbackWebSocket("ws://127.0.0.1:4096/events", 4096))
+
+        assertFalse(loopbackHttp("http://localhost:4096/session", 4096))
+        assertFalse(loopbackHttp("http://[::1]:4096/session", 4096))
+        assertFalse(loopbackWebSocket("wss://127.0.0.1:4096/events", 4096))
+        assertEquals(WebNavigation.BLOCK, classifyNavigation("http://localhost:4096/session", 4096))
+        assertEquals(WebNavigation.BLOCK, classifyNavigation("http://[::1]:4096/session", 4096))
         assertEquals(WebNavigation.BLOCK, classifyNavigation("http://127.0.0.1:1/", 4096))
         assertEquals(WebNavigation.BLOCK, classifyNavigation("http://user:secret@127.0.0.1:4096/", 4096))
         assertEquals(WebNavigation.BLOCK, classifyNavigation("file:///data/data/private", 4096))
         assertEquals(WebNavigation.BLOCK, classifyNavigation("javascript:alert(1)", 4096))
         assertEquals(WebNavigation.BLOCK, classifyNavigation("intent://scan/#Intent;end", 4096))
+        assertEquals(WebNavigation.BLOCK, classifyNavigation("http://example.com/", 4096))
         assertEquals(WebNavigation.EXTERNAL, classifyNavigation("https://opencode.ai/docs", 4096))
-        assertEquals(WebNavigation.EXTERNAL, classifyNavigation("http://example.com/", 4096))
+        assertEquals(WebNavigation.BLOCK, classifyNavigation("https://user@opencode.ai/docs", 4096))
         assertEquals(WebNavigation.BLOCK, classifyNavigation("http://127.0.0.1:4096/redirect", 1))
-        assertEquals(WebNavigation.BLOCK, classifyNavigation("http://evil@127.0.0.1:4096/", 4096))
         assertEquals(LOOPBACK, "127.0.0.1")
     }
 
     @Test
-    fun `basic auth is released only for the forwarded origin`() {
+    fun `basic auth and tunnel readiness are restricted to an authenticated forwarded origin`() {
         assertTrue(authReleaseAllowed("http://127.0.0.1:4096/", null, "127.0.0.1", 4096))
-        assertTrue(authReleaseAllowed("about:blank", "http://127.0.0.1:4096/session", "localhost", 4096))
+        assertTrue(authReleaseAllowed("about:blank", "http://127.0.0.1:4096/session", "127.0.0.1", 4096))
+        assertFalse(authReleaseAllowed("about:blank", "http://localhost:4096/session", "localhost", 4096))
         assertFalse(authReleaseAllowed("http://127.0.0.1:1/", "http://127.0.0.1:4096/", "127.0.0.1", 4096))
         assertFalse(authReleaseAllowed("http://127.0.0.1:4096/", null, "evil.example", 4096))
         assertFalse(authReleaseAllowed("https://evil.example/", "http://127.0.0.1:4096/", "127.0.0.1", 4096))
         assertFalse(authReleaseAllowed(null, null, "127.0.0.1", 4096))
-        assertEquals(
-            tunnelIdentity("host.example", 22, "user", 4096),
-            tunnelIdentity(" host.example ", 22, "user", 4096),
-        )
-        assertFalse(
-            tunnelIdentity("host.example", 22, "user", 4096) == tunnelIdentity("other.example", 22, "user", 4096),
-        )
+
+        assertTrue(authenticatedTunnelReady(401, listOf("Basic realm=\"OpenCode\"")))
+        assertTrue(authenticatedTunnelReady(401, listOf("Digest realm=\"x\", Basic realm=\"OpenCode\"")))
+        assertTrue(authenticatedTunnelReady(401, listOf("basic realm=\"OpenCode\"")))
+        assertFalse(authenticatedTunnelReady(200, listOf("Basic realm=\"OpenCode\"")))
+        assertFalse(authenticatedTunnelReady(401, listOf("Digest realm=\"OpenCode\"")))
+        assertFalse(authenticatedTunnelReady(302, emptyList()))
+    }
+
+    @Test
+    fun `downloads do not redirect credentials outside the pinned origin`() {
+        val origin = "http://127.0.0.1:4096/export"
+        assertTrue(downloadRedirectAllowed(origin, "http://127.0.0.1:4096/export/archive.zip", 4096))
+        assertFalse(downloadRedirectAllowed(origin, "http://evil.example/export", 4096))
+        assertFalse(downloadRedirectAllowed(origin, "https://127.0.0.1:4096/export", 4096))
+        assertFalse(downloadRedirectAllowed(origin, "http://localhost:4096/export", 4096))
+        assertFalse(downloadRedirectAllowed(origin, "http://[::1]:4096/export", 4096))
+        assertFalse(downloadRedirectAllowed(origin, "http://127.0.0.1:4097/export", 4096))
+        assertFalse(downloadRedirectAllowed("https://example.com/", origin, 4096))
+    }
+
+    @Test
+    fun `web authentication identity includes approved host key and remote identity`() {
+        val firstKey = byteArrayOf(1, 2, 3)
+        val replacementKey = byteArrayOf(1, 2, 4)
+        val identity = tunnelIdentity("host.example", 22, "user", 4096, firstKey)
+        assertEquals(identity, tunnelIdentity(" host.example ", 22, "user", 4096, firstKey.copyOf()))
+        assertFalse(identity == tunnelIdentity("host.example", 22, "user", 4096, replacementKey))
+        assertFalse(identity == tunnelIdentity("other.example", 22, "user", 4096, firstKey))
+        assertFalse(identity == tunnelIdentity("host.example", 22, "other", 4096, firstKey))
+        assertFalse(identity == tunnelIdentity("host.example", 22, "user", 4097, firstKey))
+        assertFalse(identity == tunnelIdentity("host.example", 22, "user", 4096, null))
     }
 
     @Test

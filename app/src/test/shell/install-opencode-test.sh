@@ -56,6 +56,9 @@ grep -q 'opencode-linux-x64-baseline.tar.gz' "$ASSET" || fail "x64 artifact miss
 grep -q 'opencode-linux-arm64.tar.gz' "$ASSET" || fail "arm artifact missing"
 grep -q '0.0.0.0' "$ASSET" && fail "script binds a wildcard address"
 grep -q 'curl |' "$ASSET" && fail "script pipes a download into a shell"
+grep -Fq -- "--proto '=https'" "$ASSET" || fail "curl download does not restrict the initial protocol to HTTPS"
+grep -Fq -- "--proto-redir '=https'" "$ASSET" || fail "curl download redirects can downgrade from HTTPS"
+grep -Fq -- '--https-only' "$ASSET" || fail "wget download does not restrict redirects to HTTPS"
 pass "pinned release constants"
 
 url=$(release_url v1.19.3 opencode-linux-x64-baseline.tar.gz)

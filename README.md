@@ -7,7 +7,7 @@ Android client for OpenCode on a user-owned Ubuntu machine. The phone stores an 
 1. On Ubuntu 24.04, sign in over SSH as a non-root user with `systemd --user` available.
 2. In the app, enter the host, SSH port, username, and a password or private key.
 3. Approve the SHA-256 host-key fingerprint before authentication. A later change is refused until you approve the new fingerprint out of band.
-4. Connect to an existing OpenCode WebUI, or install the pinned release. The install password is sent on the SSH stdin channel and stored only in `~/.config/anthracite/opencode.env` (`0600`) on Linux.
+4. Connect to an existing **HTTP Basic-authenticated** OpenCode WebUI, or install the pinned release. The client probes the remote loopback service through SSH before it creates a device-loopback forward; it refuses anything other than a Basic `401`, so it never intentionally exposes an unauthenticated control interface to other local apps. The install password is sent on the SSH stdin channel and stored only in `~/.config/anthracite/opencode.env` (`0600`) on Linux.
 5. The WebUI username is `opencode`. The phone asks for that password when the page returns HTTP Basic auth and does not save it.
 
 Reconnect, Restart, Update, Uninstall, and Forget connection are separate. Uninstall removes only the managed binary and `anthracite-opencode.service`. Forget removes the phone's saved SSH connection. Neither deletes projects, provider credentials, or sessions.
