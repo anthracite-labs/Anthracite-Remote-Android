@@ -82,7 +82,7 @@ class SshSessionTest {
                 val unknown = client.connect(passwordTarget(port), null)
                 assertTrue("expected unknown host key, got $unknown", unknown is ConnectOutcome.UnknownHostKey)
                 // The host-key decision occurs before any authentication callback.
-                assertEquals(0, attempts.get())
+                assertEquals("unknown host key reached the password authenticator", 0, attempts.get())
                 val presented = (unknown as ConnectOutcome.UnknownHostKey).key
 
                 val connected = client.connect(passwordTarget(port), presented)
@@ -99,7 +99,7 @@ class SshSessionTest {
                         remote.accept().use { accepted ->
                             local.getOutputStream().write(byteArrayOf(7))
                             local.getOutputStream().flush()
-                            assertEquals(7, accepted.getInputStream().read())
+                            assertEquals("loopback forward did not deliver the test byte", 7, accepted.getInputStream().read())
                         }
                     }
                 } finally {
@@ -117,7 +117,7 @@ class SshSessionTest {
                 try {
                     val changed = client.connect(passwordTarget(replacement.port), presented)
                     assertTrue("changed host key was accepted: $changed", changed is ConnectOutcome.ChangedHostKey)
-                    assertEquals(beforeChangedKey, attempts.get())
+                    assertEquals("changed host key reached the password authenticator", beforeChangedKey, attempts.get())
                 } finally {
                     replacement.stop(true)
                 }
@@ -315,7 +315,7 @@ class SshSessionTest {
     private fun assertLoopbackOnly(port: Int) {
         val process = ProcessBuilder("ss", "-H", "-ltn").start()
         val output = process.inputStream.bufferedReader().readText()
-        assertEquals(0, process.waitFor())
+        assertEquals("ss command failed", 0, process.waitFor())
         val lines = output.lines().filter { it.contains(":$port") || it.contains(":$port ") }
         assertTrue("no listener for $port in [$output]", lines.isNotEmpty())
         assertTrue(lines.any { it.contains("$LOOPBACK:$port") })
