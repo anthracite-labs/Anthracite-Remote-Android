@@ -87,6 +87,15 @@
             app:icon="@drawable/ic_edit" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_workspace_button"
+            style="@style/Widget.Anthracite.Button.Outlined"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/manage_workspace"
+            app:icon="@drawable/ic_code" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/manage_disconnect_button"
             style="@style/Widget.Anthracite.Button.Outlined"
             android:layout_width="match_parent"

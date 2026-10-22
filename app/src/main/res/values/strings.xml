@@ -10,6 +10,7 @@
     <string name="close">Close</string>
     <string name="refresh">Refresh</string>
     <string name="manage">Manage</string>
+    <string name="manage_workspace">Host workspace</string>
     <string name="reconnect">Reconnect</string>
     <string name="restart">Restart</string>
     <string name="update">Update</string>

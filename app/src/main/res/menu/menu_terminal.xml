@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/menu_new_shell"
+        android:title="@string/terminal_new_shell"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_new_session"
+        android:title="@string/terminal_new_session"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_attach_session"
+        android:title="@string/terminal_attach_session"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_interrupt"
+        android:title="@string/terminal_interrupt"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_copy_screen"
+        android:title="@string/terminal_copy_screen"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_paste"
+        android:title="@string/terminal_paste"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_stop_session"
+        android:title="@string/terminal_stop_session"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/menu_close_tab"
+        android:title="@string/terminal_close_tab"
+        app:showAsAction="never" />
+</menu>

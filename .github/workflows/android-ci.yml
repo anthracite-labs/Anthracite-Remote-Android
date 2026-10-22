@@ -27,6 +27,17 @@ jobs:
         id: syntax
         continue-on-error: true
         run: bash -n app/src/main/assets/install-opencode.sh
+      - name: Host-kit syntax
+        id: host_syntax
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          for script in app/src/main/assets/host/anthracite-provision-run.sh \
+                        app/src/main/assets/host/anthracite-provision-status.sh \
+                        app/src/main/assets/host/anthracite-probe.sh; do
+            bash -n "$script"
+            dash -n "$script"
+          done
       - name: Installer regression suite
         id: regressions
         continue-on-error: true
@@ -34,6 +45,28 @@ jobs:
           set -euo pipefail
           mkdir -p ci-diagnostics
           bash app/src/test/shell/install-opencode-test.sh 2>&1 | tee ci-diagnostics/shell-tests.log
+      - name: Host-kit regression suite
+        id: host_regressions
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          for interpreter in dash bash; do
+            echo "== runner under $interpreter"
+            SHELL_UNDER_TEST="$interpreter" bash app/src/test/host/provision-run-test.sh
+          done 2>&1 | tee ci-diagnostics/host-kit-tests.log
+      - name: Probe is read-only and self-describing
+        id: host_probe
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          output=$(dash app/src/main/assets/host/anthracite-probe.sh)
+          echo "$output" | grep -q '^probe_version='
+          echo "$output" | grep -q '^done=1$'
+          if echo "$output" | grep -Eq '^(apt-get|dnf|pacman|zypper|apk) install|sudo -n [^l]'; then
+            echo "probe attempted a privileged or mutating command" >&2
+            exit 1
+          fi
       - name: Upload shell diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -46,10 +79,122 @@ jobs:
         if: always()
         env:
           SYNTAX_RESULT: ${{ steps.syntax.outcome }}
+          HOST_SYNTAX_RESULT: ${{ steps.host_syntax.outcome }}
           REGRESSION_RESULT: ${{ steps.regressions.outcome }}
+          HOST_REGRESSION_RESULT: ${{ steps.host_regressions.outcome }}
+          HOST_PROBE_RESULT: ${{ steps.host_probe.outcome }}
         run: |
           test "$SYNTAX_RESULT" = success
+          test "$HOST_SYNTAX_RESULT" = success
           test "$REGRESSION_RESULT" = success
+          test "$HOST_REGRESSION_RESULT" = success
+          test "$HOST_PROBE_RESULT" = success
+
+  # One place that reports the whole compiler/resource error inventory of a run.
+  # The compiler stops after its own analysis, so `--continue` plus every compile
+  # task is asked for explicitly; the collector de-duplicates, and six annotation
+  # steps of ten each expose up to sixty distinct faults in a single run.
+  compile:
+    name: Compile diagnostics (Kotlin, unit-test sources, resources)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
+      - name: Compile main, test and resource sources with --continue
+        id: compile
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          ./gradlew --continue --console=plain \
+            :app:compileDebugKotlin :app:compileDebugUnitTestKotlin \
+            :app:processDebugResources :app:mergeDebugResources \
+            > ci-diagnostics/compile.log 2>&1
+      - name: Collect distinct errors
+        if: always()
+        run: bash ci/collect-build-errors.sh ci-diagnostics/compile.log ci-diagnostics
+      - name: Annotations batch 1
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 1
+      - name: Annotations batch 2
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 2
+      - name: Annotations batch 3
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 3
+      - name: Annotations batch 4
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 4
+      - name: Annotations batch 5
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 5
+      - name: Annotations batch 6
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 6
+      - name: Upload compile diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pr1-compile-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: ci-diagnostics/
+      - name: Mark compile failure
+        if: always()
+        env:
+          COMPILE_RESULT: ${{ steps.compile.outcome }}
+        run: test "$COMPILE_RESULT" = success
+
+  # The Git command grammar is independent of Android, so this job must be able
+  # to fail (or pass) even when the app does not compile.
+  git_integration:
+    name: Git command integration (real git)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the real-git command suite
+        run: bash app/src/test/shell/git-commands-test.sh
+
+  # Static facts that a compiler cannot check: resource references that do not
+  # exist, duplicate string ids, and credential-looking literals in the tree.
+  static_checks:
+    name: Static checks (resources, ids, secrets)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resource, id, manifest and secret checks
+        run: python3 ci/static_checks.py
+      - name: Unimported symbols in test sources
+        run: python3 ci/unused-check.py
+      - name: Every committed shell script parses
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r script; do
+            if ! bash -n "$script"; then
+              echo "::error file=$script::$script does not parse under bash"
+              status=1
+            fi
+          done < <(git ls-files '*.sh')
+          exit "$status"
 
   unit_tests:
     name: JUnit — ${{ matrix.test_class }}
@@ -64,12 +209,29 @@ jobs:
           - test_class: CredentialCryptoTest
           - test_class: DeployProgressTest
           - test_class: HomeStateTest
+          - test_class: GitHubTokenStoreTest
           - test_class: InstallScriptTest
           - test_class: NavigationPolicyTest
           - test_class: PickerPolicyTest
           - test_class: PolicyTest
           - test_class: ReconnectGateTest
           - test_class: SshSessionTest
+          - test_class: SecretStoreTest
+          - test_class: DeployParserTest
+          - test_class: GitHubApiTest
+          - test_class: GitParserTest
+          - test_class: HostFactsParserTest
+          - test_class: HostStoreTest
+          - test_class: MiniJsonTest
+          - test_class: PosixShellTest
+          - test_class: ProvisionJobsTest
+          - test_class: ProvisionPlannerTest
+          - test_class: RemotePathTest
+          - test_class: SftpBrowserTest
+          - test_class: TmuxParsingTest
+          - test_class: TerminalEmulatorTest
+          - test_class: TerminalKeysTest
+          - test_class: TerminalWriterTest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up JDK 17
@@ -90,7 +252,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ci-diagnostics
-          ./gradlew :app:testDebugUnitTest --tests "dev.anthracite.remote.${{ matrix.test_class }}" --stacktrace \
+          ./gradlew :app:testDebugUnitTest --tests "*.${{ matrix.test_class }}" --stacktrace \
             > ci-diagnostics/unit-tests.log 2>&1
       - name: Report test errors
         if: steps.test.outcome == 'failure'
@@ -181,6 +343,9 @@ jobs:
       - name: Report lint errors
         if: steps.lint.outcome == 'failure'
         run: bash .github/workflows/emit-failure.sh ci-diagnostics/lint.log
+      - name: Report lint findings
+        if: steps.lint.outcome == 'failure'
+        run: python3 ci/lint-report.py app/build/reports/lint-results-debug.xml
       - name: Upload lint reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -309,7 +474,7 @@ jobs:
 
   summary:
     name: Overall verification
-    needs: [shell, unit_tests, dependencies, lint, apk]
+    needs: [shell, unit_tests, dependencies, lint, apk, compile, git_integration, static_checks]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -317,6 +482,9 @@ jobs:
       - name: Check every independent validation job
         env:
           SHELL_RESULT: ${{ needs.shell.result }}
+          COMPILE_RESULT: ${{ needs.compile.result }}
+          GIT_RESULT: ${{ needs.git_integration.result }}
+          STATIC_RESULT: ${{ needs.static_checks.result }}
           UNIT_RESULT: ${{ needs.unit_tests.result }}
           DEPENDENCY_RESULT: ${{ needs.dependencies.result }}
           LINT_RESULT: ${{ needs.lint.result }}
@@ -324,7 +492,7 @@ jobs:
         run: |
           set -euo pipefail
           failed=0
-          for job in SHELL UNIT DEPENDENCY LINT APK; do
+          for job in SHELL UNIT DEPENDENCY LINT APK COMPILE GIT STATIC; do
             var="${job}_RESULT"
             result="${!var}"
             echo "$job: $result"

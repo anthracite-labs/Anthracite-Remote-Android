@@ -49,4 +49,9 @@
     <!-- Log / terminal surface -->
     <color name="log_background">#0C100F</color>
     <color name="log_foreground">#9FD4B2</color>
+
+    <!-- Interactive terminal chrome (dark in both themes). -->
+    <color name="term_background">#0E1512</color>
+    <color name="term_surface">#171E1B</color>
+    <color name="term_status">#9FB2A8</color>
 </resources>

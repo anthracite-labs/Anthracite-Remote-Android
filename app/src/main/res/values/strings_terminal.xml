@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copy for the interactive terminal. Every string here is a statement the
+  emulator can actually keep: a tab close is a detach for tmux, a dropped channel
+  never stops a host process, and a blocked clipboard write is reported instead
+  of silently ignored.
+-->
+<resources>
+    <string name="terminal_title">Terminal</string>
+    <string name="terminal_not_connected">The host is not connected, so no terminal can be opened.</string>
+    <string name="terminal_new_shell">New shell</string>
+    <string name="terminal_new_session">New tmux session</string>
+    <string name="terminal_new_session_detail">The session is created detached on the host and attached to a new tab, so it survives this connection.</string>
+    <string name="terminal_attach_session">Attach to a session</string>
+    <string name="terminal_session_name_hint">Session name</string>
+    <string name="terminal_session_name_invalid">Use 1–64 letters, digits, dots, dashes or underscores.</string>
+    <string name="terminal_session_attached">attached</string>
+    <string name="terminal_session_detached">detached</string>
+    <string name="terminal_session_failed">The session action failed: %1$s</string>
+    <string name="terminal_no_tmux">tmux is not installed on this host, so only ephemeral shells are available.</string>
+    <string name="terminal_no_sessions">There are no tmux sessions on this host.</string>
+    <string name="terminal_open_failed">The terminal channel could not be opened: %1$s</string>
+    <string name="terminal_tab_shell">Shell %1$d</string>
+    <string name="terminal_tab_session">%1$s (tmux)</string>
+    <string name="terminal_tab_description">Terminal tab %1$s</string>
+    <string name="terminal_no_tabs">No terminal tabs are open.</string>
+    <string name="terminal_interrupt">Send Ctrl-C</string>
+    <string name="terminal_interrupt_sent">Ctrl-C was sent as a byte. Whether the program stops is its own decision.</string>
+    <string name="terminal_copy_screen">Copy screen</string>
+    <string name="terminal_copied">The visible screen was copied to the clipboard.</string>
+    <string name="terminal_paste">Paste</string>
+    <string name="terminal_clipboard_empty">The clipboard is empty.</string>
+    <string name="terminal_clipboard_blocked">The program asked the terminal to write the clipboard. Anthracite refused; use Copy screen if you want that text.</string>
+    <string name="terminal_link_blocked">A program tried to open a link: %1$s. Anthracite never opens links from terminal output.</string>
+    <string name="terminal_exit_status">The process exited with status %1$d.</string>
+    <string name="terminal_exit_signal">The process ended with signal %1$s.</string>
+    <string name="terminal_close_tab">Close tab</string>
+    <string name="terminal_close_title">Close this shell?</string>
+    <string name="terminal_close_detail">This shell is ephemeral. Closing it ends the process on the host.</string>
+    <string name="terminal_detach_title">Detach from this session?</string>
+    <string name="terminal_detach_detail">The tmux session %1$s keeps running on the host after this tab is closed. Reattach from the terminal menu.</string>
+    <string name="terminal_detach">Detach</string>
+    <string name="terminal_stop_session">Stop session</string>
+    <string name="terminal_stop_detail">Ask the host to end tmux session %1$s?\n\nAnthracite sends kill-session, then verifies with has-session. If the session is still there, it says so instead of claiming success.</string>
+    <string name="terminal_stop_ephemeral_detail">This shell has no tmux session behind it. Closing the tab ends the process with the SSH channel.</string>
+    <string name="terminal_force_close">Close shell</string>
+    <string name="terminal_stopped">The host verified that the session is gone.</string>
+    <string name="terminal_stop_unconfirmed">The session %1$s still exists after the stop request. Nothing was assumed.</string>
+    <string name="terminal_mode_shell">ephemeral shell</string>
+    <string name="terminal_mode_tmux">tmux %1$s</string>
+    <string name="terminal_mode_command">command</string>
+    <string name="terminal_scrolled">scrollback %1$d of %2$d</string>
+    <string name="terminal_input_not_sent">Input was not sent. The terminal is disconnected or its input buffer is full; try again after it responds.</string>
+    <string name="terminal_ctrl_latched">Ctrl is latched for the next key.</string>
+    <string name="terminal_ctrl_released">Ctrl is released.</string>
+    <string name="terminal_alt_latched">Alt is latched for the next key.</string>
+    <string name="terminal_alt_released">Alt is released.</string>
+
+    <!-- Special-key labels. The button shows the short glyph; TalkBack reads the label. -->
+    <string name="key_escape">Escape</string>
+    <string name="key_tab">Tab</string>
+    <string name="key_ctrl">Control</string>
+    <string name="key_alt">Alt</string>
+    <string name="key_interrupt">Interrupt</string>
+    <string name="key_left">Left arrow</string>
+    <string name="key_right">Right arrow</string>
+    <string name="key_up">Up arrow</string>
+    <string name="key_down">Down arrow</string>
+    <string name="key_home">Home</string>
+    <string name="key_end">End</string>
+    <string name="key_page_up">Page up</string>
+    <string name="key_page_down">Page down</string>
+</resources>

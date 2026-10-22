@@ -15,6 +15,51 @@ Android client for OpenCode on a user-owned Ubuntu machine. The phone stores an 
 
 The interface is a single-activity Android Views app: system-following light and dark themes, a capped content column on large screens, TalkBack-readable states, touch targets of at least 48 dp, and motion that honors the system "Remove animations" setting. The design contract lives in `docs/design/UIUX_REDESIGN_SPEC.md`.
 
+## SSH workspace (terminal, files, Git, GitHub, deployments)
+
+The OpenCode journey is unchanged. A second, independent SSH connection powers a
+workspace for the same Linux machine, reached from **Manage → Host workspace**.
+
+* **Hosts** — several profiles, each with its own pinned SSH key. Credentials are
+  sealed with the Android Keystore. Forgetting a host removes only this phone's
+  profile, key and credential; nothing on the host is touched.
+* **Terminal** — a real PTY and a full VT emulator (cursor addressing, scroll
+  regions, alternate screen, 256 colours, wide glyphs, mouse modes). Tabs are
+  independent channels. Closing a tab ends a plain shell; for a `tmux` attachment
+  it is a *detach*, and the session keeps running. **Stop session** is separate
+  and verifies with `tmux has-session` before claiming success. `Ctrl-C` is a
+  byte, not a promise.
+* **Files** — SFTP browsing with absolute paths, no traversal outside the chosen
+  directory, no symlink following on delete, a 5000-entry cap, an 8 MB transfer
+  cap, and temporary-name-then-rename uploads so a final name is never partial.
+* **Host Git** — status (porcelain v2), diff, stage/unstage, commit, fetch,
+  fast-forward-only pull, branch switch, and push. Force push is limited to
+  `--force-with-lease` and is never offered by a single tap.
+* **GitHub** — a fine-grained personal access token (or GitHub's device flow when
+  a public client id is configured). Repositories, pull requests, checks, diff,
+  comment, review and merge. A merge carries the head SHA you reviewed.
+* **Deployments** — Docker, Podman and Kubernetes **read-mostly** views: list,
+  logs, start/stop/restart a host-reported container, delete one named pod.
+  Docker socket access is root-equivalent and the screen says so.
+* **Set up tools** — guided provisioning from a shipped catalogue of native
+  packages. The phone uploads a reviewed host script plus a plan digest; the host
+  re-verifies both before running anything. No `curl | sh`, no downloaded
+  artifacts, no stored `sudo` password.
+
+### What the terminal does not promise
+
+A dropped connection never stops a host process. A `tmux` session survives the
+channel; whether it survives *logout* depends on the host's lingers and
+`KillUserProcesses`, and nothing survives a reboot. Anthracite reports those
+three events separately instead of claiming "your session is safe".
+
+Terminal tabs do not survive Android killing the app. That is deliberate: the
+host owns durable work, and reattaching to a `tmux` session is the honest
+equivalent of session restore.
+
+The full decision record is in `docs/adr/0001-ssh-workspace.md`; verified and
+unverified behaviour is listed in `docs/support-matrix.md`.
+
 ## Persistence limitation
 
 The service is a systemd user unit. It stops when the last login session ends unless lingering is enabled. The installer does not elevate. An administrator must run:

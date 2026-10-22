@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/workspace_toolbar"
+        style="@style/Widget.Anthracite.Toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="@string/workspace_title" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="@dimen/screen_padding_h"
+            android:paddingVertical="@dimen/screen_padding_v">
+
+            <TextView
+                android:id="@+id/workspace_host"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="@style/TextAppearance.Anthracite.Display" />
+
+            <TextView
+                android:id="@+id/workspace_endpoint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xs"
+                android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall" />
+
+            <TextView
+                android:id="@+id/workspace_capabilities"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_l"
+                android:textAppearance="@style/TextAppearance.Anthracite.Body" />
+
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/workspace_warning_card"
+                style="@style/Widget.Anthracite.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_l"
+                android:visibility="gone"
+                app:cardBackgroundColor="@color/banner_warning_background">
+
+                <TextView
+                    android:id="@+id/workspace_warning"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:padding="@dimen/space_m"
+                    android:textColor="@color/banner_warning_foreground"
+                    android:textAppearance="@style/TextAppearance.Anthracite.Body" />
+            </com.google.android.material.card.MaterialCardView>
+
+            <LinearLayout
+                android:id="@+id/workspace_actions"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_l"
+                android:orientation="vertical" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xl"
+                android:text="@string/workspace_facts_label"
+                android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+
+            <TextView
+                android:id="@+id/workspace_facts"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xs"
+                android:fontFamily="monospace"
+                android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall"
+                android:textIsSelectable="true" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/workspace_refresh"
+                style="@style/Widget.Anthracite.Button.Outlined"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_l"
+                android:text="@string/workspace_probe"
+                app:icon="@drawable/ic_refresh" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

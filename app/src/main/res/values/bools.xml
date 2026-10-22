@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      GitHub device sign-in is opt-in at build time. It needs a public OAuth client
+      id (see github_oauth_client_id); without one the GitHub screen offers a
+      fine-grained personal access token instead.
+    -->
+    <bool name="github_device_flow_enabled">false</bool>
+</resources>

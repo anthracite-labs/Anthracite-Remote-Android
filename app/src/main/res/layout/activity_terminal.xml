@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/term_background"
+    android:orientation="vertical">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/terminal_toolbar"
+        style="@style/Widget.Anthracite.Toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="@string/terminal_title" />
+
+    <HorizontalScrollView
+        android:id="@+id/tab_strip"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/term_surface"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/tab_row"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="@dimen/space_s"
+            android:paddingVertical="@dimen/space_xxs" />
+    </HorizontalScrollView>
+
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/terminal_notice"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="@dimen/space_s"
+        android:layout_marginTop="@dimen/space_xs"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/banner_warning_background"
+        app:cardCornerRadius="@dimen/radius_s"
+        app:cardElevation="0dp">
+
+        <TextView
+            android:id="@+id/terminal_notice_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="@dimen/space_s"
+            android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall"
+            android:textColor="@color/banner_warning_foreground" />
+    </com.google.android.material.card.MaterialCardView>
+
+    <dev.anthracite.remote.terminal.TerminalView
+        android:id="@+id/terminal_view"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:focusable="true"
+        android:focusableInTouchMode="true" />
+
+    <HorizontalScrollView
+        android:id="@+id/key_strip"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/term_surface"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/special_keys"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="@dimen/space_xs"
+            android:paddingVertical="@dimen/space_xxs" />
+    </HorizontalScrollView>
+
+    <TextView
+        android:id="@+id/terminal_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:accessibilityLiveRegion="polite"
+        android:background="@color/term_surface"
+        android:paddingHorizontal="@dimen/space_m"
+        android:paddingBottom="@dimen/space_xs"
+        android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall"
+        android:textColor="@color/term_status" />
+</LinearLayout>
