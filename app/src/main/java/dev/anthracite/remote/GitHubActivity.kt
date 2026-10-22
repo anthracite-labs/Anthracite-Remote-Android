@@ -17,12 +17,12 @@ import dev.anthracite.remote.github.GitHubAuth
 import dev.anthracite.remote.github.GitHubIdentity
 import dev.anthracite.remote.github.GitHubResult
 import dev.anthracite.remote.github.GitHubTokenStore
-import dev.anthracite.remote.github.GitHubApi.MergeMethod
+import dev.anthracite.remote.github.MergeMethod
 import dev.anthracite.remote.github.PullDetail
 import dev.anthracite.remote.github.PullSummary
 import dev.anthracite.remote.github.RepoRef
 import dev.anthracite.remote.github.RepoSummary
-import dev.anthracite.remote.github.GitHubApi.ReviewEvent
+import dev.anthracite.remote.github.ReviewEvent
 import dev.anthracite.remote.github.TokenPoll
 import dev.anthracite.remote.github.UrlConnectionTransport
 import dev.anthracite.remote.ui.Row

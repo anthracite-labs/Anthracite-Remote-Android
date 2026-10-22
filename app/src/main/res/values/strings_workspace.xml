@@ -89,6 +89,25 @@
     <string name="files_upload_failed">The upload failed.</string>
     <string name="files_uploaded">Uploaded to %1$s.</string>
 
+    <!-- Files: navigation and transfer states -->
+    <string name="files_refresh">Refresh</string>
+    <string name="files_hidden">Hidden files</string>
+    <string name="files_loading">Reading the directory…</string>
+    <string name="files_loaded">%1$d entries.</string>
+    <string name="files_load_failed">The directory could not be read.</string>
+    <string name="files_empty">This directory is empty.</string>
+    <string name="files_invalid_path">That path cannot be opened.</string>
+    <string name="files_invalid_name">That name cannot be used safely on the host.</string>
+    <string name="files_name_hint">A single name, no slashes.</string>
+    <string name="files_new_name_hint">The new name in this directory.</string>
+    <string name="files_folder_created">Folder created.</string>
+    <string name="files_renamed">Renamed on the host.</string>
+    <string name="files_deleted">Deleted on the host.</string>
+    <string name="files_delete_file">Delete the file %1$s? This cannot be undone from this phone.</string>
+    <string name="files_delete_tree">Delete the folder %1$s and everything inside it? Symbolic links are removed as links and never followed.</string>
+    <string name="files_delete_confirm">Delete</string>
+    <string name="files_write_failed">The host did not accept the write.</string>
+
     <!-- Host Git -->
     <string name="git_title">Host Git</string>
     <string name="git_directory">Repository directory</string>
@@ -108,7 +127,7 @@
     <string name="git_clean">The working tree is clean.</string>
     <string name="git_status_failed">Git status could not be read.</string>
     <string name="git_not_a_repository">%1$s is not inside a Git working tree.</string>
-    <string name="git_status_summary">%1$s · %2$d staged · %3$d modified · %4$d untracked · %5$d conflicted</string>
+    <string name="git_status_summary">%1$s · %2$s · ahead %3$d · behind %4$d · %5$d changed</string>
     <string name="git_branch_unknown">branch unknown</string>
     <string name="git_detached">detached at %1$s</string>
     <string name="git_conflict">conflicted</string>
@@ -130,6 +149,40 @@
     <string name="git_checkout_detail">Check out %1$s? Uncommitted changes can be refused by Git; nothing is stashed automatically.</string>
     <string name="git_done">Done.</string>
     <string name="git_failed">Git exited with status %1$d.\n\n%2$s</string>
+
+    <!-- Host Git: states and confirmations -->
+    <string name="git_loading">Reading repository state…</string>
+    <string name="git_load_failed">The repository state could not be read.</string>
+    <string name="git_nothing_to_commit">There is nothing staged to commit.</string>
+    <string name="git_committed">Committed on the host.</string>
+    <string name="git_commit_action">Commit</string>
+    <string name="git_commit_hint">One line; newlines are collapsed. It is passed as a single argument, never through a shell.</string>
+    <string name="git_commit_confirm">Commit with this message?\n\n%1$s\n\n%2$d paths are staged.</string>
+    <string name="git_fetched">Fetched from the remote.</string>
+    <string name="git_pulled">Fast-forwarded from the remote.</string>
+    <string name="git_pull_confirm">Pull the current branch with --ff-only? If the branch has diverged, Git refuses instead of creating a merge commit.</string>
+    <string name="git_pushed">Pushed to the remote.</string>
+    <string name="git_push_normal">Push</string>
+    <string name="git_push_force">Force push (with lease)</string>
+    <string name="git_push_force_confirm">Force push only if the remote is still where it was when you last fetched. A rewritten history others already pulled is not safe to overwrite.</string>
+    <string name="git_unstaged">Unstaged.</string>
+    <string name="git_status_ok">Status read from the host.</string>
+    <string name="git_status_partial">%1$d status records were not understood and are not shown.</string>
+    <string name="git_not_repository">%1$s is not inside a Git working tree.</string>
+    <string name="git_not_repository_detail">Point the directory at a checkout, or install git from Set up tools if the host does not have it.</string>
+    <string name="git_not_repository_hint">No repository at this path.</string>
+    <string name="git_detached_or_unknown">%1$s · detached or unborn branch</string>
+    <string name="git_already_on_branch">%1$s is already checked out.</string>
+    <string name="git_checkout_confirm">Check out %1$s? Git refuses rather than discarding uncommitted changes; nothing is stashed automatically.</string>
+    <string name="git_checked_out">Branch switched.</string>
+    <string name="git_no_branches">No local branches were reported.</string>
+    <string name="git_no_commits">This repository has no commits.</string>
+    <string name="git_diff">Working tree diff</string>
+    <string name="git_diff_staged">Staged diff</string>
+    <string name="git_empty_output">No output.</string>
+    <string name="git_failed_silent">the command printed nothing</string>
+    <string name="git_write_unavailable">The write did not run.</string>
+    <string name="git_directory_hint">An absolute path on the host. Every command runs as git -C inside it.</string>
 
     <!-- GitHub -->
     <string name="github_title">GitHub</string>
@@ -196,7 +249,7 @@
 
     <!-- Containers and Kubernetes -->
     <string name="deploy_title">Deployments</string>
-    <string name="deploy_subtitle">%1$s · reading what the host already runs</string>
+    <string name="deploy_subtitle">%1$s · %2$s</string>
     <string name="deploy_subtitle_runtime">%1$s · %2$s</string>
     <string name="deploy_subtitle_kube">%1$s · %2$s · namespace %3$s</string>
     <string name="deploy_runtime">Runtime</string>
@@ -210,7 +263,7 @@
     <string name="deploy_namespace_detail">Namespace in context %1$s</string>
     <string name="deploy_namespace_invalid">Use a valid Kubernetes namespace name.</string>
     <string name="deploy_no_containers">%1$s reported no containers, or the daemon is not reachable by this SSH user.</string>
-    <string name="deploy_no_pods">No pods in this namespace.</string>
+    <string name="deploy_no_pods">No pods in namespace %1$s.</string>
     <string name="deploy_container_count">%1$d containers.</string>
     <string name="deploy_pod_count">%1$d pods.</string>
     <string name="deploy_unparsed">%1$d lines could not be parsed and were ignored</string>
@@ -227,12 +280,38 @@
     <string name="deploy_stop_detail">Stop %1$s? The container keeps its data; nothing is removed.</string>
     <string name="deploy_restart">Restart</string>
     <string name="deploy_restart_detail">Restart %1$s on the host.</string>
-    <string name="deploy_action_done">%1$s %2$s requested. The host\'s own state is re-read next.</string>
-    <string name="deploy_action_failed">%1$s failed with status %2$d.\n\n%3$s</string>
+    <string name="deploy_action_done">Action requested. The host\'s own state is re-read next.</string>
+    <string name="deploy_action_failed">The host rejected the action with status %1$d.\n\n%2$s</string>
     <string name="deploy_no_delete_permission">This account may not delete pods in this namespace, so the delete action is disabled.</string>
     <string name="deploy_delete_pod">Delete pod</string>
     <string name="deploy_delete_pod_detail">Delete pod %1$s in namespace %2$s?\n\nIts controller may immediately create a replacement; this is not a way to stop a service.</string>
     <string name="deploy_delete_requested">Deletion of %1$s was requested. Kubernetes deletes it asynchronously.</string>
+
+    <!-- Deployments: loading, permissions and actions -->
+    <string name="deploy_refresh">Refresh</string>
+    <string name="deploy_loading">Reading what the host reports…</string>
+    <string name="deploy_load_failed">The host could not be read.</string>
+    <string name="deploy_mode_containers">Containers</string>
+    <string name="deploy_mode_pods">Pods</string>
+    <string name="deploy_context_failed">The Kubernetes contexts could not be read.</string>
+    <string name="deploy_no_contexts">kubectl reported no contexts for this account.</string>
+    <string name="deploy_no_context">Choose a Kubernetes context first.</string>
+    <string name="deploy_namespace_hint">Namespace in the selected context.</string>
+    <string name="deploy_containers_loaded">%1$d containers.</string>
+    <string name="deploy_containers_partial">%1$d containers · %2$d lines were not understood</string>
+    <string name="deploy_pods_loaded">%1$d pods in %2$s · %3$s</string>
+    <string name="deploy_delete_allowed">delete permitted</string>
+    <string name="deploy_delete_denied">delete not permitted</string>
+    <string name="deploy_no_logs">No output.</string>
+    <string name="deploy_action_logs">Logs</string>
+    <string name="deploy_action_describe">Describe</string>
+    <string name="deploy_action_start">Start</string>
+    <string name="deploy_action_stop">Stop</string>
+    <string name="deploy_action_restart">Restart</string>
+    <string name="deploy_action_delete_pod">Delete pod</string>
+    <string name="deploy_action_confirm">%1$s %2$s?</string>
+    <string name="deploy_action_silent">the host printed nothing</string>
+    <string name="deploy_delete_pod_confirm">Delete pod %1$s in namespace %2$s of context %3$s? Its controller may immediately create a replacement, so this is not a way to stop a service.</string>
 
     <!-- Guided provisioning -->
     <string name="bootstrap_title">Set up tools</string>

@@ -183,8 +183,14 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun render() {
         val target = host ?: return
         hostView.text = target.displayLabel
-        endpointView.text = target.endpoint + " · " + target.fingerprint.takeIf { it.isNotBlank() }
-            ?.let { it.take(30) + "…" } ?: target.endpoint
+        endpointView.text = buildString {
+            append(target.endpoint)
+            if (target.fingerprint.isNotBlank()) {
+                append(" · ")
+                append(target.fingerprint.take(30))
+                append('…')
+            }
+        }
     }
 
     private fun setStatus(text: String) {
