@@ -23,7 +23,8 @@ for filename in sorted(glob.glob("app/build/test-results/testDebugUnitTest/**/*.
             continue
         message = failure.attrib.get("message", "").replace("\n", " ").strip()
         detail = (failure.text or "").strip().splitlines()
-        suffix = f" — {detail[0]}" if detail else ""
+        source = next((line.strip() for line in detail if ".kt:" in line or ".java:" in line), None)
+        suffix = f" — {source or detail[0]}" if detail else ""
         print(f"JUnit {case.attrib.get('classname', '?')}.{case.attrib.get('name', '?')}: {message}{suffix}")
 PY
   fi

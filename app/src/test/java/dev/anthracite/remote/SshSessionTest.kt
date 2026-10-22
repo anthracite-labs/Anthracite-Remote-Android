@@ -6,7 +6,9 @@ import org.apache.sshd.common.keyprovider.KeyPairProvider
 import org.apache.sshd.common.util.security.SecurityUtils
 import org.apache.sshd.server.SshServer
 import org.apache.sshd.server.auth.password.PasswordAuthenticator
+import org.apache.sshd.server.auth.password.UserAuthPasswordFactory
 import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator
+import org.apache.sshd.server.auth.pubkey.UserAuthPublicKeyFactory
 import org.apache.sshd.server.forward.AcceptAllForwardingFilter
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.junit.Assert.assertEquals
@@ -87,7 +89,7 @@ class SshSessionTest {
 
                 val connected = client.connect(passwordTarget(port), presented)
                 assertTrue("password login failed: $connected", connected is ConnectOutcome.Connected)
-                assertTrue(attempts.get() > 0)
+                assertTrue("password authenticator was not invoked", attempts.get() > 0)
                 val remote = ServerSocket()
                 remote.bind(InetSocketAddress(InetAddress.getByName(LOOPBACK), 0))
                 remote.soTimeout = 5_000
@@ -150,6 +152,9 @@ class SshSessionTest {
             server.publickeyAuthenticator = PublickeyAuthenticator { username, key, _ ->
                 username == USER && KeyUtils.compareKeys(key, clientKey.public)
             }
+            // Do not inherit MINA's permissive test-server defaults: this case
+            // must accept only a valid public-key signature.
+            server.userAuthFactories = listOf(UserAuthPublicKeyFactory.INSTANCE)
             server.start()
             val client = SshClient()
             try {
@@ -286,6 +291,11 @@ class SshSessionTest {
             attempts.incrementAndGet()
             username == USER && password == PASSWORD
         }
+        // SshServer.setUpDefaultServer is intentionally convenient for examples
+        // and may offer its built-in auth methods. Restrict this harness to the
+        // mechanism under test so a no-auth/default method cannot make a password
+        // assertion pass without ever consulting PasswordAuthenticator.
+        server.userAuthFactories = listOf(UserAuthPasswordFactory.INSTANCE)
         server.forwardingFilter = AcceptAllForwardingFilter.INSTANCE
         return server
     }
@@ -318,8 +328,8 @@ class SshSessionTest {
         assertEquals("ss command failed", 0, process.waitFor())
         val lines = output.lines().filter { it.contains(":$port") || it.contains(":$port ") }
         assertTrue("no listener for $port in [$output]", lines.isNotEmpty())
-        assertTrue(lines.any { it.contains("$LOOPBACK:$port") })
-        assertFalse(lines.any { it.contains("0.0.0.0:$port") || it.contains("*:$port") })
+        assertTrue("listener was not bound to numeric loopback: $lines", lines.any { it.contains("$LOOPBACK:$port") })
+        assertFalse("listener was exposed beyond loopback: $lines", lines.any { it.contains("0.0.0.0:$port") || it.contains("*:$port") })
     }
 
     private fun withAndroidAlgorithms(block: () -> Unit) {
