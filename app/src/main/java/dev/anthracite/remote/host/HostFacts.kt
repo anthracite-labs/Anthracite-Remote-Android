@@ -219,7 +219,9 @@ internal object HostFactsParser {
             if (!KEY_PATTERN.matches(key)) continue
             values[key] = line.substring(separator + 1).trim()
         }
-        val tools = values.filterKeys { it.startsWith("tool.") }
+        // A `tool.` line with no tool name is a probe artefact, not an installed
+        // tool: keeping it would invent an empty tool that every later lookup hits.
+        val tools = values.filterKeys { it.startsWith("tool.") && it.length > "tool.".length }
             .mapKeys { it.key.removePrefix("tool.") }
         fun text(key: String): String = values[key].orEmpty()
         fun long(key: String, fallback: Long = 0L): Long = values[key]?.toLongOrNull() ?: fallback
