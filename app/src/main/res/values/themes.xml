@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AnthraciteRemote" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#1F2933</item>
+        <item name="android:navigationBarColor">#1F2933</item>
+        <item name="android:windowBackground">#F4F6F5</item>
+    </style>
+</resources>
