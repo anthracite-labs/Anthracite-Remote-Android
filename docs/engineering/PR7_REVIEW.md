@@ -77,3 +77,20 @@ GitHub Actions API reports every mandatory job in the four permanent PR runs as 
 | Lifecycle, security, CI, release | Explicit detach vs stop, runner locks, Android CI; no real logout/reboot persistence evidence, signing credentials or production release. |
 
 Next independent stage after CI repair gate: deterministic deployment parser/command integration against disposable real daemons, then isolated distribution matrix; do not infer a distro support tier from fixture-only tests. Need credentials/hardware/cluster for live API, iOS signing, IME and Kubernetes authorization tests. Avoid merging #6/#7 until those boundaries and the failing/absent CI runs are resolved or explicitly accepted by reviewers.
+
+## Corrective review of PR #7 (follow-up to `dbf6ba9`)
+
+The three findings below were confirmed on that head. The implementing commit and
+new GitHub Actions runs are recorded in the PR description and final engineering
+report; prior green runs do not verify these changes.
+
+| ID / severity | Reproduction and root cause | Correction and regression evidence boundary |
+| --- | --- | --- |
+| R7-01 P1 | `TerminalActivity.attachSession` stored an Activity-capturing listener on a session retained by `TerminalTabs`; `onDestroy` neither detached it nor rebound existing tabs. Navigating away/recreating the Activity retained the old screen and lost rendering callbacks. Closing a tab from an asynchronous confirmation could use a changed `activeIndex`. | Detach all Activity observers at destruction; bind every retained tab on creation; recheck observer ownership on main-thread dispatch; restore the selected tab and closed state; remove tabs by captured session identity. `TerminalLifecycleTest` uses two retained fake PTYs through ActivityScenario recreation, navigation, output during absence, exit during absence, stale callback and repeated visits. Fake tmux channel stays open; real logout persistence is not inferred. |
+| R7-02 P1 | `ProfileCodec.decode` mapped invalid nonempty Base64 to null; `Workspace.connectWorkspace` ignored approval persistence failure and retried with an unpersisted pin. `updateHostKey` previously returned silently for a vanished ID. | Reject malformed and inconsistent key/type/fingerprint records and preserve the original list; do not downgrade an existing pin. Require selected endpoint, committed update and readback before retry, otherwise disconnect and report error. `HostStoreTest` covers corrupted trust with unrelated saved credentials, failed commit, endpoint mismatch, wrong metadata, pin replacement and successful recovery. Existing `SshSessionTest` verifies first-use requires approval before authentication and changed keys are refused. Live Android Keystore recovery remains untested. |
+| R7-03 P2 | `TmuxManager.probe` interpreted broadly matched stderr as no sessions, and version command failures as "not installed". Unexpected SSH/tmux failures could appear as an empty list. | Explicit missing-binary marker, strict tmux no-server/no-sessions predicate and exception for failed/malformed enumeration. Keep exact `(name,id)` kill verification and PTY attachment by ID. `TmuxParsingTest` covers missing tool, empty server, permission/SSH failures, malformed rows, identity reuse and verified absence. No live tmux host test is claimed. |
+
+Security boundaries: host-key verification still uses strict pinned-byte matching;
+credentials remain in Keystore-backed storage; terminal UI rebinding never ends a
+tmux host session. These design controls relate to OWASP MASVS-NETWORK/STORAGE,
+ASVS V9/V6 and NIST SSDF PW.7/RV.1; they are not certification claims.

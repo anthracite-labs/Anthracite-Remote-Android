@@ -38,7 +38,9 @@ internal data class TmuxListResult(
  * requirement behind it.
  */
 internal object TmuxCommands {
-    const val VERSION = "command -v tmux >/dev/null 2>&1 && tmux -V"
+    const val VERSION =
+        "if command -v tmux >/dev/null 2>&1; then tmux -V; " +
+            "else printf 'ANTHRACITE_TMUX_NOT_INSTALLED\\n'; exit 127; fi"
 
     const val LIST =
         "tmux list-sessions -F '#{session_name}\t#{session_id}\t#{session_created}\t#{session_attached}\t#{session_windows}'"
@@ -101,7 +103,9 @@ internal fun parseTmuxSessions(stdout: String): Pair<List<TmuxSession>, Int> {
         val created = fields[2].toLongOrNull()
         val attached = fields[3].toIntOrNull()
         val windows = fields[4].toIntOrNull()
-        if (created == null || attached == null || windows == null || fields[0].isBlank()) {
+        if (created == null || created < 0 || attached == null || attached < 0 ||
+            windows == null || windows < 0 || fields[0].isBlank() ||
+            !fields[1].matches(Regex("\\$[0-9]+"))) {
             unparsed++
             continue
         }
@@ -124,6 +128,36 @@ internal fun parseTmuxVersion(stdout: String): String? {
     return version.takeIf { candidate -> candidate.any { it.isDigit() } }
 }
 
+private const val TMUX_MISSING = "ANTHRACITE_TMUX_NOT_INSTALLED"
+
+/** Only a dedicated missing-binary result can mean tmux is not installed. */
+internal fun tmuxVersion(result: ExecResult): String? {
+    if (result.exitCode == 127 && result.stdout.trim() == TMUX_MISSING && result.stderr.isBlank()) return null
+    if (result.exitCode != 0 || result.stderr.isNotBlank()) {
+        throw IllegalStateException("tmux version could not be checked")
+    }
+    return parseTmuxVersion(result.stdout) ?: throw IllegalStateException("tmux returned an unreadable version")
+}
+
+/** Only tmux's known empty-server errors are evidence of absence. */
+internal fun tmuxNoSessions(result: ExecResult): Boolean =
+    result.exitCode == 1 && result.stdout.isBlank() &&
+        (result.stderr.trim() == "no sessions" ||
+            Regex("no server running on /[^\\r\\n]+").matches(result.stderr.trim()))
+
+/** A failed enumeration is never silently turned into an empty list. */
+internal fun tmuxListing(version: String, listed: ExecResult): TmuxListResult {
+    if (listed.exitCode != 0) {
+        if (tmuxNoSessions(listed)) return TmuxListResult(true, version, emptyList(), 0)
+        throw IllegalStateException("tmux session discovery failed; the session state is unknown")
+    }
+    val (sessions, unparsed) = parseTmuxSessions(listed.stdout)
+    if (unparsed != 0 || listed.stderr.isNotBlank()) {
+        throw IllegalStateException("tmux returned an unreadable session list; the session state is unknown")
+    }
+    return TmuxListResult(true, version, sessions, 0)
+}
+
 /** Verification is distinct from a failed SSH command or unparseable host output. */
 internal enum class TmuxPresence { PRESENT, ABSENT, UNKNOWN }
 
@@ -131,12 +165,10 @@ internal fun tmuxPresence(result: ExecResult, name: String, id: String): TmuxPre
     if (result.exitCode != 0) {
         // tmux reports this when its server has no sessions at all. An arbitrary
         // nonzero exit (including permission or transport failure) is unknown.
-        return if (result.exitCode == 1 &&
-            (result.stderr.trim().startsWith("no server running on ") ||
-                result.stderr.trim() == "no sessions")) TmuxPresence.ABSENT else TmuxPresence.UNKNOWN
+        return if (tmuxNoSessions(result)) TmuxPresence.ABSENT else TmuxPresence.UNKNOWN
     }
     val (sessions, unparsed) = parseTmuxSessions(result.stdout)
-    if (unparsed != 0) return TmuxPresence.UNKNOWN
+    if (unparsed != 0 || result.stderr.isNotBlank()) return TmuxPresence.UNKNOWN
     if (sessions.any { it.name == name && it.id == id }) return TmuxPresence.PRESENT
     // A replacement under the same name is not evidence that the selected
     // session ended as intended; tell the user verification was inconclusive.
@@ -153,21 +185,9 @@ internal fun tmuxPresence(result: ExecResult, name: String, id: String): TmuxPre
  */
 internal class TmuxManager(private val ssh: SshClient) {
     fun probe(timeoutMs: Long = TIMEOUT_MS): TmuxListResult {
-        val version = ssh.exec(TmuxCommands.VERSION, timeoutMs = timeoutMs)
-        if (version.exitCode != 0) {
-            return TmuxListResult(false, null, emptyList(), 0)
-        }
-        val parsedVersion = parseTmuxVersion(version.stdout)
-        val listed = ssh.exec(TmuxCommands.LIST, timeoutMs = timeoutMs)
-        if (listed.exitCode != 0) {
-            // `list-sessions` exits non-zero when a server runs with no sessions.
-            val absent = listed.text.contains("no server running", ignoreCase = true) ||
-                listed.text.contains("no sessions", ignoreCase = true)
-            if (absent) return TmuxListResult(true, parsedVersion, emptyList(), 0)
-            throw IllegalStateException("tmux could not list sessions: ${listed.text.take(200)}")
-        }
-        val (sessions, unparsed) = parseTmuxSessions(listed.stdout)
-        return TmuxListResult(true, parsedVersion, sessions, unparsed)
+        val parsedVersion = tmuxVersion(ssh.exec(TmuxCommands.VERSION, timeoutMs = timeoutMs))
+            ?: return TmuxListResult(false, null, emptyList(), 0)
+        return tmuxListing(parsedVersion, ssh.exec(TmuxCommands.LIST, timeoutMs = timeoutMs))
     }
 
     fun create(name: String, workingDirectory: String?): ExecResult =

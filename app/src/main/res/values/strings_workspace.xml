@@ -14,6 +14,7 @@
     <string name="hosts_intro">Every host is a separate profile with its own pinned SSH key. Anthracite stores nothing on the host.</string>
     <string name="hosts_empty">No hosts yet. Add the SSH details of a Linux machine to open a terminal, browse files or provision tools.</string>
     <string name="hosts_unreadable">Saved hosts are unreadable. They have not been changed. New hosts cannot be saved until the existing data is recovered.</string>
+    <string name="hosts_legacy_import_failed">Legacy host trust could not be imported. Existing data was left untouched; verify or recover that profile before connecting.</string>
     <string name="hosts_add">Add host</string>
     <string name="hosts_save_and_connect">Save and connect</string>
     <string name="hosts_connect">Connect</string>

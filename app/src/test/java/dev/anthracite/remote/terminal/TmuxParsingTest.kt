@@ -54,6 +54,31 @@ class TmuxParsingTest {
     }
 
     @Test
+    fun `discovery distinguishes missing binary empty server and unknown errors`() {
+        assertEquals(null, tmuxVersion(ExecResult(127, "ANTHRACITE_TMUX_NOT_INSTALLED\n", "")))
+        assertEquals("3.4", tmuxVersion(ExecResult(0, "tmux 3.4\n", "")))
+        for (failure in listOf(
+            ExecResult(127, "", "permission denied"), ExecResult(255, "", "connection lost"),
+            ExecResult(1, "", "permission denied"), ExecResult(0, "garbage", ""),
+        )) assertThrows(IllegalStateException::class.java) { tmuxVersion(failure) }
+        assertTrue(tmuxNoSessions(ExecResult(1, "", "no sessions\n")))
+        assertTrue(tmuxListing("3.4", ExecResult(1, "", "no sessions\n")).sessions.isEmpty())
+        assertEquals("work", tmuxListing("3.4", ExecResult(0, "work\t\$1\t1700000000\t0\t1\n", ""))
+            .sessions.single().name)
+        for (failure in listOf(
+            ExecResult(255, "", "SSH disconnected"), ExecResult(1, "", "permission denied"),
+            ExecResult(2, "", "no sessions"), ExecResult(0, "garbled", ""),
+            ExecResult(0, "", "permission denied"),
+        )) assertThrows(IllegalStateException::class.java) { tmuxListing("3.4", failure) }
+        assertTrue(tmuxNoSessions(ExecResult(1, "", "no server running on /tmp/tmux-1/default\n")))
+        for (failure in listOf(
+            ExecResult(255, "", "SSH disconnected"), ExecResult(1, "", "permission denied"),
+            ExecResult(2, "", "no sessions"), ExecResult(1, "", "no sessions\npermission denied"),
+            ExecResult(1, "work\t\$1\t1\t0\t1", "no sessions"),
+        )) assertTrue("unexpected absence: $failure", !tmuxNoSessions(failure))
+    }
+
+    @Test
     fun `session names cannot become flags, separators or shell syntax`() {
         // A plain name stays bare; quoting only appears when the shell needs it.
         assertEquals(PosixShell.quote("work"), TmuxCommands.quoteName("work"))

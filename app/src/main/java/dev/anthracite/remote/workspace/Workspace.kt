@@ -16,6 +16,7 @@ import dev.anthracite.remote.host.HostStore
 import dev.anthracite.remote.host.KeystoreSecretStore
 import dev.anthracite.remote.host.SecretStore
 import dev.anthracite.remote.host.SharedPreferencesAdapter
+import dev.anthracite.remote.terminal.TerminalTabs
 import java.security.MessageDigest
 import java.util.Base64
 import javax.crypto.SecretKey
@@ -86,8 +87,7 @@ internal object Workspace {
         if (!legacyStore.hasConnection()) return null
         val legacy = legacyStore.load()
         val secrets = runCatching { legacyStore.secrets() }.getOrNull()
-        return runCatching {
-            store.importLegacyIfNeeded(
+        return store.importLegacyIfNeeded(
                 legacy = HostProfile(
                     id = store.newId(),
                     label = legacy.username + "@" + legacy.host,
@@ -106,10 +106,10 @@ internal object Workspace {
                 legacySecrets = secrets,
                 key = key(),
             )
-        }.getOrNull()
     }
 
     fun disconnect() {
+        TerminalTabs.clear()
         ssh.disconnect()
         profile = null
         lastFacts = null
@@ -134,7 +134,16 @@ internal class WorkspaceException(message: String, cause: Throwable? = null) : E
 internal suspend fun connectWorkspace(activity: Activity, profile: HostProfile): String? {
     val store = Workspace.store(activity)
     val key = Workspace.key()
-    val secrets: SavedSecrets = runCatching { store.secretsFor(profile, key) }
+    // Never authenticate using a stale selection or an unreadable saved trust
+    // record. In particular, a corrupt pin must not turn into first-use approval.
+    val current = runCatching { io { store.find(profile.id) } }
+        .getOrElse { return it.message ?: "Saved host trust is unreadable; connection stopped" }
+        ?: return "The selected host no longer exists; connection stopped"
+    if (current.endpoint != profile.endpoint ||
+        !(current.hostKey?.contentEquals(profile.hostKey) ?: (profile.hostKey == null))) {
+        return "The selected host changed; reopen it before connecting"
+    }
+    val secrets: SavedSecrets = runCatching { io { store.secretsFor(current, key) } }
         .getOrElse { error -> return error.message ?: "Saved credentials are unavailable" }
     if (secrets.password == null && secrets.privateKey == null) {
         return "No credential is stored for ${profile.displayLabel}. Edit the host to add one."
@@ -147,22 +156,40 @@ internal suspend fun connectWorkspace(activity: Activity, profile: HostProfile):
         privateKey = secrets.privateKey,
         passphrase = secrets.passphrase,
     )
-    return when (val outcome = Workspace.ssh.connect(target, profile.hostKey)) {
+    // connect() replaces the process-wide SSH transport. No tab from its old
+    // connection may be mistaken for a session on the newly selected host.
+    TerminalTabs.clear()
+    return when (val outcome = io { Workspace.ssh.connect(target, current.hostKey) }) {
         is ConnectOutcome.Connected -> {
-            Workspace.adopt(profile)
+            Workspace.adopt(current)
             runCatching { store.markUsed(profile.id, System.currentTimeMillis()) }
             null
         }
         is ConnectOutcome.UnknownHostKey -> {
-            val approved = askHostKeyApproval(activity, profile, outcome.fingerprint, outcome.keyType)
+            if (current.hostKey != null) {
+                io { Workspace.ssh.disconnect() }
+                return "Saved host trust could not be verified; connection stopped"
+            }
+            val approved = askHostKeyApproval(activity, current, outcome.fingerprint, outcome.keyType)
             if (!approved) {
                 Workspace.ssh.disconnect()
                 return "Host key was not approved."
             }
-            runCatching { store.updateHostKey(profile.id, outcome.key, outcome.keyType, outcome.fingerprint) }
-            val retry = Workspace.ssh.connect(target, outcome.key)
+            val saved = runCatching {
+                io {
+                    store.updateHostKey(
+                        current.id, outcome.key, outcome.keyType, outcome.fingerprint,
+                        expectedEndpoint = current.endpoint,
+                    )
+                }
+            }.getOrElse { error ->
+                io { Workspace.ssh.disconnect() }
+                return "Could not save and verify the approved host key: ${error.message ?: "storage error"}. Connection stopped."
+            }
+            val pinned = saved.hostKey ?: return "Approved host key was not saved; connection stopped"
+            val retry = io { Workspace.ssh.connect(target, pinned) }
             if (retry is ConnectOutcome.Connected) {
-                Workspace.adopt(store.find(profile.id) ?: profile)
+                Workspace.adopt(saved)
                 null
             } else {
                 describeFailure(retry)

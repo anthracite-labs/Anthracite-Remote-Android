@@ -1,5 +1,6 @@
 package dev.anthracite.remote
 
+import dev.anthracite.remote.terminal.TerminalChannel
 import com.jcraft.jsch.ChannelDirectTCPIP
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.ChannelSftp
@@ -604,23 +605,23 @@ internal class SshPty internal constructor(
     private val channel: Channel,
     val description: String,
     private val resizePty: (Int, Int, Int, Int) -> Unit,
-) {
-    val input: InputStream get() = channel.inputStream
+) : TerminalChannel {
+    override val input: InputStream get() = channel.inputStream
 
-    val output: OutputStream get() = channel.outputStream
+    override val output: OutputStream get() = channel.outputStream
 
-    val isOpen: Boolean get() = channel.isConnected && !channel.isClosed
+    override val isOpen: Boolean get() = channel.isConnected && !channel.isClosed
 
     /** Only meaningful once the channel has closed; -1 means "not reported". */
-    val exitStatus: Int get() = channel.exitStatus
+    override val exitStatus: Int get() = channel.exitStatus
 
-    val exitSignal: String? get() = channel.exitSignal
+    override val exitSignal: String? get() = channel.exitSignal
 
     /**
      * RFC 4254 window-change. The PTY size negotiated at open time is the same
      * value JSch resends here, so the host sees a real SIGWINCH.
      */
-    fun resize(cols: Int, rows: Int, widthPx: Int = 0, heightPx: Int = 0) {
+    override fun resize(cols: Int, rows: Int, widthPx: Int, heightPx: Int) {
         resizePty(cols, rows, widthPx, heightPx)
     }
 
@@ -633,7 +634,7 @@ internal class SshPty internal constructor(
         runCatching { channel.sendSignal(name) }
     }
 
-    fun close() {
+    override fun close() {
         runCatching { channel.disconnect() }
     }
 

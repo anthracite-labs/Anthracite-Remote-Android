@@ -1,8 +1,20 @@
 package dev.anthracite.remote.terminal
 
-import dev.anthracite.remote.SshPty
+import java.io.InputStream
+import java.io.OutputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+
+/** Narrow PTY boundary so retained tabs can be exercised without a real host. */
+internal interface TerminalChannel {
+    val input: InputStream
+    val output: OutputStream
+    val isOpen: Boolean
+    val exitStatus: Int
+    val exitSignal: String?
+    fun resize(cols: Int, rows: Int, widthPx: Int = 0, heightPx: Int = 0)
+    fun close()
+}
 
 /**
  * One terminal tab: a live PTY channel, a byte pump and an emulator.
@@ -23,7 +35,7 @@ internal class TerminalSession(
     val kind: Kind,
     val title: String,
     val emulator: TerminalEmulator,
-    private val pty: SshPty,
+    private val pty: TerminalChannel,
     /** Optional host-side identity (tmux session name) for reconnect matching. */
     val tmuxSession: String? = null,
     /** Host-issued identity captured when the tab was attached. */
@@ -53,6 +65,8 @@ internal class TerminalSession(
         val exited: Boolean get() = exitStatus >= 0 || exitSignal != null
     }
 
+    /** Activity-owned observer only. The session and emulator outlive a screen. */
+    @Volatile
     var listener: Listener? = null
 
     private val closed = AtomicBoolean(false)

@@ -56,7 +56,9 @@ class HostsActivity : AppCompatActivity() {
         }
         addButton = findViewById(R.id.hosts_add)
         addButton.setOnClickListener { showAddForm() }
-        runCatching { Workspace.importLegacyIfNeeded(this) }
+        runCatching { Workspace.importLegacyIfNeeded(this) }.onFailure {
+            Toast.makeText(this, getString(R.string.hosts_legacy_import_failed), Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onResume() {
