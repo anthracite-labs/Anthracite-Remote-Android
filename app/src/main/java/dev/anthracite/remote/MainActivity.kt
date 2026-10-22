@@ -2033,7 +2033,7 @@ class MainActivity : AppCompatActivity() {
             Screen.MANAGE to R.id.screen_manage,
         )
         const val MKTEMP =
-            "mkdir -p \"\\$HOME/.local/share/anthracite\" && mktemp -d \"\\$HOME/.local/share/anthracite/upload.XXXXXX\""
+            "mkdir -p \"\$HOME/.local/share/anthracite\" && mktemp -d \"\$HOME/.local/share/anthracite/upload.XXXXXX\""
     }
 }
 
