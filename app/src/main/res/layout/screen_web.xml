@@ -24,7 +24,7 @@
         android:paddingHorizontal="@dimen/space_xs">
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/web_back_button"
+            android:id="@+id/web_nav_button"
             style="@style/Widget.Anthracite.Button.Icon"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -51,21 +51,21 @@
             android:textAppearance="@style/TextAppearance.Anthracite.Title" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/web_refresh_button"
+            style="@style/Widget.Anthracite.Button.Icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/refresh"
+            app:icon="@drawable/ic_refresh"
+            app:iconTint="@color/on_surface" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/web_overflow_button"
             style="@style/Widget.Anthracite.Button.Icon"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:contentDescription="@string/more_actions"
             app:icon="@drawable/ic_more_vert"
-            app:iconTint="@color/on_surface" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/web_close_button"
-            style="@style/Widget.Anthracite.Button.Icon"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:contentDescription="@string/web_close"
-            app:icon="@drawable/ic_close"
             app:iconTint="@color/on_surface" />
     </LinearLayout>
 

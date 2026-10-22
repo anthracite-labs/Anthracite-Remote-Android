@@ -142,4 +142,14 @@
         <item name="android:background">@color/log_background</item>
         <item name="android:padding">@dimen/space_m</item>
     </style>
+
+    <!-- Dialogs keep the 16dp radius token instead of the M3 default. -->
+    <style name="ThemeOverlay.Anthracite.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.Anthracite.Dialog</item>
+    </style>
+
+    <style name="ShapeAppearance.Anthracite.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">@dimen/radius_l</item>
+    </style>
 </resources>

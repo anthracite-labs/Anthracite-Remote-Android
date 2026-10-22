@@ -72,6 +72,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="@dimen/space_m"
                     android:layout_weight="1"
+                    android:accessibilityLiveRegion="polite"
                     android:text="@string/home_status_idle"
                     android:textAppearance="@style/TextAppearance.Anthracite.Label" />
             </LinearLayout>

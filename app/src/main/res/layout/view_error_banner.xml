@@ -42,6 +42,7 @@
                 android:id="@+id/banner_title"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
                 android:textAppearance="@style/TextAppearance.Anthracite.Body"
                 android:textColor="@color/on_error_container"
                 android:textStyle="bold" />

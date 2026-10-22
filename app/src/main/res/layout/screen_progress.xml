@@ -29,6 +29,17 @@
             android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall"
             android:visibility="gone" />
 
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progress_busy"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_m"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:indicatorColor="@color/primary"
+            app:trackColor="@color/outline_variant"
+            app:trackThickness="@dimen/stroke_thin" />
+
         <LinearLayout
             android:id="@+id/phase_container"
             android:layout_width="match_parent"
@@ -177,8 +188,9 @@
             android:id="@+id/progress_log_scroll"
             style="@style/Widget.Anthracite.LogSurface"
             android:layout_width="match_parent"
-            android:layout_height="220dp"
+            android:layout_height="@dimen/log_panel_height_progress"
             android:layout_marginBottom="@dimen/space_l"
+            android:accessibilityLiveRegion="polite"
             android:visibility="gone">
 
             <TextView

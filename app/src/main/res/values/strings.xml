@@ -58,6 +58,9 @@
     <string name="setup_help_existing_port">Only used when you connect to an OpenCode service that already runs on the server.</string>
     <string name="setup_connecting">Connecting…</string>
     <string name="error_config_invalid">Enter a host, username, and valid ports.</string>
+    <string name="error_host_invalid">Enter the server host name or IP address.</string>
+    <string name="error_username_invalid">Enter the Linux username.</string>
+    <string name="error_port_invalid">Enter a valid port (1–65535).</string>
     <string name="error_password_required">Enter the SSH password.</string>
     <string name="error_key_required">Choose a private key.</string>
     <string name="error_credentials_unavailable">Saved SSH credentials are unavailable. Re-enter the credential to replace them.</string>

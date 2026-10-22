@@ -25,6 +25,10 @@
     <dimen name="radius_l">16dp</dimen>
     <dimen name="stroke_thin">1dp</dimen>
 
+    <!-- Inner log panels: fixed-height scrolls inside the outer page scroll -->
+    <dimen name="log_panel_height_progress">220dp</dimen>
+    <dimen name="log_panel_height_manage">200dp</dimen>
+
     <!-- Icons and indicators -->
     <dimen name="icon_s">16dp</dimen>
     <dimen name="icon_m">20dp</dimen>

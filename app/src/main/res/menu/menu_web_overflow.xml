@@ -2,11 +2,6 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
-        android:id="@+id/menu_refresh"
-        android:icon="@drawable/ic_refresh"
-        android:title="@string/refresh"
-        app:showAsAction="never" />
-    <item
         android:id="@+id/menu_reconnect"
         android:icon="@drawable/ic_link"
         android:title="@string/reconnect"

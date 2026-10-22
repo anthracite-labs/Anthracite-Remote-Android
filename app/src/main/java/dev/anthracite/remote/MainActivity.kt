@@ -114,7 +114,9 @@ class MainActivity : AppCompatActivity() {
     private var currentScreen = Screen.HOME
     private var homeUi: HomeUi? = null
     private var errorBannerText: String? = null
+    private var errorBannerDetail: String? = null
     private var lastConnectError: String? = null
+    private var lastConnectDetail: String? = null
     private var homeDetailsExpanded = false
     private var setupAdvancedExpanded = false
     private var progressDetailsExpanded = false
@@ -123,6 +125,8 @@ class MainActivity : AppCompatActivity() {
     private var progressRetryAction: (() -> Unit)? = null
     private var phaseRows: List<PhaseRow> = emptyList()
     private var activePhaseAnimator: ObjectAnimator? = null
+    private var homeDotAnimator: ObjectAnimator? = null
+    private var manageLogExpanded = false
     private var lineStream = LineStream()
     private var verifyContinuation: CancellableContinuation<Boolean>? = null
     private var prepareContinuation: CancellableContinuation<CharArray?>? = null
@@ -205,6 +209,7 @@ class MainActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
                 errorBannerText = getString(R.string.banner_network_lost)
+                errorBannerDetail = null
                 showScreen(Screen.HOME)
                 scheduleReconnect()
             }
@@ -256,6 +261,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         stopPhaseAnimator()
+        stopHomeDotPulse()
         authDialog?.dismiss()
         fileCallback?.onReceiveValue(null)
         fileCallback = null
@@ -368,7 +374,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSetup() {
         updateAdvancedSummary()
-        bindBanner(findViewById(R.id.setup_error_banner), errorBannerText, detail = null, warning = false)
+        bindBanner(findViewById(R.id.setup_error_banner), errorBannerText, errorBannerDetail, warning = false)
     }
 
     /** Continue: save the form, then verify the server identity before Home. */
@@ -378,6 +384,7 @@ class MainActivity : AppCompatActivity() {
         launchJob {
             setSetupBusy(true)
             lastConnectError = null
+            lastConnectDetail = null
             val ok = ensureSsh()
             setSetupBusy(false)
             if (ok) {
@@ -385,14 +392,17 @@ class MainActivity : AppCompatActivity() {
                 showScreen(Screen.HOME)
             } else {
                 errorBannerText = lastConnectError ?: getString(R.string.error_unreachable)
+                errorBannerDetail = lastConnectDetail
                 showScreen(Screen.SETUP)
             }
         }
     }
 
     private fun clearFieldErrors() {
-        findViewById<TextInputLayout>(R.id.password_field).error = null
-        findViewById<TextInputLayout>(R.id.web_password_confirm_field).error = null
+        listOf(
+            R.id.host_field, R.id.username_field, R.id.ssh_port_field, R.id.remote_port_field,
+            R.id.password_field, R.id.web_password_confirm_field,
+        ).forEach { findViewById<TextInputLayout>(it).error = null }
     }
 
     private fun saveForm(): Boolean {
@@ -405,9 +415,22 @@ class MainActivity : AppCompatActivity() {
         } else {
             AuthMethod.PASSWORD
         }
-        if (!sshHostAllowed(host) || !sshUsernameAllowed(username) || sshPort == null || remotePort == null) {
-            snackbar(getString(R.string.error_config_invalid))
+        val hostOk = sshHostAllowed(host)
+        val usernameOk = sshUsernameAllowed(username)
+        if (!hostOk || !usernameOk || sshPort == null || remotePort == null) {
+            // Inline field errors, not toast-only feedback (spec §9).
+            findViewById<TextInputLayout>(R.id.host_field).error =
+                if (!hostOk) getString(R.string.error_host_invalid) else null
+            findViewById<TextInputLayout>(R.id.username_field).error =
+                if (!usernameOk) getString(R.string.error_username_invalid) else null
+            findViewById<TextInputLayout>(R.id.ssh_port_field).error =
+                if (sshPort == null) getString(R.string.error_port_invalid) else null
+            findViewById<TextInputLayout>(R.id.remote_port_field).error =
+                if (remotePort == null) getString(R.string.error_port_invalid) else null
             return false
+        }
+        listOf(R.id.host_field, R.id.username_field, R.id.ssh_port_field, R.id.remote_port_field).forEach {
+            findViewById<TextInputLayout>(it).error = null
         }
         val typedPassword = findViewById<EditText>(R.id.password_input).text.toString()
         val typedPassphrase = findViewById<EditText>(R.id.passphrase_input).text.toString()
@@ -643,7 +666,13 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<TextView>(R.id.home_status_text).setText(statusText)
         findViewById<View>(R.id.home_status_dot).setBackgroundResource(statusDot)
+        setHomeDotPulse(
+            findViewById(R.id.home_status_dot),
+            ui.status == ConnectionStatus.CONNECTING || ui.status == ConnectionStatus.RECONNECTING,
+        )
+        val busy = job?.isActive == true
         val cta = findViewById<MaterialButton>(R.id.home_cta)
+        cta.isEnabled = !busy
         cta.setText(
             when (ui.cta) {
                 HomeCta.SET_UP -> R.string.cta_setup
@@ -653,6 +682,7 @@ class MainActivity : AppCompatActivity() {
         )
         cta.setIconResource(if (ui.cta == HomeCta.SET_UP) R.drawable.ic_server else R.drawable.ic_launch)
         val secondary = findViewById<Button>(R.id.home_secondary)
+        secondary.isEnabled = !busy
         when (ui.secondary) {
             HomeSecondary.NONE -> secondary.visibility = View.GONE
             HomeSecondary.CONNECT_EXISTING -> {
@@ -664,7 +694,7 @@ class MainActivity : AppCompatActivity() {
                 secondary.setText(R.string.cta_secondary_install)
             }
         }
-        bindBanner(findViewById(R.id.home_error_banner), errorBannerText, detail = null, warning = false)
+        bindBanner(findViewById(R.id.home_error_banner), errorBannerText, errorBannerDetail, warning = false)
         findViewById<View>(R.id.home_details_section).visibility =
             if (homeDetailsExpanded) View.VISIBLE else View.GONE
         findViewById<TextView>(R.id.home_fingerprint_value).text =
@@ -703,6 +733,7 @@ class MainActivity : AppCompatActivity() {
         }
         launchOp(DeployOp.INSTALL, retry = { installFlow() }) {
             lastConnectError = null
+            lastConnectDetail = null
             updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
             if (!ensureSsh()) {
                 failProgress(lastConnectError)
@@ -763,6 +794,7 @@ class MainActivity : AppCompatActivity() {
         }
         launchOp(DeployOp.OPEN_EXISTING, retry = { connectExistingFlow() }) {
             lastConnectError = null
+            lastConnectDetail = null
             updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
             if (!ensureSsh()) {
                 failProgress(lastConnectError)
@@ -792,6 +824,7 @@ class MainActivity : AppCompatActivity() {
     private fun openManagedFlow() {
         launchOp(DeployOp.OPEN_MANAGED, retry = { openManagedFlow() }) {
             lastConnectError = null
+            lastConnectDetail = null
             updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
             if (!ensureSsh()) {
                 failProgress(lastConnectError)
@@ -814,6 +847,7 @@ class MainActivity : AppCompatActivity() {
             val token = reconnectGate.networkChanged() ?: return@launchOp
             autoReconnectJob?.cancel()
             lastConnectError = null
+            lastConnectDetail = null
             updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
             withContext(Dispatchers.IO) { ssh.disconnect() }
             destroyWebView()
@@ -862,8 +896,10 @@ class MainActivity : AppCompatActivity() {
         localPort = -1
         if (!reconnectGate.stillCurrent(token)) return
         lastConnectError = null
+        lastConnectDetail = null
         if (!ensureSsh()) {
             errorBannerText = lastConnectError
+            errorBannerDetail = lastConnectDetail
             if (currentScreen == Screen.HOME) renderHome()
             return
         }
@@ -946,12 +982,14 @@ class MainActivity : AppCompatActivity() {
             is ConnectOutcome.AuthFailed -> {
                 stopWantingConnection()
                 lastConnectError = getString(R.string.error_auth_failed)
+                lastConnectDetail = null
                 append("SSH authentication failed. Check the username, password, or private key.")
                 false
             }
             is ConnectOutcome.Failed -> {
                 stopWantingConnection()
                 lastConnectError = getString(R.string.error_unreachable)
+                lastConnectDetail = outcome.message
                 append("SSH failed: ${outcome.message}")
                 false
             }
@@ -1011,6 +1049,7 @@ class MainActivity : AppCompatActivity() {
                 "authentication (received HTTP ${probe.statusCode})."
             append(message)
             errorBannerText = message
+            errorBannerDetail = null
             failProgress(message)
             if (currentScreen == Screen.WEB) showScreen(Screen.HOME) else renderHome()
             return
@@ -1325,6 +1364,8 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<View>(R.id.progress_linger_card).visibility =
             if (state.lingerNote) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.progress_busy).visibility =
+            if (job?.isActive == true && !state.failed && !state.stopped) View.VISIBLE else View.GONE
         findViewById<View>(R.id.progress_retry).isEnabled = job?.isActive != true
         findViewById<View>(R.id.progress_log_scroll).visibility =
             if (progressDetailsExpanded) View.VISIBLE else View.GONE
@@ -1343,6 +1384,27 @@ class MainActivity : AppCompatActivity() {
     private fun stopPhaseAnimator() {
         activePhaseAnimator?.cancel()
         activePhaseAnimator = null
+    }
+
+    /** Amber-dot pulse for Connecting/Reconnecting; only with system animations on. */
+    private fun setHomeDotPulse(dot: View, pulsing: Boolean) {
+        val animate = pulsing && NavigationPolicy.animationsEnabled(animatorScale())
+        if (animate && homeDotAnimator != null) return
+        stopHomeDotPulse()
+        if (!animate) return
+        homeDotAnimator = ObjectAnimator.ofFloat(dot, View.ALPHA, 1f, 0.35f).apply {
+            duration = HOME_PULSE_MS
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = LinearInterpolator()
+            start()
+        }
+    }
+
+    private fun stopHomeDotPulse() {
+        homeDotAnimator?.cancel()
+        homeDotAnimator = null
+        runCatching { findViewById<View>(R.id.home_status_dot).alpha = 1f }
     }
 
     private fun animatorScale(): Float = runCatching {
@@ -1369,6 +1431,7 @@ class MainActivity : AppCompatActivity() {
         updateProgress { DeployProgress.stop(it) }
         append("Operation stopped")
         errorBannerText = getString(R.string.error_interrupted)
+        errorBannerDetail = null
         showScreen(Screen.HOME)
     }
 
@@ -1404,16 +1467,15 @@ class MainActivity : AppCompatActivity() {
     // ---------------------------------------------------------------------
 
     private fun wireWeb() {
-        findViewById<Button>(R.id.web_back_button).setOnClickListener {
+        findViewById<Button>(R.id.web_nav_button).setOnClickListener {
             if (webView?.canGoBack() == true) webView?.goBack() else showScreen(Screen.HOME)
         }
-        findViewById<Button>(R.id.web_close_button).setOnClickListener { showScreen(Screen.HOME) }
+        findViewById<Button>(R.id.web_refresh_button).setOnClickListener { webView?.reload() }
         findViewById<Button>(R.id.web_overflow_button).setOnClickListener { anchor ->
             PopupMenu(this, anchor).apply {
                 menuInflater.inflate(R.menu.menu_web_overflow, menu)
                 setOnMenuItemClickListener { item ->
                     when (item.itemId) {
-                        R.id.menu_refresh -> { webView?.reload(); true }
                         R.id.menu_reconnect -> { reconnectFlow(); true }
                         R.id.menu_manage -> { showScreen(Screen.MANAGE); true }
                         R.id.menu_disconnect -> { disconnect(); true }
@@ -1425,10 +1487,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** The navigation slot is adaptive: back-arrow while history exists, else close. */
+    private fun updateWebNavIcon() {
+        val nav = findViewById<MaterialButton>(R.id.web_nav_button)
+        val canGoBack = webView?.canGoBack() == true
+        nav.setIconResource(if (canGoBack) R.drawable.ic_arrow_back else R.drawable.ic_close)
+        nav.contentDescription = getString(if (canGoBack) R.string.web_navigate_back else R.string.web_close)
+    }
+
     private fun showWeb(port: Int) {
         showScreen(Screen.WEB)
         findViewById<View>(R.id.web_status_dot).setBackgroundResource(R.drawable.dot_success)
         hideWebBanner()
+        updateWebNavIcon()
         attachWebView("http://$LOOPBACK:$port/")
     }
 
@@ -1497,6 +1568,14 @@ class MainActivity : AppCompatActivity() {
                 if (request.isForMainFrame && wantConnected && !ssh.isConnected()) scheduleReconnect()
             }
 
+            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                updateWebNavIcon()
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                updateWebNavIcon()
+            }
+
             override fun onReceivedHttpAuthRequest(view: WebView, handler: HttpAuthHandler, host: String, realm: String) {
                 if (!authReleaseAllowed(view.url, loadedUrl, host, localPort)) {
                     handler.cancel()
@@ -1517,6 +1596,7 @@ class MainActivity : AppCompatActivity() {
                 val now = SystemClock.elapsedRealtime()
                 if (detail.didCrash() && now - lastCrashAt < 10_000) {
                     errorBannerText = "WebView renderer crashed repeatedly."
+                    errorBannerDetail = null
                     showScreen(Screen.HOME)
                 } else {
                     lastCrashAt = if (detail.didCrash()) now else 0L
@@ -1664,6 +1744,8 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.cancel) { _, _ -> finish(false) }
             .setOnCancelListener { finish(false) }
             .show()
+        // Dialogs focus their first field (spec §10).
+        user.requestFocus()
     }
 
     private fun saveDownload(request: PendingDownload, destination: Uri): Boolean =
@@ -1735,6 +1817,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.manage_forget_button).setOnClickListener {
             confirm(R.string.forget_title, R.string.forget_body) { forget() }
         }
+        findViewById<Button>(R.id.manage_log_toggle).setOnClickListener {
+            manageLogExpanded = !manageLogExpanded
+            renderManage()
+        }
     }
 
     private fun renderManage() {
@@ -1745,6 +1831,12 @@ class MainActivity : AppCompatActivity() {
         } else {
             target.text = getString(R.string.home_identity_unset)
         }
+        val busy = job?.isActive == true
+        MANAGE_ACTION_IDS.forEach { findViewById<View>(it).isEnabled = !busy }
+        findViewById<View>(R.id.manage_log_scroll).visibility =
+            if (manageLogExpanded) View.VISIBLE else View.GONE
+        findViewById<Button>(R.id.manage_log_toggle)
+            .setText(if (manageLogExpanded) R.string.collapse else R.string.expand)
         renderLogViews()
     }
 
@@ -1761,6 +1853,7 @@ class MainActivity : AppCompatActivity() {
         }
         launchOp(op, retry = { managedFlow(command) }) {
             lastConnectError = null
+            lastConnectDetail = null
             updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
             if (!ensureSsh()) {
                 failProgress(lastConnectError)
@@ -1838,10 +1931,12 @@ class MainActivity : AppCompatActivity() {
     private fun wireBanners() {
         findViewById<View>(R.id.home_error_banner).findViewById<Button>(R.id.banner_dismiss).setOnClickListener {
             errorBannerText = null
+            errorBannerDetail = null
             renderHome()
         }
         findViewById<View>(R.id.setup_error_banner).findViewById<Button>(R.id.banner_dismiss).setOnClickListener {
             errorBannerText = null
+            errorBannerDetail = null
             renderSetup()
         }
         findViewById<View>(R.id.web_banner).findViewById<Button>(R.id.banner_dismiss).setOnClickListener {
@@ -1901,7 +1996,7 @@ class MainActivity : AppCompatActivity() {
                 findViewById<android.widget.ScrollView>(R.id.progress_log_scroll).fullScroll(View.FOCUS_DOWN)
             }
         }
-        if (currentScreen == Screen.MANAGE) {
+        if (manageLogExpanded && currentScreen == Screen.MANAGE) {
             findViewById<View>(R.id.manage_log_scroll).post {
                 findViewById<android.widget.ScrollView>(R.id.manage_log_scroll).fullScroll(View.FOCUS_DOWN)
             }
@@ -2020,7 +2115,13 @@ class MainActivity : AppCompatActivity() {
         const val MAX_DOWNLOAD_REDIRECTS = 5
         const val MIN_WEB_PASSWORD = 12
         const val PHASE_SPIN_MS = 1200L
+        const val HOME_PULSE_MS = 900L
         val SCRIPT_COMMANDS = setOf("preflight", "install", "status", "restart", "update", "uninstall")
+        val MANAGE_ACTION_IDS = listOf(
+            R.id.manage_status_button, R.id.manage_restart_button, R.id.manage_update_button,
+            R.id.manage_reconnect_button, R.id.manage_edit_button, R.id.manage_disconnect_button,
+            R.id.manage_uninstall_button, R.id.manage_forget_button,
+        )
         val WEB_OPENING_OPS = setOf(DeployOp.INSTALL, DeployOp.OPEN_MANAGED, DeployOp.OPEN_EXISTING)
         val SCREEN_IDS = mapOf(
             Screen.WELCOME to R.id.screen_welcome,

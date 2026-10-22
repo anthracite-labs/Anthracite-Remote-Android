@@ -129,19 +129,31 @@
             app:icon="@drawable/ic_close" />
 
         <TextView
+            android:id="@+id/manage_section_log_label"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/space_xl"
             android:text="@string/manage_section_log"
             android:textAppearance="@style/TextAppearance.Anthracite.Label" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_log_toggle"
+            style="@style/Widget.Anthracite.Button.Text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/expand"
+            app:icon="@drawable/ic_expand_more"
+            app:iconGravity="textEnd"
+            app:iconSize="@dimen/icon_m" />
+
         <ScrollView
             android:id="@+id/manage_log_scroll"
             style="@style/Widget.Anthracite.LogSurface"
             android:layout_width="match_parent"
-            android:layout_height="200dp"
-            android:layout_marginTop="@dimen/space_s"
-            android:layout_marginBottom="@dimen/space_l">
+            android:layout_height="@dimen/log_panel_height_manage"
+            android:layout_marginBottom="@dimen/space_l"
+            android:accessibilityLiveRegion="polite"
+            android:visibility="gone">
 
             <TextView
                 android:id="@+id/manage_log"
