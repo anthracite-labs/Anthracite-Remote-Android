@@ -16,13 +16,15 @@ class InstallScriptTest {
     }
 
     private fun findScript(): File {
-        var dir = File(System.getProperty("user.dir"))
-        repeat(5) {
+        var dir: File? = File(System.getProperty("user.dir"))
+        var remaining = 5
+        while (dir != null && remaining > 0) {
             val candidate = File(dir, "app/src/test/shell/install-opencode-test.sh")
             if (candidate.isFile) return candidate
             val nested = File(dir, "src/test/shell/install-opencode-test.sh")
             if (nested.isFile) return nested
-            dir = dir.parentFile ?: break
+            dir = dir.parentFile
+            remaining -= 1
         }
         error("install-opencode-test.sh not found from ${System.getProperty("user.dir")}")
     }
