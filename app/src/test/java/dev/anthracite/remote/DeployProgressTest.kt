@@ -104,10 +104,10 @@ class DeployProgressTest {
     fun `success marks the active phase done and unrun phases skipped, never done`() {
         var state = DeployProgress.initial(DeployOp.UPDATE)
         state = DeployProgress.activate(state, PhaseId.CONNECT_SSH)
-        state = DeployProgress.activate(state, PhaseId.RUN_COMMAND)
+        state = DeployProgress.activate(state, PhaseId.ACTIVATE)
         state = DeployProgress.succeed(state)
         assertEquals(PhaseState.DONE, stateOf(state, PhaseId.CONNECT_SSH))
-        assertEquals(PhaseState.DONE, stateOf(state, PhaseId.RUN_COMMAND))
+        assertEquals(PhaseState.DONE, stateOf(state, PhaseId.ACTIVATE))
         assertEquals(PhaseState.SKIPPED, stateOf(state, PhaseId.DOWNLOAD))
         assertEquals(PhaseState.SKIPPED, stateOf(state, PhaseId.SERVICE_READY))
         assertTrue(state.finished)
@@ -127,7 +127,9 @@ class DeployProgressTest {
     fun `line stream reassembles chunks, crlf, split utf-8, and flushes the remainder`() {
         val stream = LineStream()
         assertEquals(emptyList<String>(), stream.accept(ByteArray(0)))
-        assertEquals(listOf("step: down"), stream.accept("step: down".toByteArray(Charsets.UTF_8)))
+        // No trailing newline yet: the bytes stay pending until LF or flush.
+        assertEquals(emptyList<String>(), stream.accept("step: down".toByteArray(Charsets.UTF_8)))
+        assertEquals(listOf("step: down"), stream.flush())
         assertEquals(emptyList<String>(), stream.flush())
 
         val crlf = LineStream()
