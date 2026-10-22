@@ -45,7 +45,7 @@ internal data class KeyModifiers(
 internal data class KeyModes(
     val applicationCursorKeys: Boolean = false,
     val bracketedPaste: Boolean = false,
-    /** Non-zero when the foreground program asked for mouse reports. */
+    /** The DEC mouse tracking mode the program requested: 0, 1000, 1002 or 1003. */
     val mouseReporting: Int = 0,
     val mouseEncodingSgr: Boolean = false,
 )
@@ -59,9 +59,18 @@ internal data class KeyModes(
  */
 internal object TerminalKeys {
     fun sequence(key: TerminalKey, modifiers: KeyModifiers, modes: KeyModes): ByteArray {
-        val prefix = if (modifiers.alt) ESC else ""
+        // xterm encodes Alt inside the CSI modifier parameter — Alt+Right is
+        // `CSI 1;3C`, not `ESC CSI 1;3C`. Only keys that have no parameter form
+        // (Enter, Tab, Escape, Backspace) take the ESC prefix. Prefixing as well
+        // would deliver two encodings of the same keystroke.
+        val prefix = if (modifiers.alt && !hasParameterForm(key)) ESC else ""
         val body = body(key, modifiers, modes)
         return (prefix + body).toByteArray(Charsets.ISO_8859_1)
+    }
+
+    private fun hasParameterForm(key: TerminalKey): Boolean = when (key) {
+        TerminalKey.ENTER, TerminalKey.TAB, TerminalKey.ESCAPE, TerminalKey.BACKSPACE -> false
+        else -> true
     }
 
     private fun body(key: TerminalKey, modifiers: KeyModifiers, modes: KeyModes): String {
@@ -77,8 +86,8 @@ internal object TerminalKeys {
             TerminalKey.INSERT -> modified("2~", parameter)
             TerminalKey.PAGE_UP -> modified("5~", parameter)
             TerminalKey.PAGE_DOWN -> modified("6~", parameter)
-            TerminalKey.HOME -> homeEnd(modes, modifiers, "H", "OH")
-            TerminalKey.END -> homeEnd(modes, modifiers, "F", "OF")
+            TerminalKey.HOME -> cursor(modes, modifiers, 'H')
+            TerminalKey.END -> cursor(modes, modifiers, 'F')
             TerminalKey.ARROW_UP -> cursor(modes, modifiers, 'A')
             TerminalKey.ARROW_DOWN -> cursor(modes, modifiers, 'B')
             TerminalKey.ARROW_RIGHT -> cursor(modes, modifiers, 'C')
@@ -106,14 +115,14 @@ internal object TerminalKeys {
     private fun modified(body: String, parameter: Int): String =
         if (parameter == 1) "$CSI$body" else "$CSI${body.dropLast(1)};$parameter${body.last()}"
 
+    /**
+     * Cursor keys, Home and End. Without modifiers they follow the mode the
+     * program selected (`SS3` in application cursor mode); with any modifier the
+     * xterm form is `CSI 1;<modifier><final>`, home and end included.
+     */
     private fun cursor(modes: KeyModes, modifiers: KeyModifiers, final: Char): String {
-        if (modifiers.any) return "$CSI${modifiers.csiParameter}$final"
+        if (modifiers.any) return "$CSI" + "1;" + modifiers.csiParameter + final
         return if (modes.applicationCursorKeys) "$SS3$final" else "$CSI$final"
-    }
-
-    private fun homeEnd(modes: KeyModes, modifiers: KeyModifiers, normal: String, application: String): String {
-        if (modifiers.any) return "$CSI${modifiers.csiParameter}$normal"
-        return if (modes.applicationCursorKeys) "$SS3$application" else "$CSI$normal"
     }
 
     /**

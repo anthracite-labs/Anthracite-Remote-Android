@@ -119,7 +119,9 @@ class ProvisionPlannerTest {
         assertTrue(verdict.explanation.contains("never stores"))
 
         val asRoot = facts(uid = 0, sudo = false)
-        val rootPlan = ProvisionPlanner.plan(asRoot, request("tmux"))
+        // The unverified-distribution gate is covered by its own test; this one is
+        // about privilege, so it starts from an acknowledged plan.
+        val rootPlan = ProvisionPlanner.plan(asRoot, request("tmux", acknowledge = true))
         assertEquals(PlanDecision.ALLOWED, ProvisionPlanner.decide(rootPlan, asRoot).decision)
         assertFalse(rootPlan.requiresAdmin)
     }

@@ -45,13 +45,17 @@ class TmuxParsingTest {
     fun `version parsing tolerates extra output and rejects noise`() {
         assertEquals("3.4", parseTmuxVersion("tmux 3.4\n"))
         assertEquals("3.4a", parseTmuxVersion("\nwarning: something\ntmux 3.4a\n"))
+        assertEquals("next-3.5", parseTmuxVersion("tmux next-3.5"))
         assertNull(parseTmuxVersion("command not found"))
+        // The bare word carries no version and must not be reported as one.
         assertNull(parseTmuxVersion("tmux "))
+        assertNull(parseTmuxVersion("tmux"))
     }
 
     @Test
     fun `session names cannot become flags, separators or shell syntax`() {
-        assertEquals("'work'", TmuxCommands.quoteName("work"))
+        // A plain name stays bare; quoting only appears when the shell needs it.
+        assertEquals(PosixShell.quote("work"), TmuxCommands.quoteName("work"))
         for (bad in listOf("", "-rf", "a:b", "a.b", "a b", "a;rm -rf /", "a/b", "a\\b", "a'b")) {
             assertThrows("name '$bad' should be refused", IllegalArgumentException::class.java) {
                 TmuxCommands.quoteName(bad)
@@ -62,22 +66,21 @@ class TmuxParsingTest {
     @Test
     fun `create is idempotent and quote the working directory once`() {
         val command = TmuxCommands.createDetached("work", "/srv/my project")
-        assertTrue(command.startsWith("tmux new-session -A -d -s 'work'"))
-        assertTrue(command.contains("-c '/srv/my project'"))
+        assertTrue("unexpected command: $command", command.startsWith("tmux new-session -A -d -s work"))
+        assertTrue("unexpected command: $command", command.contains("-c '/srv/my project'"))
 
-        val noDirectory = TmuxCommands.createDetached("work", null)
-        assertEquals("tmux new-session -A -d -s 'work'", noDirectory)
+        assertEquals("tmux new-session -A -d -s work", TmuxCommands.createDetached("work", null))
 
         // An invalid directory is dropped rather than quoted into the command.
-        assertEquals("tmux new-session -A -d -s 'work'", TmuxCommands.createDetached("work", "bad\npath"))
+        assertEquals("tmux new-session -A -d -s work", TmuxCommands.createDetached("work", "bad\npath"))
     }
 
     @Test
     fun `attach, detach and kill address exactly one validated session`() {
-        assertEquals("exec tmux attach-session -t 'work'", TmuxCommands.attachCommand("work"))
-        assertEquals("tmux detach-client -s 'work'", TmuxCommands.detachClients("work"))
-        assertEquals("tmux kill-session -t 'work'", TmuxCommands.killSession("work"))
-        assertEquals("tmux has-session -t 'work'", TmuxCommands.hasSession("work"))
+        assertEquals("exec tmux attach-session -t work", TmuxCommands.attachCommand("work"))
+        assertEquals("tmux detach-client -s work", TmuxCommands.detachClients("work"))
+        assertEquals("tmux kill-session -t work", TmuxCommands.killSession("work"))
+        assertEquals("tmux has-session -t work", TmuxCommands.hasSession("work"))
         assertTrue(PosixShell.isToolName("work-2_alpha"))
     }
 }

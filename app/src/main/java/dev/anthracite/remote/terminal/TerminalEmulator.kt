@@ -96,6 +96,7 @@ internal class TerminalEmulator(
 
     val acceptsBracketedPaste: Boolean get() = bracketedPaste
 
+    /** The DEC mouse tracking mode the program requested (0 when off). */
     val mouseReporting: Int get() = mouseMode
 
     val mouseEncodingSgr: Boolean get() = mouseEncoding == MOUSE_ENCODING_SGR
@@ -682,8 +683,10 @@ internal class TerminalEmulator(
                             restoreCursor()
                         }
                     }
-                    1000 -> mouseMode = if (enabled) MOUSE_X10 else MOUSE_NONE
-                    1002, 1003 -> mouseMode = if (enabled) MOUSE_DRAG else MOUSE_NONE
+                    // Keep the mode number the program asked for: 1000 reports
+                    // clicks, 1002 drags, 1003 all motion. Flattening them to a
+                    // boolean would lose the distinction the view needs later.
+                    1000, 1002, 1003 -> mouseMode = if (enabled) mode else MOUSE_NONE
                     1006, 1016 -> mouseEncoding = if (enabled) MOUSE_ENCODING_SGR else MOUSE_ENCODING_X10
                     2004 -> bracketedPaste = enabled
                     else -> Unit
@@ -1134,8 +1137,6 @@ internal class TerminalEmulator(
         const val STRING_ESCAPE = 8
 
         const val MOUSE_NONE = 0
-        const val MOUSE_X10 = 1
-        const val MOUSE_DRAG = 2
         const val MOUSE_ENCODING_X10 = 0
         const val MOUSE_ENCODING_SGR = 1
 

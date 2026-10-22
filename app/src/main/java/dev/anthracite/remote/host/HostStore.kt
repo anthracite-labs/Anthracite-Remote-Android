@@ -224,8 +224,14 @@ internal class HostStore(
     }
 
     private fun persist(hosts: List<HostProfile>) {
+        val previous = preferences.string(KEY_HOSTS)
         preferences.putString(KEY_HOSTS, ProfileCodec.encode(hosts))
-        if (!preferences.commit()) throw HostStoreException("Could not save the host list on this phone")
+        if (preferences.commit()) return
+        // A failed commit leaves the in-memory value updated while the disk keeps
+        // the old one, so the app would show a host that disappears on restart.
+        // Put the previous value back before reporting the failure.
+        if (previous == null) preferences.remove(KEY_HOSTS) else preferences.putString(KEY_HOSTS, previous)
+        throw HostStoreException("Could not save the host list on this phone")
     }
 
     private fun secretName(id: String): String = SecretNames.hostCredential(id)

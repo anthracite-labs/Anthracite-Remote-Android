@@ -43,11 +43,13 @@ class SecretStoreTest {
             val store = FileSecretStore(directory)
             assertNull(store.read("github_token.v1"))
 
-            store.write("github_token.v1", ByteArray(20) { 1 })
-            assertArrayEquals(ByteArray(20) { 1 }, store.read("github_token.v1"))
+            // A sealed blob is never shorter than the GCM envelope, so the
+            // fixture uses a realistic size rather than an arbitrary small one.
+            store.write("github_token.v1", ByteArray(64) { 1 })
+            assertArrayEquals(ByteArray(64) { 1 }, store.read("github_token.v1"))
 
-            store.write("github_token.v1", ByteArray(20) { 2 })
-            assertArrayEquals(ByteArray(20) { 2 }, store.read("github_token.v1"))
+            store.write("github_token.v1", ByteArray(64) { 2 })
+            assertArrayEquals(ByteArray(64) { 2 }, store.read("github_token.v1"))
 
             // No temporary file may survive a successful write.
             val leftovers = directory.listFiles().orEmpty().filter { it.name.endsWith(".tmp") }

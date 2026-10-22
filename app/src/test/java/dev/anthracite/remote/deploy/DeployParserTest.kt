@@ -120,6 +120,8 @@ class DeployParserTest {
     @Test
     fun `the docker warning states that socket access is root-equivalent`() {
         assertTrue(DeployCommands.Runtime.DOCKER.warning.contains("root"))
-        assertTrue(DeployCommands.Runtime.PODMAN.warning.contains("rootless"))
+        // The sentence starts the word: compare case-insensitively so the wording
+        // can change without the claim disappearing.
+        assertTrue(DeployCommands.Runtime.PODMAN.warning.contains("rootless", ignoreCase = true))
     }
 }

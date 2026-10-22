@@ -99,9 +99,18 @@ internal fun parseTmuxSessions(stdout: String): Pair<List<TmuxSession>, Int> {
     return sessions to unparsed
 }
 
+/**
+ * Reads `tmux 3.4` from `tmux -V`.
+ *
+ * The remainder must contain a digit: a line that is only the word `tmux`
+ * carries no version, and reporting it as one would put "tmux" in a capability
+ * check that compares versions. A build from git reports `tmux next-3.5`, which
+ * has a digit and is accepted.
+ */
 internal fun parseTmuxVersion(stdout: String): String? {
     val line = stdout.lineSequence().firstOrNull { it.startsWith("tmux ") }?.trim() ?: return null
-    return line.removePrefix("tmux ").take(32).ifBlank { null }
+    val version = line.removePrefix("tmux ").take(32)
+    return version.takeIf { candidate -> candidate.any { it.isDigit() } }
 }
 
 /**

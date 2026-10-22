@@ -82,8 +82,8 @@ class TerminalEmulatorTest {
     @Test
     fun `scrolling pushes lines into bounded scrollback`() {
         val emu = emulator(cols = 10, rows = 2, scrollback = 3)
-        emu.feed("1\r\n2\r\n3\r\n4\r\n5")
-        // Three lines scrolled off a two-row screen; the cap then evicts the oldest.
+        emu.feed("1\r\n2\r\n3\r\n4\r\n5\r\n6")
+        // Four lines scrolled off a two-row screen; the cap keeps the newest three.
         assertEquals(3, emu.scrollbackLines)
         assertTrue(emu.screenText().contains("5"))
         val top = emu.snapshot(scrollOffset = 3).cell(0, 0)

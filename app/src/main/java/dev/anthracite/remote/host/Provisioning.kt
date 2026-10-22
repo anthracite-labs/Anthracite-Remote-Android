@@ -635,8 +635,15 @@ internal object ProvisionJobs {
  * host output that happens to echo a token or a path with a secret name.
  */
 internal object LogRedactor {
-    private val SECRET_PATTERNS = listOf(
-        Regex("(?i)(password|passwd|secret|token|api[_-]?key)\\s*[=:]\\s*\\S+"),
+    /** `name = value` shapes, where the name is worth keeping for the reader. */
+    private val KEYED_SECRET = Regex("(?i)(password|passwd|secret|token|api[_-]?key)\\s*[=:]\\s*\\S+")
+
+    /**
+     * Tokens that carry no `name =` prefix. These must be replaced by the marker
+     * alone: rebuilding them as `label=value` would print the credential itself,
+     * because the whole match *is* the secret.
+     */
+    private val BARE_SECRETS = listOf(
         Regex("gh[pousr]_[A-Za-z0-9]{20,}"),
         Regex("github_pat_[A-Za-z0-9_]{20,}"),
     )
@@ -646,11 +653,12 @@ internal object LogRedactor {
         for (secret in extraSecrets) {
             if (secret.length >= 4) result = result.replace(secret, REDACTED)
         }
-        for (pattern in SECRET_PATTERNS) {
-            result = pattern.replace(result) { match ->
-                val label = match.value.substringBefore('=').substringBefore(':').trim()
-                "$label=$REDACTED"
-            }
+        result = KEYED_SECRET.replace(result) { match ->
+            val label = match.value.substringBefore('=').substringBefore(':').trim()
+            "$label=$REDACTED"
+        }
+        for (pattern in BARE_SECRETS) {
+            result = pattern.replace(result, REDACTED)
         }
         return result
     }

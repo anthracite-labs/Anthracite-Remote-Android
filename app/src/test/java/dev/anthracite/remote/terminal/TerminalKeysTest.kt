@@ -63,8 +63,14 @@ class TerminalKeysTest {
     }
 
     @Test
-    fun `alt prefixes the encoded key with escape`() {
-        assertEquals("\u001b\u001bOA", key(TerminalKey.ARROW_UP, KeyModifiers(alt = true), application))
+    fun `alt is a modifier parameter where the key has one, an escape prefix otherwise`() {
+        // xterm: Alt+Up is CSI 1;3A in both cursor key modes, and the application
+        // mode does not stack a second ESC in front of it.
+        assertEquals("\u001b[1;3A", key(TerminalKey.ARROW_UP, KeyModifiers(alt = true)))
+        assertEquals("\u001b[1;3A", key(TerminalKey.ARROW_UP, KeyModifiers(alt = true), application))
+        // Home and End carry the parameter too, in the same 1;<modifier> shape.
+        assertEquals("\u001b[1;3F", key(TerminalKey.END, KeyModifiers(alt = true), application))
+        // Backspace has no parameter form, so Alt stays the classic ESC prefix.
         assertEquals("\u001b\u007f", key(TerminalKey.BACKSPACE, KeyModifiers(alt = true)))
     }
 
@@ -129,6 +135,7 @@ class TerminalKeysTest {
         val x10 = TerminalKeys.mouse(0, 5000, 5000, press = false, sgr = false)
         assertEquals(6, x10.size)
         // The X10 form cannot carry a coordinate above 222; it is clamped, not wrapped.
-        assertEquals(33 + 222, x10[4].toInt())
+        // Byte 0xFF is -1 once widened, so read it as unsigned.
+        assertEquals(33 + 222, x10[4].toInt() and 0xFF)
     }
 }

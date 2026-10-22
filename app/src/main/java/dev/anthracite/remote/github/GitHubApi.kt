@@ -451,7 +451,9 @@ internal class GitHubApi(
     fun listChecks(repo: RepoRef, ref: String): GitHubResult<List<CheckSummary>> {
         if (!ref.matches(Regex("[A-Za-z0-9._/-]{1,200}"))) return GitHubResult.Invalid("Invalid ref")
         return request("GET", "/repos/$repo/commits/$ref/check-runs?per_page=50") { json, _ ->
-            val array = json.asObject()?.obj("check_runs")?.asArray()
+            // `obj(...)` returns the nested object, not the array: indexing it as
+            // an array reported every check run list as a failure.
+            val array = json.asObject()?.array("check_runs")
                 ?: return@request GitHubResult.Failed("Unexpected check response")
             GitHubResult.Ok(
                 array.items.mapNotNull { item ->

@@ -3,7 +3,6 @@ package dev.anthracite.remote.deploy
 import dev.anthracite.remote.ExecResult
 import dev.anthracite.remote.SshClient
 import dev.anthracite.remote.host.PosixShell
-import dev.anthracite.remote.json.JsonValue
 import dev.anthracite.remote.json.MiniJson
 
 /**
@@ -204,7 +203,9 @@ internal fun parsePodmanPs(stdout: String): Pair<List<ContainerSummary>, Int> {
 /** Parses `kubectl get pods -o json`. */
 internal fun parseKubePods(stdout: String): Pair<List<KubePod>, String?> {
     val root = runCatching { MiniJson.parse(stdout) }.getOrNull() ?: return emptyList<KubePod>() to "unreadable JSON"
-    val items = root.asObject()?.obj("items")?.asArray()?.items
+    // `obj("items")` returns the nested object; the list itself is an array, so
+    // indexing it as one reported every healthy cluster as "no items".
+    val items = root.asObject()?.array("items")?.items
         ?: return emptyList<KubePod>() to "no items in response"
     val pods = items.mapNotNull { item ->
         val pod = item.asObject() ?: return@mapNotNull null
@@ -214,9 +215,7 @@ internal fun parseKubePods(stdout: String): Pair<List<KubePod>, String?> {
         val status = pod.obj("status")
         val containers = pod.obj("spec")?.array("containers")?.items?.size ?: 0
         val statuses = status?.array("containerStatuses")?.items.orEmpty()
-        val ready = statuses.count { entry ->
-            (entry.asObject()?.obj("ready")?.let { it is JsonValue.Bool && it.value }) == true
-        }
+        val ready = statuses.count { entry -> entry.asObject()?.bool("ready") == true }
         val restarts = statuses.sumOf { entry ->
             entry.asObject()?.int("restartCount") ?: 0
         }
