@@ -262,8 +262,12 @@ jobs:
           api_key="$(openssl rand -hex 32)"
           docker run --detach --rm --name mobsf-anthracite             -p 127.0.0.1:8000:8000 -e MOBSF_API_KEY="$api_key"             opensecurity/mobile-security-framework-mobsf:latest
           trap 'docker logs --tail 200 mobsf-anthracite > ci-diagnostics/mobsf/container.log 2>&1 || true; docker rm -f mobsf-anthracite >/dev/null 2>&1 || true' EXIT
-          for i in $(seq 1 90); do
+          for attempt in $(seq 1 90); do
             if curl -fsS -o /dev/null http://127.0.0.1:8000/; then break; fi
+            if [ "$attempt" -eq 90 ]; then
+              echo "MobSF did not become ready" >&2
+              exit 1
+            fi
             sleep 4
           done
           curl --fail --show-error --silent --max-time 60 -X POST             http://127.0.0.1:8000/api/v1/upload             -H "Authorization: $api_key" -F "file=@$apk"             -o ci-diagnostics/mobsf/upload.json
