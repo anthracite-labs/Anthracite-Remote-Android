@@ -79,7 +79,7 @@ class TmuxParsingTest {
         assertTrue(tmuxMissingSocket(firstSession))
         assertTrue(tmuxListing("3.4", firstSession).sessions.isEmpty())
         // A deleted socket can strand a live server; absence is not proven for STOP.
-        assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(firstSession, "work", "\\$1"))
+        assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(firstSession, "work", "\$1"))
         for (failure in listOf(
             ExecResult(1, "", "error connecting to /tmp/tmux-1000/default (Permission denied)"),
             ExecResult(1, "", "error connecting to /tmp/tmux-1000/default (Connection refused)"),
