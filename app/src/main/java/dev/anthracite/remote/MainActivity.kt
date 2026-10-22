@@ -1810,6 +1810,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.manage_update_button).setOnClickListener { managedFlow("update") }
         findViewById<Button>(R.id.manage_reconnect_button).setOnClickListener { reconnectFlow() }
         findViewById<Button>(R.id.manage_edit_button).setOnClickListener { showScreen(Screen.SETUP) }
+        findViewById<Button>(R.id.manage_workspace_button).setOnClickListener {
+            startActivity(Intent(this, HostsActivity::class.java))
+        }
         findViewById<Button>(R.id.manage_disconnect_button).setOnClickListener { disconnect() }
         findViewById<Button>(R.id.manage_uninstall_button).setOnClickListener {
             confirm(R.string.uninstall_title, R.string.uninstall_body) { managedFlow("uninstall") }

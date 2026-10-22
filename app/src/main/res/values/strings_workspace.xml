@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copy for the SSH workspace surfaces: hosts, files, host Git, GitHub, container
+  and Kubernetes views, and guided provisioning. Kept in its own file so the
+  OpenCode journey's strings and these can be reviewed independently.
+-->
+<resources>
+
+    <!-- Common -->
+    <string name="stop">Stop</string>
+
+    <!-- Hosts -->
+    <string name="hosts_title">Hosts</string>
+    <string name="hosts_intro">Every host is a separate profile with its own pinned SSH key. Anthracite stores nothing on the host.</string>
+    <string name="hosts_empty">No hosts yet. Add the SSH details of a Linux machine to open a terminal, browse files or provision tools.</string>
+    <string name="hosts_add">Add host</string>
+    <string name="hosts_save_and_connect">Save and connect</string>
+    <string name="hosts_connect">Connect</string>
+    <string name="hosts_run_bootstrap">Set up this host…</string>
+    <string name="hosts_forget">Forget host</string>
+    <string name="hosts_forget_detail">Forget %1$s?\n\nThis deletes only the profile, the pinned key and the encrypted credential on this phone. Files, sessions and containers on the host are untouched.</string>
+    <string name="hosts_unverified">host key not verified</string>
+    <string name="hosts_key_loaded">A private key is selected for this host.</string>
+    <string name="label_display_name">Display name (optional)</string>
+    <string name="host_form_password_note">Use a password or a private key. Credentials are sealed with the Android Keystore and never leave this phone.</string>
+    <string name="host_form_credential_required">Choose a private key or enter a password.</string>
+
+    <!-- Workspace hub -->
+    <string name="workspace_title">Workspace</string>
+    <string name="workspace_no_host">Choose a host first.</string>
+    <string name="workspace_probe">Re-run read-only probe</string>
+    <string name="workspace_probing">Reading host facts…</string>
+    <string name="workspace_probe_failed">The probe failed: %1$s</string>
+    <string name="workspace_probed_at">Facts captured at %1$s. The probe is read-only and installs nothing.</string>
+    <string name="workspace_facts_label">HOST FACTS</string>
+    <string name="workspace_open_terminal">Terminal</string>
+    <string name="workspace_open_files">Files</string>
+    <string name="workspace_open_git">Host Git</string>
+    <string name="workspace_open_github">GitHub</string>
+    <string name="workspace_open_deploy">Containers and Kubernetes</string>
+    <string name="workspace_open_bootstrap">Set up tools</string>
+    <string name="workspace_cap_terminal">Terminal: %1$s</string>
+    <string name="workspace_cap_files">Files: %1$s</string>
+    <string name="workspace_cap_git">Host Git: %1$s</string>
+    <string name="workspace_cap_provision">Provisioning: %1$s</string>
+    <string name="workspace_cap_docker">Docker: %1$s</string>
+    <string name="workspace_cap_podman">Podman: %1$s</string>
+    <string name="workspace_cap_kubernetes">Kubernetes: %1$s</string>
+    <string name="workspace_cap_disconnect_durability">Survives a dropped connection: %1$s</string>
+    <string name="workspace_cap_logout_durability">Survives a logout: %1$s</string>
+    <string name="workspace_cap_reboot_durability">Survives a reboot: %1$s</string>
+    <string name="capability_available">available</string>
+    <string name="capability_detected_unusable">detected, not proven usable</string>
+    <string name="capability_unsupported">not available</string>
+    <string name="capability_unknown">unknown</string>
+
+    <!-- Files -->
+    <string name="files_title">Files</string>
+    <string name="files_up">Up</string>
+    <string name="files_home">Home</string>
+    <string name="files_at_root">This is the filesystem root.</string>
+    <string name="files_new_folder">New folder</string>
+    <string name="files_new_folder_detail">The folder is created inside the current directory.</string>
+    <string name="files_upload">Upload</string>
+    <string name="files_terminal_here">Terminal here</string>
+    <string name="files_count">%1$d entries · %2$d folders · %3$d files</string>
+    <string name="files_list_failed">The directory could not be listed.</string>
+    <string name="files_directory">folder</string>
+    <string name="files_file">file</string>
+    <string name="files_symlink">symbolic link</string>
+    <string name="files_symlink_refused">%1$s is a symbolic link. Browsing through links is refused so a link cannot redirect you outside the directory you chose.</string>
+    <string name="files_too_large">The preview limit is 256 KB; this file is %1$s.</string>
+    <string name="files_binary">This file is not text, so it is not shown in the viewer.</string>
+    <string name="files_read_failed">The file could not be read.</string>
+    <string name="files_copied">Copied to the clipboard.</string>
+    <string name="files_copy_path">Copy path</string>
+    <string name="files_download">Download to this phone</string>
+    <string name="files_download_directory">Only files can be downloaded; folders are copied by the host.</string>
+    <string name="files_downloaded">Downloaded %1$s.</string>
+    <string name="files_download_failed">The download failed.</string>
+    <string name="files_delete">Delete</string>
+    <string name="files_delete_detail">Delete %1$s on the host?\n\nThis cannot be undone from this phone. A folder is deleted with its contents; symbolic links are removed as links and never followed.</string>
+    <string name="files_delete_failed">The delete failed.</string>
+    <string name="files_rename">Rename</string>
+    <string name="files_rename_detail">Rename %1$s in this directory.</string>
+    <string name="files_rename_failed">The rename failed.</string>
+    <string name="files_mkdir_failed">The folder could not be created.</string>
+    <string name="files_name_invalid">That name cannot be used safely on the host.</string>
+    <string name="files_upload_failed">The upload failed.</string>
+    <string name="files_uploaded">Uploaded to %1$s.</string>
+
+    <!-- Host Git -->
+    <string name="git_title">Host Git</string>
+    <string name="git_directory">Repository directory</string>
+    <string name="git_directory_detail">An absolute path on the host. Every command runs as `git -C` inside it.</string>
+    <string name="git_directory_invalid">Enter an absolute path without control characters.</string>
+    <string name="git_refresh">Refresh status</string>
+    <string name="git_log">History</string>
+    <string name="git_branches">Branches</string>
+    <string name="git_commit">Commit staged changes</string>
+    <string name="git_commit_detail">The message is passed as one argument, never through a shell.</string>
+    <string name="git_commit_empty">Enter a commit message.</string>
+    <string name="git_fetch">Fetch</string>
+    <string name="git_pull">Pull (fast-forward only)</string>
+    <string name="git_push">Push</string>
+    <string name="git_push_detail">Push the current branch of %1$s? Anthracite never force-pushes; history rewrites are not available here.</string>
+    <string name="git_location">%1$s · %2$s</string>
+    <string name="git_clean">The working tree is clean.</string>
+    <string name="git_status_failed">Git status could not be read.</string>
+    <string name="git_not_a_repository">%1$s is not inside a Git working tree.</string>
+    <string name="git_status_summary">%1$s · %2$d staged · %3$d modified · %4$d untracked · %5$d conflicted</string>
+    <string name="git_branch_unknown">branch unknown</string>
+    <string name="git_detached">detached at %1$s</string>
+    <string name="git_conflict">conflicted</string>
+    <string name="git_untracked">untracked</string>
+    <string name="git_staged">staged</string>
+    <string name="git_staged_and_modified">staged, then modified again</string>
+    <string name="git_modified">modified, not staged</string>
+    <string name="git_view_diff">View diff</string>
+    <string name="git_stage">Stage</string>
+    <string name="git_unstage">Unstage</string>
+    <string name="git_no_diff">There is no diff for this path.</string>
+    <string name="git_diff_failed">The diff could not be read.</string>
+    <string name="git_log_summary">%1$d commits shown, newest first.</string>
+    <string name="git_log_empty">This repository has no commits.</string>
+    <string name="git_log_failed">The history could not be read.</string>
+    <string name="git_branches_empty">This repository has no local branches.</string>
+    <string name="git_branches_failed">The branch list could not be read.</string>
+    <string name="git_checkout">Check out</string>
+    <string name="git_checkout_detail">Check out %1$s? Uncommitted changes can be refused by Git; nothing is stashed automatically.</string>
+    <string name="git_done">Done.</string>
+    <string name="git_failed">Git exited with status %1$d.\n\n%2$s</string>
+
+    <!-- GitHub -->
+    <string name="github_title">GitHub</string>
+    <!--
+      Set this to the OAuth app's public client id and flip github_device_flow_enabled
+      to true to offer GitHub's device sign-in. A client id is public by design; the
+      client secret must never be shipped in an APK, which is why the browser flow is
+      not implemented.
+    -->
+    <string name="github_oauth_client_id" translatable="false">unconfigured</string>
+    <string name="github_signed_out">Not signed in to GitHub.</string>
+    <string name="github_sign_in_detail">Sign in with a personal access token, or with GitHub\'s device flow when this build includes a public client id. Host Git does not need this: it uses the server\'s own credentials.</string>
+    <string name="github_sign_in_hint">Nothing is shared between the host and GitHub by this screen.</string>
+    <string name="github_device_sign_in">Sign in with a device code</string>
+    <string name="github_use_token">Use a personal access token</string>
+    <string name="github_token_help">Which token?</string>
+    <string name="github_token_help_detail">A fine-grained token with read access to your repositories, plus write access to pull requests if you want to comment, review or merge. The token is sealed with the Android Keystore, never written to the host, and can be revoked on GitHub at any time.</string>
+    <string name="github_token_detail">The token is validated against GitHub before it is stored.</string>
+    <string name="github_token_invalid">That does not look like a GitHub token.</string>
+    <string name="github_token_rejected">GitHub rejected the token. It may have been revoked or expired.</string>
+    <string name="github_refresh">Refresh</string>
+    <string name="github_sign_out">Sign out</string>
+    <string name="github_sign_out_detail">Remove the token from this phone? Repositories and pull requests are untouched.</string>
+    <string name="github_signed_out_toast">Signed out of GitHub.</string>
+    <string name="github_revoke_help">Revoking the token on GitHub</string>
+    <string name="github_revoke_help_detail">This app cannot revoke a token for you: revocation needs the OAuth client secret, which a mobile binary must never contain. Revoke it yourself at %1$s.</string>
+    <string name="github_signed_in">Signed in as %1$s</string>
+    <string name="github_device_detail">Enter this code on GitHub:\n\n%1$s\n\n%2$s\n\nThe code expires shortly. Anthracite polls in the background and stores the token only after GitHub accepts it.</string>
+    <string name="github_copy_code">Copy code</string>
+    <string name="github_device_failed">GitHub did not return a device code.</string>
+    <string name="github_device_expired">The sign-in code expired. Start again.</string>
+    <string name="github_repo_count">%1$d repositories.</string>
+    <string name="github_open_issues">%1$d open issues</string>
+    <string name="github_private">private</string>
+    <string name="github_no_repositories">No repositories are visible with this token.</string>
+    <string name="github_pulls_in">Pull requests in %1$s</string>
+    <string name="github_pull_count">%1$d pull requests.</string>
+    <string name="github_no_pulls">No open pull requests.</string>
+    <string name="github_pull_title">%1$s · pull request #%2$d</string>
+    <string name="github_pull_stats">%1$d files · +%2$d · −%3$d</string>
+    <string name="github_pull_loaded">Choose a pull request action.</string>
+    <string name="github_pull_diff">Diff</string>
+    <string name="github_pull_diff_hint">Loads the patch GitHub renders for this pull request.</string>
+    <string name="github_pull_checks">Checks</string>
+    <string name="github_pull_checks_hint">Status of the checks attached to the pull request head.</string>
+    <string name="github_no_checks">No checks are attached to this commit.</string>
+    <string name="github_pull_comment">Comment</string>
+    <string name="github_pull_comment_hint">Posts a comment as your GitHub account.</string>
+    <string name="github_pull_comment_detail">Comment on pull request #%1$d.</string>
+    <string name="github_comment_posted">Comment posted: %1$s</string>
+    <string name="github_pull_review">Review</string>
+    <string name="github_pull_review_hint">Approve, request changes, or leave a review comment.</string>
+    <string name="github_pull_review_detail">%1$s pull request #%2$d.</string>
+    <string name="github_review_posted">Review submitted: %1$s</string>
+    <string name="github_pull_merge">Merge</string>
+    <string name="github_pull_merge_hint">Merges only if the head commit has not changed since this screen loaded it.</string>
+    <string name="github_merge_title">Merge pull request</string>
+    <string name="github_merge_detail">%1$s #%2$d will be merged with the %3$s method.\n\nThe request carries the head commit this screen loaded, so a force-push after loading makes the merge fail instead of merging something you did not review.</string>
+    <string name="github_merge_confirm">Merge</string>
+    <string name="github_merged">Merged as %1$s</string>
+    <string name="github_rate_limited">GitHub rate-limited this account. Try again in about %1$d seconds.</string>
+    <string name="github_not_found">GitHub did not find that resource, or the token cannot see it.</string>
+    <string name="github_failed">The GitHub request failed.</string>
+
+    <!-- Containers and Kubernetes -->
+    <string name="deploy_title">Deployments</string>
+    <string name="deploy_subtitle">%1$s · reading what the host already runs</string>
+    <string name="deploy_subtitle_runtime">%1$s · %2$s</string>
+    <string name="deploy_subtitle_kube">%1$s · %2$s · namespace %3$s</string>
+    <string name="deploy_runtime">Runtime</string>
+    <string name="deploy_docker">Docker — %1$s</string>
+    <string name="deploy_podman">Podman — %1$s</string>
+    <string name="deploy_containers">Containers</string>
+    <string name="deploy_kubernetes">Kubernetes…</string>
+    <string name="deploy_no_kube_contexts">kubectl reported no contexts on this host.</string>
+    <string name="deploy_context">Kubernetes context</string>
+    <string name="deploy_namespace">Namespace</string>
+    <string name="deploy_namespace_detail">Namespace in context %1$s</string>
+    <string name="deploy_namespace_invalid">Use a valid Kubernetes namespace name.</string>
+    <string name="deploy_no_containers">%1$s reported no containers, or the daemon is not reachable by this SSH user.</string>
+    <string name="deploy_no_pods">No pods in this namespace.</string>
+    <string name="deploy_container_count">%1$d containers.</string>
+    <string name="deploy_pod_count">%1$d pods.</string>
+    <string name="deploy_unparsed">%1$d lines could not be parsed and were ignored</string>
+    <string name="deploy_restarts">%1$d restarts</string>
+    <string name="deploy_runtime_unavailable">%1$s is not usable by this account: the binary exists, but the daemon or socket did not answer.</string>
+    <string name="deploy_list_failed">The container list could not be read.</string>
+    <string name="deploy_kube_failed">The Kubernetes request failed.</string>
+    <string name="deploy_logs">Logs</string>
+    <string name="deploy_logs_empty">No log output.</string>
+    <string name="deploy_logs_failed">The logs could not be read.</string>
+    <string name="deploy_describe">Describe</string>
+    <string name="deploy_start">Start</string>
+    <string name="deploy_stop">Stop</string>
+    <string name="deploy_stop_detail">Stop %1$s? The container keeps its data; nothing is removed.</string>
+    <string name="deploy_restart">Restart</string>
+    <string name="deploy_restart_detail">Restart %1$s on the host.</string>
+    <string name="deploy_action_done">%1$s %2$s requested. The host\'s own state is re-read next.</string>
+    <string name="deploy_action_failed">%1$s failed with status %2$d.\n\n%3$s</string>
+    <string name="deploy_no_delete_permission">This account may not delete pods in this namespace, so the delete action is disabled.</string>
+    <string name="deploy_delete_pod">Delete pod</string>
+    <string name="deploy_delete_pod_detail">Delete pod %1$s in namespace %2$s?\n\nIts controller may immediately create a replacement; this is not a way to stop a service.</string>
+    <string name="deploy_delete_requested">Deletion of %1$s was requested. Kubernetes deletes it asynchronously.</string>
+
+    <!-- Guided provisioning -->
+    <string name="bootstrap_title">Set up tools</string>
+    <string name="bootstrap_subtitle">%1$s · guided provisioning</string>
+    <string name="bootstrap_host_line">%1$s · %2$s · %3$s</string>
+    <string name="bootstrap_no_manager">no supported package manager</string>
+    <string name="bootstrap_choose_profile">Profile</string>
+    <string name="bootstrap_choose_tools">Tools</string>
+    <string name="bootstrap_replan">Recompute plan</string>
+    <string name="bootstrap_show_commands">Show exact commands</string>
+    <string name="bootstrap_start">Review and run</string>
+    <string name="bootstrap_cancel_job">Cancel job</string>
+    <string name="bootstrap_open_terminal">Open terminal</string>
+    <string name="bootstrap_commands_note">These are the commands the host runner executes. They are shown for review and can also be run by hand in a terminal tab.</string>
+    <string name="bootstrap_plan_first">Read the host facts and compute a plan first.</string>
+    <string name="bootstrap_not_connected">The host is not connected.</string>
+    <string name="bootstrap_probe_failed">The host probe failed.</string>
+    <string name="bootstrap_empty">No tools are selected.</string>
+    <string name="bootstrap_support_tier">Support level</string>
+    <string name="bootstrap_action_install">install with %1$s</string>
+    <string name="bootstrap_action_present">already installed</string>
+    <string name="bootstrap_action_unavailable">not available on this host</string>
+    <string name="bootstrap_step">Step %1$d</string>
+    <string name="bootstrap_no_steps">There is nothing to install for this selection.</string>
+    <string name="bootstrap_plan_summary">%1$d tools, %2$d packages, %3$d steps.</string>
+    <string name="bootstrap_start_blocked">This plan cannot be started from here; the explanation above says why.</string>
+    <string name="bootstrap_unverified_title">Unverified distribution</string>
+    <string name="bootstrap_unverified_detail">Guided provisioning has not been verified on %1$s. Review the exact commands. If you continue, you accept that a package change can affect this host in ways Anthracite has not tested.</string>
+    <string name="bootstrap_accept_risk">Continue anyway</string>
+    <string name="bootstrap_launch_title">Run provisioning</string>
+    <string name="bootstrap_launch_detail">Install %1$d tools (%2$d packages) on the host. The host runner re-verifies the plan digest and the distribution before it starts.</string>
+    <string name="bootstrap_launch_note">The job runs detached: losing the connection does not stop it. Anthracite never stores or forwards a sudo password, so a password requirement fails the job instead of prompting.</string>
+    <string name="bootstrap_launch_confirm">Start job</string>
+    <string name="bootstrap_job_started">Job %1$s started on the host.</string>
+    <string name="bootstrap_job_failed">The job could not be started.</string>
+    <string name="bootstrap_job_status_failed">The job status could not be read.</string>
+    <string name="bootstrap_no_job">No job is running.</string>
+    <string name="bootstrap_cancel_detail">Ask the host to stop job %1$s? The runner stops at the next command boundary; the package manager is never killed mid-transaction.</string>
+    <string name="bootstrap_cancel_confirm">Request stop</string>
+    <string name="bootstrap_cancel_sent">A stop request was sent. The host\'s state is re-read next.</string>
+    <string name="bootstrap_cancel_unconfirmed">The stop request could not be confirmed. Check the job state before retrying.</string>
+    <string name="job_planned">planned</string>
+    <string name="job_approved">approved</string>
+    <string name="job_queued">queued</string>
+    <string name="job_running">running</string>
+    <string name="job_succeeded">succeeded</string>
+    <string name="job_failed">failed</string>
+    <string name="job_cancelled">cancelled</string>
+    <string name="job_interrupted">interrupted</string>
+    <string name="job_locked">another job holds the lock</string>
+    <string name="job_unknown">unknown state</string>
+    <string name="job_id">job %1$s</string>
+    <string name="job_step">Current step</string>
+    <string name="job_step_none">none yet</string>
+    <string name="job_exit">Exit status</string>
+    <string name="job_exit_none">not reported</string>
+    <string name="job_log">Job log</string>
+    <string name="job_log_bytes">%1$d bytes logged</string>
+    <string name="job_log_empty">No output yet.</string>
+    <string name="job_running_note">The job continues on the host even if this screen is closed.</string>
+    <string name="job_interrupted_note">The recorded state said running, but no matching process remains. The outcome is unknown; the log above is the evidence.</string>
+</resources>

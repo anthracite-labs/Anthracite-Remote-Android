@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/files_toolbar"
+        style="@style/Widget.Anthracite.Toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="@string/files_title" />
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/files_actions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="@dimen/space_s"
+            android:paddingVertical="@dimen/space_xs" />
+    </HorizontalScrollView>
+
+    <TextView
+        android:id="@+id/files_path"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/surface_elevated"
+        android:paddingHorizontal="@dimen/space_l"
+        android:paddingVertical="@dimen/space_s"
+        android:textAppearance="@style/TextAppearance.Anthracite.Mono"
+        android:textIsSelectable="true" />
+
+    <ProgressBar
+        android:id="@+id/files_progress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:indeterminate="true"
+        android:visibility="gone" />
+
+    <ListView
+        android:id="@+id/files_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="@color/outline_variant"
+        android:dividerHeight="@dimen/stroke_thin" />
+
+    <TextView
+        android:id="@+id/files_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:accessibilityLiveRegion="polite"
+        android:padding="@dimen/space_m"
+        android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall" />
+</LinearLayout>

@@ -1,0 +1,301 @@
+package dev.anthracite.remote.files
+
+import com.jcraft.jsch.ChannelSftp
+import com.jcraft.jsch.SftpATTRS
+import com.jcraft.jsch.SftpException
+import dev.anthracite.remote.SshClient
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+
+/**
+ * Remote path handling for the SFTP browser.
+ *
+ * The browser is not a sandbox: the SSH user's own permissions decide what may
+ * be touched. What this policy does guarantee is that navigation cannot escape
+ * through `..`, that names containing NUL or control characters are rejected,
+ * and that recursive deletion never follows a symlink.
+ */
+internal object RemotePath {
+    const val MAX_LENGTH = 4096
+
+    fun isValid(path: String): Boolean {
+        if (path.isEmpty() || path.length > MAX_LENGTH) return false
+        if (!path.startsWith("/")) return false
+        return path.none { it == '\u0000' || it.code < 0x20 || it.code == 0x7f }
+    }
+
+    /** Resolves [target] against [current]; returns null for an invalid result. */
+    fun resolve(current: String, target: String): String? {
+        if (target.isEmpty()) return null
+        val base = if (target.startsWith("/")) {
+            target
+        } else {
+            val root = if (current.endsWith("/")) current else "$current/"
+            root + target
+        }
+        val absolute = base.startsWith("/")
+        val parts = ArrayDeque<String>()
+        for (segment in base.split('/')) {
+            when (segment) {
+                "", "." -> Unit
+                ".." -> if (parts.isNotEmpty()) parts.removeLast()
+                else -> {
+                    if (segment.length > 255) return null
+                    if (segment.any { it == '\u0000' || it.code < 0x20 || it.code == 0x7f }) return null
+                    parts.addLast(segment)
+                }
+            }
+        }
+        val normalized = "/" + parts.joinToString("/")
+        return if (absolute) normalized else null
+    }
+
+    fun join(directory: String, name: String): String? {
+        if (name.isEmpty() || name == "." || name == "..") return null
+        if (name.contains('/') || name.any { it == '\u0000' || it.code < 0x20 }) return null
+        val base = if (directory.endsWith("/")) directory else "$directory/"
+        return resolve("/", base + name)
+    }
+
+    fun parent(path: String): String? {
+        if (!isValid(path) || path == "/") return null
+        val trimmed = path.trimEnd('/')
+        val index = trimmed.lastIndexOf('/')
+        return if (index <= 0) "/" else trimmed.substring(0, index)
+    }
+
+    fun name(path: String): String {
+        val trimmed = path.trimEnd('/')
+        val index = trimmed.lastIndexOf('/')
+        return if (index < 0) trimmed else trimmed.substring(index + 1)
+    }
+
+    /** True when [candidate] is [base] or inside it, after normalisation. */
+    fun isWithin(base: String, candidate: String): Boolean {
+        val resolvedBase = resolve("/", base) ?: return false
+        val resolvedCandidate = resolve("/", candidate) ?: return false
+        if (resolvedCandidate == resolvedBase) return true
+        val prefix = if (resolvedBase == "/") "/" else "$resolvedBase/"
+        return resolvedCandidate.startsWith(prefix)
+    }
+}
+
+internal data class RemoteEntry(
+    val name: String,
+    val path: String,
+    val directory: Boolean,
+    val symlink: Boolean,
+    val sizeBytes: Long,
+    val modifiedSeconds: Long,
+    val permissions: Int,
+) {
+    val permissionText: String get() = formatPermissions(permissions)
+    val hidden: Boolean get() = name.startsWith(".")
+}
+
+internal data class RemoteStat(
+    val path: String,
+    val directory: Boolean,
+    val symlink: Boolean,
+    val sizeBytes: Long,
+    val modifiedSeconds: Long,
+    val permissions: Int,
+    val uid: Int,
+    val gid: Int,
+) {
+    val permissionText: String get() = formatPermissions(permissions)
+}
+
+internal fun formatPermissions(permissions: Int): String {
+    val builder = StringBuilder(10)
+    val type = when (permissions and 0xf000) {
+        0x4000 -> 'd'
+        0xa000 -> 'l'
+        0x2000 -> 'c'
+        0x6000 -> 'b'
+        0x1000 -> 'p'
+        0xc000 -> 's'
+        else -> '-'
+    }
+    builder.append(type)
+    val bits = listOf(0x100, 0x80, 0x40, 0x20, 0x10, 0x8, 0x4, 0x2, 0x1)
+    val letters = "rwxrwxrwx"
+    for (index in bits.indices) {
+        builder.append(if (permissions and bits[index] != 0) letters[index] else '-')
+    }
+    return builder.toString()
+}
+
+internal class RemoteFileException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * SFTP operations with bounded output and explicit failure text.
+ *
+ * Transfers use temporary names in the destination directory and a rename, so an
+ * interrupted download or upload cannot leave a half file in place under the
+ * final name.
+ */
+internal class SftpBrowser(private val ssh: SshClient) {
+    fun list(path: String, maxEntries: Int = MAX_ENTRIES): List<RemoteEntry> {
+        require(RemotePath.isValid(path)) { "invalid remote path" }
+        val entries = withSftp { sftp ->
+            val listing = sftp.ls(path) ?: return@withSftp emptyList()
+            listing.mapNotNull { raw ->
+                val entry = raw
+                val name = entry.filename
+                if (name == "." || name == "..") return@mapNotNull null
+                val attrs = entry.attrs ?: return@mapNotNull null
+                val child = RemotePath.join(path, name) ?: return@mapNotNull null
+                RemoteEntry(
+                    name = name,
+                    path = child,
+                    directory = attrs.isDir,
+                    symlink = attrs.isLink,
+                    sizeBytes = attrs.size,
+                    modifiedSeconds = attrs.mTime.toLong(),
+                    permissions = attrs.permissions,
+                )
+            }.sortedWith(compareByDescending<RemoteEntry> { it.directory }.thenBy { it.name.lowercase() })
+        }
+        if (entries.size > maxEntries) {
+            throw RemoteFileException("This directory has more than $maxEntries entries; narrow it before browsing.")
+        }
+        return entries
+    }
+
+    fun stat(path: String, followLinks: Boolean = false): RemoteStat? {
+        require(RemotePath.isValid(path)) { "invalid remote path" }
+        return withSftp { sftp ->
+            val attrs = try {
+                if (followLinks) sftp.stat(path) else sftp.lstat(path)
+            } catch (error: SftpException) {
+                if (error.id == ChannelSftp.SSH_FX_NO_SUCH_FILE) null else throw error
+            } ?: return@withSftp null
+            toStat(path, attrs)
+        }
+    }
+
+    fun mkdir(path: String) {
+        require(RemotePath.isValid(path)) { "invalid remote path" }
+        withSftp { it.mkdir(path) }
+    }
+
+    fun rename(from: String, to: String) {
+        require(RemotePath.isValid(from) && RemotePath.isValid(to)) { "invalid remote path" }
+        if (from == to) return
+        withSftp { it.rename(from, to) }
+    }
+
+    /**
+     * Deletes a file, or a directory tree when [recursive] is set.
+     *
+     * Every entry is `lstat`-ed first: a symlink is deleted as a link and never
+     * followed, so a hostile tree cannot redirect the delete outside the chosen
+     * directory. The depth and entry caps bound the work.
+     */
+    fun delete(path: String, recursive: Boolean) {
+        require(RemotePath.isValid(path)) { "invalid remote path" }
+        if (path == "/" || RemotePath.name(path).isEmpty()) {
+            throw RemoteFileException("Refusing to delete a filesystem root")
+        }
+        val target = stat(path, followLinks = false)
+            ?: throw RemoteFileException("That path no longer exists on the host")
+        if (!target.directory || target.symlink) {
+            withSftp { it.rm(path) }
+            return
+        }
+        if (!recursive) {
+            withSftp { it.rmdir(path) }
+            return
+        }
+        deleteTree(path, depth = 0)
+    }
+
+    private fun deleteTree(path: String, depth: Int) {
+        if (depth > MAX_DEPTH) throw RemoteFileException("Directory nesting is too deep to delete safely")
+        var count = 0
+        for (entry in list(path)) {
+            count++
+            if (count > MAX_ENTRIES) throw RemoteFileException("Directory has too many entries to delete safely")
+            if (entry.directory && !entry.symlink) {
+                deleteTree(entry.path, depth + 1)
+            } else {
+                withSftp { it.rm(entry.path) }
+            }
+        }
+        withSftp { it.rmdir(path) }
+    }
+
+    fun download(path: String, maxBytes: Long = MAX_DOWNLOAD_BYTES): ByteArray {
+        require(RemotePath.isValid(path)) { "invalid remote path" }
+        val attributes = stat(path, followLinks = true) ?: throw RemoteFileException("File not found")
+        if (attributes.directory) throw RemoteFileException("That path is a directory")
+        if (attributes.sizeBytes > maxBytes) {
+            throw RemoteFileException(
+                "File is ${attributes.sizeBytes / 1024} KB; the preview limit is ${maxBytes / 1024} KB",
+            )
+        }
+        return withSftp { sftp ->
+            val output = ByteArrayOutputStream(attributes.sizeBytes.toInt().coerceAtLeast(64))
+            sftp.get(path, output)
+            val bytes = output.toByteArray()
+            if (bytes.size > maxBytes) throw RemoteFileException("File grew beyond the transfer limit while reading")
+            bytes
+        }
+    }
+
+    /** Uploads to a temporary name and renames, so the final name is never partial. */
+    fun upload(path: String, bytes: ByteArray, overwrite: Boolean) {
+        require(RemotePath.isValid(path)) { "invalid remote path" }
+        val parent = RemotePath.parent(path) ?: throw RemoteFileException("Destination has no parent directory")
+        val existing = stat(path, followLinks = false)
+        if (existing != null && !overwrite) throw RemoteFileException("A file already exists at that path")
+        val temporary = "$parent/.${RemotePath.name(path)}.anthracite.tmp"
+        withSftp { sftp ->
+            try {
+                sftp.put(ByteArrayInputStream(bytes), temporary, ChannelSftp.OVERWRITE)
+                sftp.rename(temporary, path)
+            } catch (error: Exception) {
+                runCatching { sftp.rm(temporary) }
+                throw error
+            }
+        }
+    }
+
+    private fun <T> withSftp(block: (ChannelSftp) -> T): T = ssh.withSession { session ->
+        val sftp = session.openChannel("sftp") as ChannelSftp
+        sftp.connect(CONNECT_TIMEOUT_MS)
+        try {
+            block(sftp)
+        } catch (error: SftpException) {
+            throw RemoteFileException(describe(error), error)
+        } finally {
+            runCatching { sftp.disconnect() }
+        }
+    }
+
+    private fun toStat(path: String, attrs: SftpATTRS): RemoteStat = RemoteStat(
+        path = path,
+        directory = attrs.isDir,
+        symlink = attrs.isLink,
+        sizeBytes = attrs.size,
+        modifiedSeconds = attrs.mTime.toLong(),
+        permissions = attrs.permissions,
+        uid = attrs.uId,
+        gid = attrs.gId,
+    )
+
+    private fun describe(error: SftpException): String = when (error.id) {
+        ChannelSftp.SSH_FX_NO_SUCH_FILE -> "Path not found on the host"
+        ChannelSftp.SSH_FX_PERMISSION_DENIED -> "The SSH user is not allowed to do that"
+        ChannelSftp.SSH_FX_FAILURE -> error.message ?: "The SFTP server refused the request"
+        else -> error.message ?: "SFTP error ${error.id}"
+    }
+
+    private companion object {
+        const val CONNECT_TIMEOUT_MS = 20_000
+        const val MAX_ENTRIES = 5_000
+        const val MAX_DEPTH = 32
+        const val MAX_DOWNLOAD_BYTES = 8L * 1024 * 1024
+    }
+}

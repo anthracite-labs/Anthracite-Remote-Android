@@ -54,4 +54,11 @@
     <!-- Log / terminal surface keeps the developer-dark signature in both themes -->
     <color name="log_background">#E7EBE8</color>
     <color name="log_foreground">#334E68</color>
+
+    <!-- Interactive terminal chrome. The terminal itself is dark in both themes,
+         which is what users expect from a real terminal and keeps the 16 ANSI
+         colours readable. -->
+    <color name="term_background">#0E1512</color>
+    <color name="term_surface">#141B18</color>
+    <color name="term_status">#9FB2A8</color>
 </resources>

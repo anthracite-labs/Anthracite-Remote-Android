@@ -3,6 +3,8 @@ package dev.anthracite.remote
 import com.jcraft.jsch.ChannelDirectTCPIP
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.ChannelSftp
+import com.jcraft.jsch.ChannelSession
+import com.jcraft.jsch.ChannelShell
 import com.jcraft.jsch.HostKey
 import com.jcraft.jsch.HostKeyRepository
 import com.jcraft.jsch.JSch
@@ -14,6 +16,8 @@ import com.jcraft.jsch.UIKeyboardInteractive
 import com.jcraft.jsch.UserInfo
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.Properties
 
 internal data class SshTarget(
@@ -263,6 +267,82 @@ internal class SshClient {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Interactive PTY channels
+    // ------------------------------------------------------------------
+
+    /**
+     * Opens a real SSH PTY (RFC 4254 `pty-req` + `shell`) for an interactive
+     * login shell and returns the raw byte channel.
+     *
+     * The channel is owned by the caller. Closing it only ends that channel; a
+     * `tmux` session started inside it keeps running on the host, which is the
+     * difference between detach and stop.
+     */
+    fun openShell(term: String, cols: Int, rows: Int, widthPx: Int = 0, heightPx: Int = 0): SshPty {
+        val active = currentSession().session ?: error("SSH is not connected")
+        val channel = active.openChannel("shell") as ChannelShell
+        configurePty(channel, term, cols, rows, widthPx, heightPx)
+        channel.connect(CONNECT_TIMEOUT_MS)
+        return SshPty(channel, "shell")
+    }
+
+    /**
+     * Runs one fixed command inside a PTY.
+     *
+     * [command] must be produced by a reviewed builder such as `TmuxCommands`;
+     * it is never assembled from free-form user text. The grammar check below is
+     * a belt-and-braces rejection of NUL/newline smuggling, not a substitute for
+     * building commands from validated tokens.
+     */
+    fun openPtyCommand(
+        command: String,
+        term: String,
+        cols: Int,
+        rows: Int,
+        widthPx: Int = 0,
+        heightPx: Int = 0,
+    ): SshPty {
+        require(command.isNotBlank()) { "PTY command is empty" }
+        require(command.length <= MAX_PTY_COMMAND) { "PTY command is too long" }
+        require(command.none { it == '\u0000' || it == '\n' || it == '\r' }) { "PTY command contains a control character" }
+        val active = currentSession().session ?: error("SSH is not connected")
+        val channel = active.openChannel("exec") as ChannelExec
+        channel.setCommand(command)
+        configurePty(channel, term, cols, rows, widthPx, heightPx)
+        channel.connect(CONNECT_TIMEOUT_MS)
+        return SshPty(channel, command)
+    }
+
+    private fun configurePty(
+        channel: ChannelSession,
+        term: String,
+        cols: Int,
+        rows: Int,
+        widthPx: Int,
+        heightPx: Int,
+    ) {
+        val type = if (TERM_PATTERN.matches(term)) term else DEFAULT_TERM
+        channel.setPtyType(
+            type,
+            cols.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE),
+            rows.coerceIn(MIN_PTY_SIZE, MAX_PTY_SIZE),
+            widthPx.coerceAtLeast(0),
+            heightPx.coerceAtLeast(0),
+        )
+        channel.setPty(true)
+    }
+
+    /**
+     * Runs [block] with the live JSch session so feature packages can open their
+     * own channels (SFTP, extra exec) without duplicating connection handling.
+     * The block must not retain the session after it returns.
+     */
+    fun <T> withSession(block: (Session) -> T): T {
+        val active = currentSession().session ?: error("SSH is not connected")
+        return block(active)
+    }
+
     /** Safe to invoke concurrently with connect, forwarding, or channel I/O. */
     fun disconnect() {
         closeSessions(detachSessions())
@@ -450,8 +530,66 @@ internal class SshClient {
 
     private companion object {
         const val CONNECT_TIMEOUT_MS = 20_000
+        const val MIN_PTY_SIZE = 2
+        const val MAX_PTY_SIZE = 1000
+        const val MAX_PTY_COMMAND = 4096
+        const val DEFAULT_TERM = "xterm-256color"
+        val TERM_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,31}")
         const val HTTP_PROBE_TIMEOUT_MS = 5_000L
         const val HTTP_HEADER_CAP = 16 * 1024
         const val OUTPUT_CAP = 200_000
+    }
+}
+
+/**
+ * A live PTY-backed SSH channel: either an interactive login shell or one fixed
+ * command (for example `exec tmux attach-session -t name`).
+ *
+ * Output is raw bytes. Nothing in this class assumes lines, text or UTF-8, so a
+ * full-screen TUI redraw is transported exactly as the host emitted it.
+ */
+internal class SshPty internal constructor(
+    private val channel: ChannelSession,
+    val description: String,
+) {
+    val input: InputStream get() = channel.inputStream
+
+    val output: OutputStream get() = channel.outputStream
+
+    val isOpen: Boolean get() = channel.isConnected && !channel.isClosed
+
+    /** Only meaningful once the channel has closed; -1 means "not reported". */
+    val exitStatus: Int get() = channel.exitStatus
+
+    val exitSignal: String? get() = channel.exitSignal
+
+    /**
+     * RFC 4254 window-change. The PTY size negotiated at open time is the same
+     * value JSch resends here, so the host sees a real SIGWINCH.
+     */
+    fun resize(cols: Int, rows: Int, widthPx: Int = 0, heightPx: Int = 0) {
+        channel.setPtySize(
+            cols.coerceIn(2, 1000),
+            rows.coerceIn(2, 1000),
+            widthPx.coerceAtLeast(0),
+            heightPx.coerceAtLeast(0),
+        )
+    }
+
+    /**
+     * Best-effort SSH signal request. OpenSSH commonly ignores these, so callers
+     * must verify the observed process state instead of reporting a stop.
+     */
+    fun sendSignal(name: String) {
+        if (!SIGNAL_PATTERN.matches(name)) return
+        runCatching { channel.sendSignal(name) }
+    }
+
+    fun close() {
+        runCatching { channel.disconnect() }
+    }
+
+    private companion object {
+        val SIGNAL_PATTERN = Regex("(INT|TERM|KILL|HUP|QUIT|WINCH)")
     }
 }

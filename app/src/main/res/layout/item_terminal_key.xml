@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One special-key or tab chip in the terminal. A real MaterialButton (not a
+  decorated TextView) so TalkBack announces a button role and the 48dp target is
+  part of the design tokens.
+-->
+<com.google.android.material.button.MaterialButton xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    style="@style/Widget.Anthracite.Button.Outlined"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="@dimen/space_xxs"
+    android:minWidth="@dimen/touch_target_min"
+    android:minHeight="@dimen/touch_target_min"
+    android:paddingHorizontal="@dimen/space_m"
+    android:textSize="@dimen/text_label"
+    app:checkable="true" />
