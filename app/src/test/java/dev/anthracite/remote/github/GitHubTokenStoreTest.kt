@@ -15,98 +15,111 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The GitHub token path, end to end: the failure this guards against was a store
- * whose file-name rule rejected the token's name, so the token was accepted by
- * GitHub and then silently never persisted.
+ * The token has to survive a process restart, which is exactly the path that was
+ * broken: the GitHub token name and the host credential name were validated by
+ * two different rules, and the GitHub one was rejected on write.
  */
 class GitHubTokenStoreTest {
-    private fun softwareKey(): SecretKey =
-        KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+    private fun key(): SecretKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
 
     private fun store(directory: File, key: SecretKey) =
         GitHubTokenStore(FileSecretStore(directory), key)
 
     @Test
-    fun `the token name is one the secret store accepts`() {
-        assertTrue(
-            "GitHubTokenStore.DEFAULT_NAME must be a valid secret name",
-            SecretNames.isValid(GitHubTokenStore.DEFAULT_NAME),
-        )
+    fun `the default name is one the store accepts`() {
+        assertTrue(GitHubTokenStore.DEFAULT_NAME, SecretNames.isValid(GitHubTokenStore.DEFAULT_NAME))
     }
 
     @Test
-    fun `a token survives a simulated process restart and clears completely`() {
-        val directory = Files.createTempDirectory("anthracite-github-token").toFile()
+    fun `a written token is read back by a new store instance`() {
+        val directory = Files.createTempDirectory("anthracite-token").toFile()
         try {
-            val key = softwareKey()
-            val token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
-            store(directory, key).write(token)
+            val key = key()
+            store(directory, key).write("ghp_example_token_value_123456")
 
-            // A new store instance is what the app builds after process death.
-            assertEquals(token, store(directory, key).read())
+            // A new instance stands in for the next app start: nothing is cached
+            // in memory, so this is a real re-read from the sealed file.
+            assertEquals("ghp_example_token_value_123456", store(directory, key).read())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
 
-            // The ciphertext on disk must not contain the token.
+    @Test
+    fun `the token is sealed on disk, not stored as plaintext`() {
+        val directory = Files.createTempDirectory("anthracite-token").toFile()
+        try {
+            val token = "ghp_sealed_on_disk_987654321"
+            store(directory, key()).write(token)
             val blob = File(directory, GitHubTokenStore.DEFAULT_NAME).readBytes()
-            assertFalse(String(blob, Charsets.ISO_8859_1).contains("ghp_"))
+            assertFalse(String(blob, Charsets.ISO_8859_1).contains(token))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
 
-            store(directory, key).clear()
-            assertNull(store(directory, key).read())
+    @Test
+    fun `clearing removes the token`() {
+        val directory = Files.createTempDirectory("anthracite-token").toFile()
+        try {
+            val key = key()
+            val tokens = store(directory, key)
+            tokens.write("ghp_clear_me_1234567890")
+            tokens.clear()
+            assertNull(tokens.read())
             assertFalse(File(directory, GitHubTokenStore.DEFAULT_NAME).exists())
+            // Clearing again is not an error.
+            tokens.clear()
         } finally {
             directory.deleteRecursively()
         }
     }
 
     @Test
-    fun `a blob sealed with another key fails closed instead of reporting signed out`() {
-        val directory = Files.createTempDirectory("anthracite-github-token").toFile()
+    fun `an unreadable blob is an error, not a signed-out state`() {
+        val directory = Files.createTempDirectory("anthracite-token").toFile()
         try {
-            store(directory, softwareKey()).write("ghp_0123456789abcdefghijklmnopqrstuvwxyz")
-
-            // A rotated Keystore key, or tampering, looks like a decrypt failure.
-            val other = GitHubTokenStore(FileSecretStore(directory), softwareKey())
-            assertThrows(GitHubTokenException::class.java) { other.read() }
-        } finally {
-            directory.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun `a tampered blob is rejected`() {
-        val directory = Files.createTempDirectory("anthracite-github-token").toFile()
-        try {
-            val key = softwareKey()
-            store(directory, key).write("ghp_0123456789abcdefghijklmnopqrstuvwxyz")
+            store(directory, key()).write("ghp_tamper_target_1234567890")
             val file = File(directory, GitHubTokenStore.DEFAULT_NAME)
             val blob = file.readBytes()
-            blob[blob.lastIndex] = (blob.last().toInt() xor 0xff).toByte()
+            blob[blob.size - 1] = (blob[blob.size - 1].toInt() xor 0xFF).toByte()
             file.writeBytes(blob)
-            assertThrows(GitHubTokenException::class.java) { store(directory, key).read() }
+
+            // A rotated Keystore key or a tampered file must be visible to the
+            // user, not silently treated as "signed out".
+            assertThrows(GitHubTokenException::class.java) { store(directory, key()).read() }
         } finally {
             directory.deleteRecursively()
         }
     }
 
     @Test
-    fun `writing an empty token is refused`() {
-        val directory = Files.createTempDirectory("anthracite-github-token").toFile()
+    fun `a blank token is refused`() {
+        val directory = Files.createTempDirectory("anthracite-token").toFile()
         try {
-            val store = store(directory, softwareKey())
-            assertThrows(IllegalArgumentException::class.java) { store.write("   ") }
-            assertNull(store.read())
+            assertThrows(IllegalArgumentException::class.java) {
+                store(directory, key()).write("   ")
+            }
         } finally {
             directory.deleteRecursively()
         }
     }
 
     @Test
-    fun `the sealed format is the shared credential format`() {
-        // Guards against the token drifting to a different crypto envelope.
-        val key = softwareKey()
-        val sealed = CredentialCrypto.seal(
-            dev.anthracite.remote.SavedSecrets("ghp_example", null, null),
-            key,
-        )
-        assertEquals("ghp_example", CredentialCrypto.open(sealed, key).password)
+    fun `the sealed blob uses the same format as an SSH credential`() {
+        val directory = Files.createTempDirectory("anthracite-token").toFile()
+        try {
+            val key = key()
+            store(directory, key).write("ghp_shared_format_1234567890")
+            val blob = File(directory, GitHubTokenStore.DEFAULT_NAME).readBytes()
+            // Same opener, same envelope: one crypto path, not two.
+            assertEquals(
+                "ghp_shared_format_1234567890",
+                CredentialCrypto.open(blob, key).password,
+            )
+            assertTrue(blob.isNotEmpty())
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 }

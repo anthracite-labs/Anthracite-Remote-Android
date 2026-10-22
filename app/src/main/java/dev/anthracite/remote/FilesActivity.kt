@@ -363,7 +363,9 @@ class FilesActivity : AppCompatActivity() {
                         if (read < 0) break
                         buffer.write(chunk, 0, read)
                         if (buffer.size() > limit) {
-                            throw IllegalStateException(getString(R.string.files_too_large, MAX_UPLOAD_BYTES / (1024 * 1024)))
+                            throw IllegalStateException(
+                                getString(R.string.files_too_large, size(MAX_UPLOAD_BYTES)),
+                            )
                         }
                     }
                     buffer.toByteArray()

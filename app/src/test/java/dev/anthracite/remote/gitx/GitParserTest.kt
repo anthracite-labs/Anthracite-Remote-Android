@@ -111,7 +111,8 @@ class GitParserTest {
         val status = GitCommands.status(directory)
         assertTrue(status.startsWith("git -c color.ui=false -C '/srv/my project'"))
         assertTrue(status.contains("--porcelain=v2"))
-        assertTrue(status.contains("--no-ext-diff"))
+        // `--no-ext-diff` is a diff option; `git status` has no such flag.
+        assertFalse(status.contains("--no-ext-diff"))
 
         val diff = GitCommands.diff(directory, staged = false, path = "/srv/my project/a b.kt")
         assertTrue(diff.contains(" -- '/srv/my project/a b.kt'"))

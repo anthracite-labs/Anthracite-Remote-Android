@@ -88,22 +88,20 @@ private const val MAX_EMPTY_READS = 64
  * Reads a stream into memory but never past [maxBytes].
  *
  * This is the bound that matters: `stat` is only a hint, and a hostile or busy
- * host can hand back more bytes than it advertised. The buffer is grown by the
- * bytes actually read, so the process cannot be pushed past the cap by a stream
- * that keeps producing data.
+ * host can hand back more bytes than it advertised. The buffer grows only with
+ * bytes actually read, so a stream that keeps producing data cannot push the
+ * process past the cap, and a stream that stops making progress is reported
+ * instead of spinning forever on the caller's thread.
  */
 internal fun readBounded(input: java.io.InputStream, maxBytes: Long): ByteArray {
-    require(maxBytes > 0) { "read limit must be positive" }
+    require(maxBytes > 0) { "transfer limit must be positive" }
+    val output = ByteArrayOutputStream(minOf(maxBytes, 1L shl 20).toInt())
     val buffer = ByteArray(32 * 1024)
-    val output = ByteArrayOutputStream(minOf(maxBytes, 64L * 1024).toInt())
     var total = 0L
     var stalled = 0
     while (true) {
         val read = input.read(buffer)
         if (read < 0) break
-        // A well-behaved stream blocks instead of returning 0 forever. Treat a
-        // run of empty reads as a stall rather than spinning on the caller's
-        // thread with no progress and no limit reached.
         if (read == 0) {
             if (++stalled > MAX_EMPTY_READS) {
                 throw RemoteFileException("The transfer stalled without progress")
@@ -113,9 +111,7 @@ internal fun readBounded(input: java.io.InputStream, maxBytes: Long): ByteArray 
         stalled = 0
         total += read
         if (total > maxBytes) {
-            throw RemoteFileException(
-                "The stream exceeded the ${maxBytes / 1024} KB transfer limit while it was being read",
-            )
+            throw RemoteFileException("The transfer exceeded the ${maxBytes / 1024} KB limit while reading")
         }
         output.write(buffer, 0, read)
     }

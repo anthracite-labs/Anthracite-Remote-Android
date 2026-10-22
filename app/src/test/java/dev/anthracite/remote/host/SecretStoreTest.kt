@@ -10,6 +10,13 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/**
+ * The secret store is the only place a stored credential can be lost or leaked,
+ * so its rules are pinned here rather than only exercised through Android.
+ *
+ * `FileSecretStore` carries all the behaviour; `KeystoreSecretStore` only chooses
+ * the directory, which is why this runs on the JVM.
+ */
 class SecretStoreTest {
     private fun tempDirectory(): File = Files.createTempDirectory("anthracite-secrets").toFile()
 
@@ -74,13 +81,28 @@ class SecretStoreTest {
             File(directory, "0123456789abcdef.bin").writeBytes(ByteArray(3))
             assertThrows(HostStoreException::class.java) { store.read("0123456789abcdef.bin") }
 
+            File(directory, "0123456789abcdef.bin")
+                .writeBytes(ByteArray(CredentialCrypto.MAX_CIPHERTEXT_BYTES + 1))
+            assertThrows(HostStoreException::class.java) { store.read("0123456789abcdef.bin") }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `invalid names and empty payloads are refused before touching the disk`() {
+        val directory = tempDirectory()
+        try {
+            val store = FileSecretStore(directory)
             assertThrows(IllegalArgumentException::class.java) {
                 store.write("../escape.bin", ByteArray(64))
             }
             assertThrows(IllegalArgumentException::class.java) {
                 store.write("empty.bin", ByteArray(0))
             }
-            assertFalse(File(directory.parentFile, "escape.bin").exists())
+            assertThrows(IllegalArgumentException::class.java) { store.read("../escape.bin") }
+            assertThrows(IllegalArgumentException::class.java) { store.delete("../escape.bin") }
+            assertEquals(0, directory.listFiles().orEmpty().size)
         } finally {
             directory.deleteRecursively()
         }
