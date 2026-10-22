@@ -43,12 +43,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
@@ -448,7 +448,7 @@ class MainActivity : ComponentActivity() {
         localPort = assigned
         tunneledRemotePort = remotePort
         val code = withContext(Dispatchers.IO) { awaitHttp(assigned) }
-        coroutineContext.ensureActive()
+        yield()
         reconnectGate.userConnected()
         wantConnected = true
         append("Tunnel 127.0.0.1:$assigned -> 127.0.0.1:$remotePort HTTP $code")
