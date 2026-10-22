@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Reusable inline error banner. Included by Home and Setup with distinct
+  include-root ids; internals are resolved scoped to the include root because
+  two copies coexist in the same view hierarchy.
+-->
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="@dimen/space_m"
+    android:visibility="gone"
+    app:cardBackgroundColor="@color/error_container"
+    app:cardCornerRadius="@dimen/radius_m"
+    app:cardElevation="0dp"
+    app:strokeWidth="0dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="@dimen/space_m">
+
+        <ImageView
+            android:id="@+id/banner_icon"
+            android:layout_width="@dimen/icon_m"
+            android:layout_height="@dimen/icon_m"
+            android:layout_marginTop="@dimen/space_xxs"
+            android:contentDescription="@null"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_error"
+            app:tint="@color/error" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_s"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/banner_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:textAppearance="@style/TextAppearance.Anthracite.Body"
+                android:textColor="@color/on_error_container"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/banner_detail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xs"
+                android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall"
+                android:textColor="@color/on_error_container"
+                android:textIsSelectable="true"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/banner_dismiss"
+            style="@style/Widget.Anthracite.Button.Icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/dismiss"
+            app:icon="@drawable/ic_close"
+            app:iconTint="@color/on_error_container" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

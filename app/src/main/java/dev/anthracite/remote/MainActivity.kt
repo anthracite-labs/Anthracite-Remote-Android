@@ -1,8 +1,12 @@
 package dev.anthracite.remote
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
-import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
@@ -10,8 +14,13 @@ import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
 import android.provider.DocumentsContract
+import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Base64
 import android.view.View
+import android.view.accessibility.AccessibilityEvent
+import android.view.animation.LinearInterpolator
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
 import android.webkit.RenderProcessGoneDetail
@@ -28,17 +37,29 @@ import android.webkit.WebViewDatabase
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.RadioButton
+import android.widget.PopupMenu
 import android.widget.TextView
-import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.widget.ImageViewCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.button.MaterialButtonToggleGroup
+import com.google.android.material.card.MaterialCardView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.progressindicator.LinearProgressIndicator
+import com.google.android.material.snackbar.Snackbar
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,7 +76,14 @@ import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.coroutines.resume
 
-class MainActivity : ComponentActivity() {
+/**
+ * Single-activity shell for the redesigned UI. Screen order and back targets
+ * come from [NavigationPolicy]; the Home surface from [HomeStatePolicy];
+ * deployment phases from [DeployProgress]. Everything security-relevant
+ * (host-key trust, credential handling, tunnel probing, WebView isolation)
+ * keeps its previous behavior.
+ */
+class MainActivity : AppCompatActivity() {
     private lateinit var store: ConnectionStore
     private val ssh = SshClient()
     private val log = StringBuilder()
@@ -78,18 +106,49 @@ class MainActivity : ComponentActivity() {
     private var usedSavedWebPassword = false
     private var pendingDownload: PendingDownload? = null
     private var authDialog: AlertDialog? = null
+    private var lastExternalUrl: String? = null
+    private var lastExternalAt = 0L
+
+    // Redesign state: navigation, Home, deployment progress, and the two
+    // full-screen suspension points (host-key trust, WebUI password).
+    private var currentScreen = Screen.HOME
+    private var homeUi: HomeUi? = null
+    private var errorBannerText: String? = null
+    private var errorBannerDetail: String? = null
+    private var lastConnectError: String? = null
+    private var lastConnectDetail: String? = null
+    private var homeDetailsExpanded = false
+    private var setupAdvancedExpanded = false
+    private var progressDetailsExpanded = false
+    private var progress: DeployProgressState? = null
+    private var progressOp: DeployOp? = null
+    private var progressRetryAction: (() -> Unit)? = null
+    private var phaseRows: List<PhaseRow> = emptyList()
+    private var activePhaseAnimator: ObjectAnimator? = null
+    private var homeDotAnimator: ObjectAnimator? = null
+    private var manageLogExpanded = false
+    private var lineStream = LineStream()
+    private var verifyContinuation: CancellableContinuation<Boolean>? = null
+    private var prepareContinuation: CancellableContinuation<CharArray?>? = null
+    private var screenBeforeVerify = Screen.HOME
+
+    private data class PhaseRow(val icon: ImageView, val label: TextView, val state: TextView)
 
     private val keyPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
         val bytes = runCatching { contentResolver.openInputStream(uri)?.use { it.readAtMost(MAX_KEY + 1) } }.getOrNull()
         if (bytes == null || bytes.size > MAX_KEY) {
-            toast("Could not read that private key")
+            snackbar(getString(R.string.error_key_unreadable))
             return@registerForActivityResult
         }
         pendingKey?.fill(0)
         pendingKey = bytes
-        findViewById<TextView>(R.id.key_name).text = uri.lastPathSegment ?: getString(R.string.choose_key)
-        findViewById<RadioButton>(R.id.auth_key).isChecked = true
+        val name = uri.lastPathSegment.orEmpty()
+        val keyName = findViewById<TextView>(R.id.key_name)
+        keyName.tag = name
+        keyName.text = if (name.isNotBlank()) getString(R.string.key_selected, name) else getString(R.string.choose_key)
+        findViewById<MaterialButtonToggleGroup>(R.id.auth_group).check(R.id.auth_key)
+        updateAuthVisibility()
     }
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -120,7 +179,7 @@ class MainActivity : ComponentActivity() {
         if (request == null || uri == null) return@registerForActivityResult
         lifecycleScope.launch {
             val saved = withContext(Dispatchers.IO) { saveDownload(request, uri) }
-            toast(if (saved) "Download saved" else "Download failed")
+            snackbar(getString(if (saved) R.string.download_saved else R.string.download_failed))
         }
     }
 
@@ -131,7 +190,7 @@ class MainActivity : ComponentActivity() {
 
         override fun onLost(network: Network) {
             runOnUiThread {
-                showWebStatus("Network lost. The tunnel will reconnect when the network returns.")
+                showWebBanner(getString(R.string.banner_network_lost))
                 if (!wantConnected) return@runOnUiThread
                 // Disconnect is generation-safe inside SshClient and also aborts a
                 // connect that is waiting on a network handshake. Cancelling the
@@ -141,7 +200,17 @@ class MainActivity : ComponentActivity() {
                 ssh.disconnect()
                 localPort = -1
                 destroyWebView()
-                append("Network lost. The tunnel will reconnect when the network returns.")
+                append(getString(R.string.banner_network_lost))
+                updateProgress { DeployProgress.stop(it) }
+                if (currentScreen == Screen.WEB) {
+                    // Stay on the (now blank) Web surface: the automatic
+                    // reconnect restores it in place when the network returns.
+                    scheduleReconnect()
+                    return@runOnUiThread
+                }
+                errorBannerText = getString(R.string.banner_network_lost)
+                errorBannerDetail = null
+                showScreen(Screen.HOME)
                 scheduleReconnect()
             }
         }
@@ -160,39 +229,18 @@ class MainActivity : ComponentActivity() {
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             WindowInsetsCompat.CONSUMED
         }
-        onBackPressedDispatcher.addCallback(this) {
-            val page = webView
-            when {
-                findViewById<View>(R.id.web_panel).visibility == View.VISIBLE && page?.canGoBack() == true -> page.goBack()
-                findViewById<View>(R.id.web_panel).visibility == View.VISIBLE -> showManage()
-                findViewById<View>(R.id.manage_panel).visibility == View.VISIBLE -> showSetup()
-                else -> moveTaskToBack(true)
-            }
-        }
-        findViewById<Button>(R.id.save_button).setOnClickListener { if (saveForm()) showManage() }
-        findViewById<Button>(R.id.key_button).setOnClickListener { keyPicker.launch(arrayOf("*/*")) }
-        findViewById<Button>(R.id.connect_button).setOnClickListener { connectExisting() }
-        findViewById<Button>(R.id.install_button).setOnClickListener { install() }
-        findViewById<Button>(R.id.open_web_button).setOnClickListener { openWeb() }
-        findViewById<Button>(R.id.reconnect_button).setOnClickListener { reconnect() }
-        findViewById<Button>(R.id.web_reconnect).setOnClickListener { reconnect() }
-        findViewById<Button>(R.id.restart_button).setOnClickListener { managed("restart") }
-        findViewById<Button>(R.id.update_button).setOnClickListener { managed("update") }
-        findViewById<Button>(R.id.uninstall_button).setOnClickListener {
-            confirm(R.string.uninstall_title, R.string.uninstall_body) { managed("uninstall") }
-        }
-        findViewById<Button>(R.id.disconnect_button).setOnClickListener { disconnect() }
-        findViewById<Button>(R.id.forget_button).setOnClickListener {
-            confirm(R.string.forget_title, R.string.forget_body) { forget() }
-        }
-        findViewById<Button>(R.id.edit_button).setOnClickListener { showSetup() }
-        findViewById<Button>(R.id.web_back).setOnClickListener {
-            if (webView?.canGoBack() == true) webView?.goBack() else showManage()
-        }
-        findViewById<Button>(R.id.web_refresh).setOnClickListener { webView?.reload() }
-        findViewById<Button>(R.id.web_manage).setOnClickListener { showManage() }
+        onBackPressedDispatcher.addCallback(this) { handleBack() }
+        wireWelcome()
+        wireSetup()
+        wireVerify()
+        wireHome()
+        wirePrepare()
+        wireProgress()
+        wireWeb()
+        wireManage()
+        wireBanners()
         restoreForm()
-        if (store.hasConnection()) showManage() else showSetup()
+        showScreen(NavigationPolicy.firstScreen(store.hasConnection(), store.introSeen()))
     }
 
     override fun onStart() {
@@ -202,6 +250,7 @@ class MainActivity : ComponentActivity() {
         }
         webView?.onResume()
         if (wantConnected && !ssh.isConnected()) scheduleReconnect()
+        if (currentScreen == Screen.HOME) renderHome()
     }
 
     override fun onStop() {
@@ -211,6 +260,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        stopPhaseAnimator()
+        stopHomeDotPulse()
         authDialog?.dismiss()
         fileCallback?.onReceiveValue(null)
         fileCallback = null
@@ -221,106 +272,602 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun connectExisting() {
-        launchJob { connectExistingNow() }
+    // ---------------------------------------------------------------------
+    // Screen switching
+    // ---------------------------------------------------------------------
+
+    private fun showScreen(screen: Screen) {
+        currentScreen = screen
+        SCREEN_IDS.forEach { (candidate, id) ->
+            findViewById<View>(id).visibility = if (candidate == screen) View.VISIBLE else View.GONE
+        }
+        when (screen) {
+            Screen.HOME -> renderHome()
+            Screen.MANAGE -> renderManage()
+            Screen.SETUP -> renderSetup()
+            Screen.PROGRESS -> renderProgress()
+            else -> Unit
+        }
+        findViewById<View>(SCREEN_IDS.getValue(screen))
+            .sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
     }
 
-    private suspend fun connectExistingNow() {
-        if (!ensureSsh()) return
-        val port = store.load().remotePort
-        append("Connecting to the existing OpenCode service. This does not change it.")
-        openTunnel(port)
+    private fun handleBack() {
+        when (currentScreen) {
+            Screen.PROGRESS ->
+                if (job?.isActive == true) confirmStopOperation() else showScreen(Screen.HOME)
+            Screen.PREPARE_INSTALL ->
+                if (prepareContinuation != null) finishPrepare(null) else showScreen(Screen.HOME)
+            Screen.VERIFY ->
+                if (verifyContinuation != null) resolveVerify(false) else showScreen(screenBeforeVerify)
+            else ->
+                when (val action = NavigationPolicy.backFrom(currentScreen, webView?.canGoBack() == true, store.hasConnection())) {
+                    is BackAction.To -> showScreen(action.screen)
+                    BackAction.WebHistory -> webView?.goBack()
+                    BackAction.ExitTask -> moveTaskToBack(true)
+                }
+        }
     }
 
-    private fun install() {
+    // ---------------------------------------------------------------------
+    // Welcome
+    // ---------------------------------------------------------------------
+
+    private fun wireWelcome() {
+        findViewById<Button>(R.id.welcome_cta).setOnClickListener {
+            store.setIntroSeen(true)
+            showScreen(Screen.SETUP)
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Setup
+    // ---------------------------------------------------------------------
+
+    private fun wireSetup() {
+        findViewById<Button>(R.id.save_button).setOnClickListener { verifyIdentityAndGoHome() }
+        findViewById<Button>(R.id.key_button).setOnClickListener { keyPicker.launch(arrayOf("*/*")) }
+        findViewById<MaterialButtonToggleGroup>(R.id.auth_group).addOnButtonCheckedListener { _, _, isChecked ->
+            if (isChecked) updateAuthVisibility()
+        }
+        findViewById<View>(R.id.setup_advanced_toggle).setOnClickListener {
+            setupAdvancedExpanded = !setupAdvancedExpanded
+            findViewById<View>(R.id.setup_advanced_section).visibility =
+                if (setupAdvancedExpanded) View.VISIBLE else View.GONE
+            val chevron = findViewById<ImageView>(R.id.setup_advanced_chevron)
+            if (NavigationPolicy.animationsEnabled(animatorScale())) {
+                chevron.animate().rotation(if (setupAdvancedExpanded) 180f else 0f).setDuration(150).start()
+            } else {
+                chevron.rotation = if (setupAdvancedExpanded) 180f else 0f
+            }
+            updateAdvancedSummary()
+        }
+        val summaryWatcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) = updateAdvancedSummary()
+        }
+        findViewById<EditText>(R.id.ssh_port_input).addTextChangedListener(summaryWatcher)
+        findViewById<EditText>(R.id.remote_port_input).addTextChangedListener(summaryWatcher)
+    }
+
+    private fun updateAuthVisibility() {
+        val keyMode = findViewById<MaterialButtonToggleGroup>(R.id.auth_group).checkedButtonId == R.id.auth_key
+        findViewById<View>(R.id.password_field).visibility = if (keyMode) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.key_button).visibility = if (keyMode) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.key_name).visibility = if (keyMode) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.passphrase_field).visibility = if (keyMode) View.VISIBLE else View.GONE
+    }
+
+    private fun updateAdvancedSummary() {
+        val sshPort = findViewById<EditText>(R.id.ssh_port_input).text.toString().ifBlank { getString(R.string.default_ssh_port) }
+        val remotePort = findViewById<EditText>(R.id.remote_port_input).text.toString().ifBlank { getString(R.string.default_remote_port) }
+        findViewById<TextView>(R.id.setup_advanced_summary).text =
+            getString(R.string.setup_advanced_summary, sshPort.trim(), remotePort.trim())
+    }
+
+    private fun setSetupBusy(busy: Boolean) {
+        val button = findViewById<Button>(R.id.save_button)
+        button.isEnabled = !busy
+        button.setText(if (busy) R.string.setup_connecting else R.string.continue_action)
+    }
+
+    private fun renderSetup() {
+        updateAdvancedSummary()
+        bindBanner(findViewById(R.id.setup_error_banner), errorBannerText, errorBannerDetail, warning = false)
+    }
+
+    /** Continue: save the form, then verify the server identity before Home. */
+    private fun verifyIdentityAndGoHome() {
+        clearFieldErrors()
         if (!saveForm()) return
-        promptWebPassword { password -> launchJob { installNow(password) } }
+        launchJob {
+            setSetupBusy(true)
+            lastConnectError = null
+            lastConnectDetail = null
+            val ok = ensureSsh()
+            setSetupBusy(false)
+            if (ok) {
+                errorBannerText = null
+                showScreen(Screen.HOME)
+            } else {
+                errorBannerText = lastConnectError ?: getString(R.string.error_unreachable)
+                errorBannerDetail = lastConnectDetail
+                showScreen(Screen.SETUP)
+            }
+        }
+    }
+
+    private fun clearFieldErrors() {
+        listOf(
+            R.id.host_field, R.id.username_field, R.id.ssh_port_field, R.id.remote_port_field,
+            R.id.password_field, R.id.web_password_confirm_field,
+        ).forEach { findViewById<TextInputLayout>(it).error = null }
+    }
+
+    private fun saveForm(): Boolean {
+        val host = findViewById<EditText>(R.id.host_input).text.toString()
+        val username = findViewById<EditText>(R.id.username_input).text.toString()
+        val sshPort = parsePort(findViewById<EditText>(R.id.ssh_port_input).text.toString())
+        val remotePort = parsePort(findViewById<EditText>(R.id.remote_port_input).text.toString())
+        val auth = if (findViewById<MaterialButtonToggleGroup>(R.id.auth_group).checkedButtonId == R.id.auth_key) {
+            AuthMethod.KEY
+        } else {
+            AuthMethod.PASSWORD
+        }
+        val hostOk = sshHostAllowed(host)
+        val usernameOk = sshUsernameAllowed(username)
+        if (!hostOk || !usernameOk || sshPort == null || remotePort == null) {
+            // Inline field errors, not toast-only feedback (spec §9).
+            findViewById<TextInputLayout>(R.id.host_field).error =
+                if (!hostOk) getString(R.string.error_host_invalid) else null
+            findViewById<TextInputLayout>(R.id.username_field).error =
+                if (!usernameOk) getString(R.string.error_username_invalid) else null
+            findViewById<TextInputLayout>(R.id.ssh_port_field).error =
+                if (sshPort == null) getString(R.string.error_port_invalid) else null
+            findViewById<TextInputLayout>(R.id.remote_port_field).error =
+                if (remotePort == null) getString(R.string.error_port_invalid) else null
+            return false
+        }
+        listOf(R.id.host_field, R.id.username_field, R.id.ssh_port_field, R.id.remote_port_field).forEach {
+            findViewById<TextInputLayout>(it).error = null
+        }
+        val typedPassword = findViewById<EditText>(R.id.password_input).text.toString()
+        val typedPassphrase = findViewById<EditText>(R.id.passphrase_input).text.toString()
+        val existing = runCatching { store.secrets() }.getOrElse { _ ->
+            // Do not silently replace an unreadable Keystore blob unless the user
+            // actually supplied a full replacement credential for this method.
+            val replacing = (auth == AuthMethod.PASSWORD && typedPassword.isNotBlank()) ||
+                (auth == AuthMethod.KEY && pendingKey != null)
+            if (!replacing) {
+                append(getString(R.string.error_credentials_unavailable))
+                snackbar(getString(R.string.error_credentials_unavailable))
+                return false
+            }
+            SavedSecrets(null, null, null)
+        }
+        val password = typedPassword.ifBlank { existing.password }
+        val passphrase = typedPassphrase.ifBlank { existing.passphrase }
+        val key = pendingKey ?: existing.privateKey
+        if (auth == AuthMethod.PASSWORD && password.isNullOrEmpty()) {
+            findViewById<TextInputLayout>(R.id.password_field).error = getString(R.string.error_password_required)
+            return false
+        }
+        if (auth == AuthMethod.KEY && key == null) {
+            snackbar(getString(R.string.error_key_required))
+            return false
+        }
+        val previous = store.load()
+        val changed = profileRequiresNewSession(previous, host, sshPort, username, auth, remotePort)
+        try {
+            store.saveConnection(
+                host,
+                sshPort,
+                username,
+                auth,
+                remotePort,
+                findViewById<TextView>(R.id.key_name).tag?.toString().orEmpty(),
+                SavedSecrets(
+                    password = if (auth == AuthMethod.PASSWORD) password else null,
+                    privateKey = if (auth == AuthMethod.KEY) key else null,
+                    passphrase = if (auth == AuthMethod.KEY) passphrase else null,
+                ),
+            )
+        } catch (error: Exception) {
+            append("Could not save SSH credentials: ${error.message ?: "Keystore or storage error"}")
+            snackbar(getString(R.string.error_save_failed))
+            return false
+        }
+        if (changed) invalidateConnectionContext()
+        if (typedPassword.isNotEmpty()) findViewById<EditText>(R.id.password_input).text.clear()
+        if (typedPassphrase.isNotEmpty()) findViewById<EditText>(R.id.passphrase_input).text.clear()
+        refreshSurfaces()
+        return true
+    }
+
+    private fun buildTarget(): SshTarget? {
+        if (!saveForm()) return null
+        val saved = store.load()
+        val secrets = try {
+            store.secrets()
+        } catch (error: StoredSecretsException) {
+            append(getString(R.string.error_credentials_unavailable))
+            return null
+        }
+        return SshTarget(
+            host = saved.host,
+            port = saved.sshPort,
+            username = saved.username,
+            password = secrets.password,
+            privateKey = secrets.privateKey,
+            passphrase = secrets.passphrase,
+        )
+    }
+
+    private fun restoreForm() {
+        if (!store.hasConnection()) {
+            updateAuthVisibility()
+            return
+        }
+        val saved = store.load()
+        findViewById<EditText>(R.id.host_input).setText(saved.host)
+        findViewById<EditText>(R.id.ssh_port_input).setText(saved.sshPort.toString())
+        findViewById<EditText>(R.id.username_input).setText(saved.username)
+        findViewById<EditText>(R.id.remote_port_input).setText(saved.remotePort.toString())
+        findViewById<MaterialButtonToggleGroup>(R.id.auth_group)
+            .check(if (saved.auth == AuthMethod.KEY) R.id.auth_key else R.id.auth_password)
+        val keyName = findViewById<TextView>(R.id.key_name)
+        if (saved.keyName.isNotBlank() && saved.keyName != getString(R.string.no_key)) {
+            keyName.tag = saved.keyName
+            keyName.text = getString(R.string.key_selected, saved.keyName)
+        } else {
+            keyName.tag = null
+            keyName.setText(R.string.no_key)
+        }
+        updateAuthVisibility()
+        refreshSurfaces()
+    }
+
+    // ---------------------------------------------------------------------
+    // Verify (host-key trust)
+    // ---------------------------------------------------------------------
+
+    private fun wireVerify() {
+        findViewById<Button>(R.id.verify_approve_button).setOnClickListener { resolveVerify(true) }
+        findViewById<Button>(R.id.verify_decline_button).setOnClickListener { resolveVerify(false) }
+        findViewById<Button>(R.id.verify_copy_button).setOnClickListener {
+            val fingerprint = findViewById<TextView>(R.id.verify_fingerprint_value).text.toString()
+            val clipboard = getSystemService(ClipboardManager::class.java)
+            clipboard?.setPrimaryClip(ClipData.newPlainText("host key fingerprint", fingerprint))
+            snackbar(getString(R.string.verify_copied))
+        }
+    }
+
+    private suspend fun awaitVerify(firstUse: Boolean, keyType: String, fingerprint: String, savedFingerprint: String?): Boolean =
+        suspendCancellableCoroutine { cont ->
+            verifyContinuation = cont
+            screenBeforeVerify = currentScreen
+            populateVerify(firstUse, keyType, fingerprint, savedFingerprint)
+            showScreen(Screen.VERIFY)
+            cont.invokeOnCancellation { verifyContinuation = null }
+        }
+
+    private fun resolveVerify(approved: Boolean) {
+        val continuation = verifyContinuation ?: return
+        verifyContinuation = null
+        // The trust decision belongs to the journey that asked for it: return
+        // there so a refusal lands on its own failure surface.
+        if (currentScreen == Screen.VERIFY) showScreen(screenBeforeVerify)
+        if (continuation.isActive) continuation.resume(approved)
+    }
+
+    private fun populateVerify(firstUse: Boolean, keyType: String, fingerprint: String, savedFingerprint: String?) {
+        val saved = store.load()
+        val icon = findViewById<ImageView>(R.id.verify_icon)
+        icon.setImageResource(if (firstUse) R.drawable.ic_shield else R.drawable.ic_warning)
+        ImageViewCompat.setImageTintList(icon, ColorStateList.valueOf(color(if (firstUse) R.color.primary else R.color.error)))
+        findViewById<TextView>(R.id.verify_title)
+            .setText(if (firstUse) R.string.host_key_title else R.string.host_key_changed_title)
+        findViewById<TextView>(R.id.verify_body)
+            .setText(if (firstUse) R.string.verify_first_body else R.string.verify_changed_body)
+        findViewById<TextView>(R.id.verify_server_value).text = "${saved.host}:${saved.sshPort}"
+        findViewById<TextView>(R.id.verify_keytype_value).text = keyType
+        findViewById<View>(R.id.verify_saved_label).visibility = if (firstUse) View.GONE else View.VISIBLE
+        val savedValue = findViewById<TextView>(R.id.verify_saved_value)
+        savedValue.visibility = if (firstUse) View.GONE else View.VISIBLE
+        savedValue.text = savedFingerprint.orEmpty()
+        findViewById<TextView>(R.id.verify_fingerprint_label)
+            .setText(if (firstUse) R.string.verify_fingerprint_label else R.string.verify_presented_label)
+        findViewById<TextView>(R.id.verify_fingerprint_value).text = fingerprint
+        findViewById<TextView>(R.id.verify_hint)
+            .setText(if (firstUse) R.string.verify_hint else R.string.verify_changed_hint)
+        findViewById<Button>(R.id.verify_approve_button)
+            .setText(if (firstUse) R.string.approve else R.string.approve_new_key)
+    }
+
+    // ---------------------------------------------------------------------
+    // Home
+    // ---------------------------------------------------------------------
+
+    private fun wireHome() {
+        findViewById<Button>(R.id.home_cta).setOnClickListener {
+            when (homeUi?.cta) {
+                HomeCta.SET_UP -> showScreen(Screen.SETUP)
+                HomeCta.INSTALL_AND_LAUNCH -> installFlow()
+                HomeCta.OPEN_OPENCODE -> openFlow()
+                null -> Unit
+            }
+        }
+        findViewById<Button>(R.id.home_secondary).setOnClickListener {
+            when (homeUi?.secondary) {
+                HomeSecondary.CONNECT_EXISTING -> connectExistingFlow()
+                HomeSecondary.INSTALL_MANAGED -> installFlow()
+                HomeSecondary.NONE, null -> Unit
+            }
+        }
+        findViewById<Button>(R.id.home_details_toggle).setOnClickListener {
+            homeDetailsExpanded = !homeDetailsExpanded
+            findViewById<View>(R.id.home_details_section).visibility =
+                if (homeDetailsExpanded) View.VISIBLE else View.GONE
+            renderHome()
+        }
+        findViewById<Button>(R.id.home_overflow_button).setOnClickListener { anchor ->
+            PopupMenu(this, anchor).apply {
+                menuInflater.inflate(R.menu.menu_home_overflow, menu)
+                val hasConnection = store.hasConnection()
+                menu.findItem(R.id.menu_reconnect).isEnabled = hasConnection
+                menu.findItem(R.id.menu_manage).isEnabled = hasConnection
+                menu.findItem(R.id.menu_disconnect).isEnabled = hasConnection
+                setOnMenuItemClickListener { item ->
+                    when (item.itemId) {
+                        R.id.menu_reconnect -> { reconnectFlow(); true }
+                        R.id.menu_manage -> { showScreen(Screen.MANAGE); true }
+                        R.id.menu_edit_setup -> { showScreen(Screen.SETUP); true }
+                        R.id.menu_disconnect -> { disconnect(); true }
+                        else -> false
+                    }
+                }
+                show()
+            }
+        }
+    }
+
+    private fun renderHome() {
+        val hasConnection = store.hasConnection()
+        val saved = if (hasConnection) store.load() else null
+        val ui = HomeStatePolicy.homeUi(
+            hasConnection = hasConnection,
+            lastMode = store.lastMode(),
+            sshConnected = ssh.isConnected(),
+            tunnelPort = localPort,
+            operationRunning = job?.isActive == true,
+            reconnectPending = autoReconnectJob?.isActive == true,
+            errorPresent = errorBannerText != null,
+        )
+        homeUi = ui
+        findViewById<TextView>(R.id.home_server_title).text =
+            saved?.host ?: getString(R.string.home_identity_unset)
+        val subtitle = findViewById<TextView>(R.id.home_server_subtitle)
+        if (saved != null) {
+            subtitle.text = "${saved.username}@${saved.host}:${saved.sshPort}"
+            subtitle.visibility = View.VISIBLE
+        } else {
+            subtitle.text = ""
+            subtitle.visibility = View.GONE
+        }
+        val (statusText, statusDot) = when (ui.status) {
+            ConnectionStatus.NO_SERVER -> R.string.home_status_no_server to R.drawable.dot_idle
+            ConnectionStatus.IDLE -> R.string.home_status_idle to R.drawable.dot_idle
+            ConnectionStatus.CONNECTING -> R.string.home_status_connecting to R.drawable.dot_warning
+            ConnectionStatus.SSH_READY -> R.string.home_status_ssh to R.drawable.dot_success
+            ConnectionStatus.TUNNEL_READY -> R.string.home_status_tunnel to R.drawable.dot_success
+            ConnectionStatus.RECONNECTING -> R.string.home_status_reconnecting to R.drawable.dot_warning
+            ConnectionStatus.ERROR -> R.string.home_status_error to R.drawable.dot_error
+        }
+        findViewById<TextView>(R.id.home_status_text).setText(statusText)
+        findViewById<View>(R.id.home_status_dot).setBackgroundResource(statusDot)
+        setHomeDotPulse(
+            findViewById(R.id.home_status_dot),
+            ui.status == ConnectionStatus.CONNECTING || ui.status == ConnectionStatus.RECONNECTING,
+        )
+        val busy = job?.isActive == true
+        val cta = findViewById<MaterialButton>(R.id.home_cta)
+        cta.isEnabled = !busy
+        cta.setText(
+            when (ui.cta) {
+                HomeCta.SET_UP -> R.string.cta_setup
+                HomeCta.INSTALL_AND_LAUNCH -> R.string.cta_prepare_install
+                HomeCta.OPEN_OPENCODE -> R.string.cta_open
+            }
+        )
+        cta.setIconResource(if (ui.cta == HomeCta.SET_UP) R.drawable.ic_server else R.drawable.ic_launch)
+        val secondary = findViewById<Button>(R.id.home_secondary)
+        secondary.isEnabled = !busy
+        when (ui.secondary) {
+            HomeSecondary.NONE -> secondary.visibility = View.GONE
+            HomeSecondary.CONNECT_EXISTING -> {
+                secondary.visibility = View.VISIBLE
+                secondary.setText(R.string.cta_secondary_existing)
+            }
+            HomeSecondary.INSTALL_MANAGED -> {
+                secondary.visibility = View.VISIBLE
+                secondary.setText(R.string.cta_secondary_install)
+            }
+        }
+        bindBanner(findViewById(R.id.home_error_banner), errorBannerText, errorBannerDetail, warning = false)
+        findViewById<View>(R.id.home_details_section).visibility =
+            if (homeDetailsExpanded) View.VISIBLE else View.GONE
+        findViewById<TextView>(R.id.home_fingerprint_value).text =
+            saved?.fingerprint?.takeIf { it.isNotBlank() } ?: getString(R.string.home_details_fingerprint_unset)
+        findViewById<TextView>(R.id.home_tunnel_value).text =
+            if (localPort > 0) {
+                getString(R.string.home_details_tunnel_value, localPort, tunneledRemotePort)
+            } else {
+                getString(R.string.home_details_tunnel_none)
+            }
+        findViewById<TextView>(R.id.home_mode_value).text = when (store.lastMode()) {
+            LaunchMode.MANAGED -> getString(R.string.home_mode_managed)
+            LaunchMode.EXISTING -> getString(R.string.home_mode_existing)
+            null -> getString(R.string.home_mode_none)
+        }
+        val portLabel = findViewById<View>(R.id.home_remote_port_label)
+        val portValue = findViewById<TextView>(R.id.home_remote_port_value)
+        if (saved != null) {
+            portLabel.visibility = View.VISIBLE
+            portValue.visibility = View.VISIBLE
+            portValue.text = saved.remotePort.toString()
+        } else {
+            portLabel.visibility = View.GONE
+            portValue.visibility = View.GONE
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Journeys (install / open / reconnect)
+    // ---------------------------------------------------------------------
+
+    private fun installFlow() {
+        if (!store.hasConnection()) {
+            showScreen(Screen.SETUP)
+            return
+        }
+        launchOp(DeployOp.INSTALL, retry = { installFlow() }) {
+            lastConnectError = null
+            lastConnectDetail = null
+            updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
+            if (!ensureSsh()) {
+                failProgress(lastConnectError)
+                return@launchOp
+            }
+            // WebUI password is created here, sent on SSH stdin, never stored.
+            val password = awaitPrepareInstall() ?: return@launchOp
+            showScreen(Screen.PROGRESS)
+            installNow(password)
+        }
     }
 
     private suspend fun installNow(password: CharArray) {
+        var uploadDir: String? = null
         try {
-            if (!ensureSsh()) return
             val script = assets.open("install-opencode.sh").use { it.readBytes() }
+            updateProgress { DeployProgress.activate(it, PhaseId.UPLOAD_INSTALLER) }
             val made = withContext(Dispatchers.IO) { ssh.exec(MKTEMP, timeoutMs = 20_000) }
             val dir = made.stdout.trim()
             if (made.exitCode != 0 || !uploadDirAllowed(dir)) {
-                append(made.text.ifBlank { "Could not create a remote temporary directory" })
+                failProgress(made.text.ifBlank { "Could not create a remote temporary directory" })
                 return
             }
+            uploadDir = dir
             val scriptPath = "$dir/install-opencode.sh"
-            try {
-                withContext(Dispatchers.IO) { ssh.upload(script, scriptPath) }
-                val preflight = runScript(scriptPath, "preflight", timeoutMs = 60_000)
-                append(preflight.text)
-                if (preflight.exitCode != 0) {
-                    append("Provisioning failed")
-                    return
-                }
-                val secret = password.concatToString()
-                val stdin = "$secret\n".toByteArray(Charsets.UTF_8)
-                val installed = try {
-                    runScript(scriptPath, "install", stdin, timeoutMs = 10 * 60_000)
-                } finally {
-                    stdin.fill(0)
-                }
-                append(redact(installed.text, secret))
-                if (installed.exitCode != 0) {
-                    append("Provisioning failed")
-                    return
-                }
-                append("Install finished. HTTP 401 means the service is up and still requires a browser login.")
-                openTunnel(MANAGED_PORT)
-            } finally {
-                val quoted = shellQuote(dir)
-                if (quoted != null) withContext(Dispatchers.IO) { runCatching { ssh.exec("rm -rf -- $quoted", timeoutMs = 20_000) } }
+            withContext(Dispatchers.IO) { ssh.upload(script, scriptPath) }
+            updateProgress { DeployProgress.activate(it, PhaseId.PREFLIGHT) }
+            val preflight = runScript(scriptPath, "preflight", timeoutMs = 60_000)
+            if (preflight.exitCode != 0) {
+                append("Provisioning failed")
+                failProgress("Provisioning failed")
+                return
             }
+            val secret = password.concatToString()
+            val stdin = "$secret\n".toByteArray(Charsets.UTF_8)
+            val installed = try {
+                runScript(scriptPath, "install", stdin, timeoutMs = 10 * 60_000, secret = secret)
+            } finally {
+                stdin.fill(0)
+            }
+            if (installed.exitCode != 0) {
+                append("Provisioning failed")
+                failProgress("Provisioning failed")
+                return
+            }
+            append("Install finished. HTTP 401 means the service is up and still requires a browser login.")
+            openTunnel(MANAGED_PORT, LaunchMode.MANAGED)
         } finally {
             password.fill('\u0000')
+            cleanupUploadDir(uploadDir)
         }
     }
 
-    private fun managed(command: String) {
-        launchJob { managedNow(command) }
-    }
-
-    private suspend fun managedNow(command: String) {
-        if (!ensureSsh()) return
-        val script = assets.open("install-opencode.sh").use { it.readBytes() }
-        val made = withContext(Dispatchers.IO) { ssh.exec(MKTEMP, timeoutMs = 20_000) }
-        val dir = made.stdout.trim()
-        if (made.exitCode != 0 || !uploadDirAllowed(dir)) {
-            append(made.text.ifBlank { "Could not create a remote temporary directory" })
+    private fun connectExistingFlow() {
+        if (!store.hasConnection()) {
+            showScreen(Screen.SETUP)
             return
         }
-        val scriptPath = "$dir/install-opencode.sh"
-        try {
-            withContext(Dispatchers.IO) { ssh.upload(script, scriptPath) }
-            val result = runScript(scriptPath, command, timeoutMs = 10 * 60_000)
-            append(result.text.ifBlank { "$command finished" })
-            if (result.exitCode != 0) append("Command failed")
-            if (command == "restart" && result.exitCode == 0 && localPort > 0) openTunnel(MANAGED_PORT)
-            if (command == "uninstall") append("Android connection settings were kept. Forget connection is separate.")
-        } finally {
-            val quoted = shellQuote(dir)
-            if (quoted != null) withContext(Dispatchers.IO) { runCatching { ssh.exec("rm -rf -- $quoted", timeoutMs = 20_000) } }
+        launchOp(DeployOp.OPEN_EXISTING, retry = { connectExistingFlow() }) {
+            lastConnectError = null
+            lastConnectDetail = null
+            updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
+            if (!ensureSsh()) {
+                failProgress(lastConnectError)
+                return@launchOp
+            }
+            val port = store.load().remotePort
+            append("Connecting to the existing OpenCode service. This does not change it.")
+            openTunnel(port, LaunchMode.EXISTING)
         }
     }
 
-    private fun openWeb() {
-        if (localPort > 0 && ssh.isConnected()) showWeb(localPort) else connectExisting()
+    private fun openFlow() {
+        if (!store.hasConnection()) {
+            showScreen(Screen.SETUP)
+            return
+        }
+        if (localPort > 0 && ssh.isConnected()) {
+            showWeb(localPort)
+            return
+        }
+        when (store.lastMode() ?: inferMode()) {
+            LaunchMode.MANAGED -> openManagedFlow()
+            LaunchMode.EXISTING -> connectExistingFlow()
+        }
     }
 
-    private fun reconnect() {
-        launchJob { reconnectFromUser() }
+    private fun openManagedFlow() {
+        launchOp(DeployOp.OPEN_MANAGED, retry = { openManagedFlow() }) {
+            lastConnectError = null
+            lastConnectDetail = null
+            updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
+            if (!ensureSsh()) {
+                failProgress(lastConnectError)
+                return@launchOp
+            }
+            openTunnel(MANAGED_PORT, LaunchMode.MANAGED)
+        }
     }
 
-    private suspend fun reconnectFromUser() {
-        reconnectGate.userConnected()
-        wantConnected = true
-        val token = reconnectGate.networkChanged() ?: return
-        autoReconnectJob?.cancel()
-        reconnectNow(token)
+    private fun reconnectFlow() {
+        if (!store.hasConnection()) {
+            showScreen(Screen.SETUP)
+            return
+        }
+        val mode = store.lastMode() ?: inferMode()
+        val op = if (mode == LaunchMode.MANAGED) DeployOp.OPEN_MANAGED else DeployOp.OPEN_EXISTING
+        launchOp(op, retry = { reconnectFlow() }) {
+            reconnectGate.userConnected()
+            wantConnected = true
+            val token = reconnectGate.networkChanged() ?: return@launchOp
+            autoReconnectJob?.cancel()
+            lastConnectError = null
+            lastConnectDetail = null
+            updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
+            withContext(Dispatchers.IO) { ssh.disconnect() }
+            destroyWebView()
+            localPort = -1
+            if (!reconnectGate.stillCurrent(token)) return@launchOp
+            if (!ensureSsh()) {
+                failProgress(lastConnectError)
+                return@launchOp
+            }
+            if (!reconnectGate.stillCurrent(token)) {
+                ssh.disconnect()
+                return@launchOp
+            }
+            val remote = if (mode == LaunchMode.MANAGED) MANAGED_PORT else store.load().remotePort
+            openTunnel(remote, mode)
+        }
     }
+
+    private fun inferMode(): LaunchMode =
+        if (tunneledRemotePort == MANAGED_PORT) LaunchMode.MANAGED else LaunchMode.EXISTING
 
     private fun scheduleReconnect() {
         val token = reconnectGate.networkChanged() ?: return
@@ -333,6 +880,7 @@ class MainActivity : ComponentActivity() {
             if (ssh.isConnected() && localPort > 0) return@launch
             reconnectSerialized(token)
         }
+        if (currentScreen == Screen.HOME) renderHome()
     }
 
     private suspend fun reconnectSerialized(token: Int) {
@@ -347,12 +895,19 @@ class MainActivity : ComponentActivity() {
         destroyWebView()
         localPort = -1
         if (!reconnectGate.stillCurrent(token)) return
-        if (!ensureSsh()) return
+        lastConnectError = null
+        lastConnectDetail = null
+        if (!ensureSsh()) {
+            errorBannerText = lastConnectError
+            errorBannerDetail = lastConnectDetail
+            if (currentScreen == Screen.HOME) renderHome()
+            return
+        }
         if (!reconnectGate.stillCurrent(token)) {
             ssh.disconnect()
             return
         }
-        openTunnel(remote)
+        openTunnel(remote, null)
     }
 
     private fun defaultNetworkUp(): Boolean {
@@ -369,7 +924,7 @@ class MainActivity : ComponentActivity() {
         invalidateTunnelAuthentication()
         acceptedIdentity = null
         append("Disconnected")
-        showManage()
+        showScreen(Screen.HOME)
     }
 
     private fun forget() {
@@ -378,10 +933,11 @@ class MainActivity : ComponentActivity() {
             store.forget()
         } catch (error: Exception) {
             append("Could not erase saved SSH credentials: ${error.message ?: "storage error"}")
-            toast("Could not erase saved credentials")
-            showManage()
+            snackbar(getString(R.string.error_forget_failed))
             return
         }
+        // The intro was already seen; forgetting a server must not replay it.
+        store.setIntroSeen(true)
         pendingKey?.fill(0)
         pendingKey = null
         tunneledRemotePort = MANAGED_PORT
@@ -389,10 +945,20 @@ class MainActivity : ComponentActivity() {
         findViewById<EditText>(R.id.username_input).text.clear()
         findViewById<EditText>(R.id.password_input).text.clear()
         findViewById<EditText>(R.id.passphrase_input).text.clear()
-        findViewById<TextView>(R.id.key_name).text = getString(R.string.no_key)
+        val keyName = findViewById<TextView>(R.id.key_name)
+        keyName.tag = null
+        keyName.text = getString(R.string.no_key)
+        findViewById<MaterialButtonToggleGroup>(R.id.auth_group).check(R.id.auth_password)
+        updateAuthVisibility()
+        errorBannerText = null
         log.clear()
-        showSetup()
+        renderLogViews()
+        showScreen(Screen.SETUP)
     }
+
+    // ---------------------------------------------------------------------
+    // SSH trust boundary (unchanged semantics, new surface)
+    // ---------------------------------------------------------------------
 
     private suspend fun ensureSsh(): Boolean {
         // Persist and compare the current form before trusting an existing
@@ -415,11 +981,15 @@ class MainActivity : ComponentActivity() {
             is ConnectOutcome.ChangedHostKey -> refuseChangedKey(outcome)
             is ConnectOutcome.AuthFailed -> {
                 stopWantingConnection()
+                lastConnectError = getString(R.string.error_auth_failed)
+                lastConnectDetail = null
                 append("SSH authentication failed. Check the username, password, or private key.")
                 false
             }
             is ConnectOutcome.Failed -> {
                 stopWantingConnection()
+                lastConnectError = getString(R.string.error_unreachable)
+                lastConnectDetail = outcome.message
                 append("SSH failed: ${outcome.message}")
                 false
             }
@@ -427,14 +997,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun approveHostKey(outcome: ConnectOutcome.UnknownHostKey): Boolean {
-        val saved = store.load()
-        val approved = ask(
-            getString(R.string.host_key_title),
-            "First connection to ${saved.host}:${saved.sshPort}.\n\n${outcome.keyType}\n${outcome.fingerprint}\n\nThe key is checked before authentication. Approve only if it matches the server.",
-            getString(R.string.approve),
-            getString(R.string.cancel),
-        )
+        val approved = awaitVerify(firstUse = true, outcome.keyType, outcome.fingerprint, savedFingerprint = null)
         if (!approved) {
+            lastConnectError = getString(R.string.error_host_key_refused)
             append("Host key was not approved.")
             return false
         }
@@ -447,15 +1012,10 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun refuseChangedKey(outcome: ConnectOutcome.ChangedHostKey): Boolean {
         stopWantingConnection()
-        val approved = ask(
-            getString(R.string.host_key_changed_title),
-            "Connection refused. The server key changed.\n\nSaved: ${outcome.savedFingerprint}\nPresented: ${outcome.keyType} ${outcome.fingerprint}\n\nApprove the new fingerprint only after checking it out of band.",
-            getString(R.string.approve_new_key),
-            getString(R.string.cancel),
-        )
+        val approved = awaitVerify(firstUse = false, outcome.keyType, outcome.fingerprint, outcome.savedFingerprint)
         if (!approved) {
+            lastConnectError = getString(R.string.error_host_key_refused)
             append("Host key change refused.")
-            showManage()
             return false
         }
         // Host-key rotation establishes a distinct server identity. Destroy the
@@ -474,8 +1034,9 @@ class MainActivity : ComponentActivity() {
         destroyWebView()
     }
 
-    private suspend fun openTunnel(remotePort: Int) {
+    private suspend fun openTunnel(remotePort: Int, mode: LaunchMode?) {
         syncTunnelIdentity(remotePort)
+        updateProgress { DeployProgress.activate(it, PhaseId.PROBE_SERVICE) }
         // Direct-tcpip has no device listener. Verify that the remote service
         // requires HTTP Basic *before* creating a local forward that another app
         // could otherwise reach.
@@ -484,33 +1045,89 @@ class MainActivity : ComponentActivity() {
         }
         if (!authenticatedTunnelReady(probe.statusCode, probe.authenticateHeaders)) {
             stopWantingConnection()
-            append(
-                "Tunnel refused: OpenCode must challenge an unauthenticated request with HTTP Basic authentication " +
-                    "(received HTTP ${probe.statusCode}).",
-            )
-            showManage()
+            val message = "Tunnel refused: OpenCode must challenge an unauthenticated request with HTTP Basic " +
+                "authentication (received HTTP ${probe.statusCode})."
+            append(message)
+            errorBannerText = message
+            errorBannerDetail = null
+            failProgress(message)
+            if (currentScreen == Screen.WEB) showScreen(Screen.HOME) else renderHome()
             return
         }
+        updateProgress { DeployProgress.activate(it, PhaseId.OPEN_TUNNEL) }
         val assigned = withContext(Dispatchers.IO) { ssh.forward(remotePort) }
         localPort = assigned
         tunneledRemotePort = remotePort
         yield()
         reconnectGate.userConnected()
         wantConnected = true
+        if (mode != null) store.saveLastMode(mode)
         append("Tunnel 127.0.0.1:$assigned -> 127.0.0.1:$remotePort HTTP ${probe.statusCode}")
         append("Service is up and requires authentication. The browser session is not authenticated yet.")
-        showWeb(assigned)
+        hideWebBanner()
+        val op = progressOp
+        val opensWeb = op != null && WEB_OPENING_OPS.contains(op)
+        when {
+            currentScreen == Screen.PROGRESS && opensWeb -> {
+                updateProgress { DeployProgress.activate(it, PhaseId.LAUNCH_WEB) }
+                showWeb(assigned)
+                updateProgress { DeployProgress.succeed(it) }
+            }
+            // Automatic reconnect while the user is looking at the (destroyed)
+            // Web surface: restore it exactly where they were.
+            currentScreen == Screen.WEB -> showWeb(assigned)
+            else -> renderHome()
+        }
     }
 
-    private suspend fun runScript(path: String, command: String, stdin: ByteArray? = null, timeoutMs: Long): ExecResult {
+    private suspend fun runScript(
+        path: String,
+        command: String,
+        stdin: ByteArray? = null,
+        timeoutMs: Long,
+        secret: String? = null,
+    ): ExecResult {
         require(command in SCRIPT_COMMANDS)
         val quoted = shellQuote(path) ?: error("unsafe remote path")
-        return withContext(Dispatchers.IO) { ssh.exec("bash $quoted $command", stdin, timeoutMs) }
+        val result = withContext(Dispatchers.IO) {
+            ssh.exec("bash $quoted $command", stdin, timeoutMs) { bytes -> streamOutput(bytes, secret) }
+        }
+        flushStream(secret)
+        return result
     }
+
+    private fun streamOutput(bytes: ByteArray, secret: String?) {
+        runOnUiThread {
+            for (raw in lineStream.accept(bytes)) {
+                deliverLine(raw, secret)
+            }
+        }
+    }
+
+    private fun flushStream(secret: String?) {
+        for (raw in lineStream.flush()) {
+            deliverLine(raw, secret)
+        }
+    }
+
+    private fun deliverLine(raw: String, secret: String?) {
+        val line = if (secret != null) redact(raw, secret) else raw
+        append(line)
+        updateProgress { DeployProgress.onLine(it, line) }
+    }
+
+    private suspend fun cleanupUploadDir(dir: String?) {
+        val quoted = dir?.let { shellQuote(it) } ?: return
+        withContext(Dispatchers.IO) { runCatching { ssh.exec("rm -rf -- $quoted", timeoutMs = 20_000) } }
+    }
+
+    // ---------------------------------------------------------------------
+    // Jobs
+    // ---------------------------------------------------------------------
 
     private fun launchJob(block: suspend () -> Unit) {
         if (job?.isActive == true) {
-            toast("Wait for the current step to finish")
+            snackbar(getString(R.string.wait_for_job))
             return
         }
         job = lifecycleScope.launch {
@@ -522,148 +1139,381 @@ class MainActivity : ComponentActivity() {
                 throw error
             } catch (error: Exception) {
                 append(error.message ?: "Failed")
+                failProgress(error.message ?: "Failed")
             }
-            refreshSummary()
+            onJobFinished()
         }
     }
 
-    private fun saveForm(): Boolean {
-        val host = findViewById<EditText>(R.id.host_input).text.toString()
-        val username = findViewById<EditText>(R.id.username_input).text.toString()
-        val sshPort = parsePort(findViewById<EditText>(R.id.ssh_port_input).text.toString())
-        val remotePort = parsePort(findViewById<EditText>(R.id.remote_port_input).text.toString())
-        val auth = if (findViewById<RadioButton>(R.id.auth_key).isChecked) AuthMethod.KEY else AuthMethod.PASSWORD
-        if (!sshHostAllowed(host) || !sshUsernameAllowed(username) || sshPort == null || remotePort == null) {
-            toast("Enter a host, username, and valid ports")
-            return false
+    private fun launchOp(op: DeployOp, retry: (() -> Unit)?, block: suspend () -> Unit) {
+        if (job?.isActive == true) {
+            snackbar(getString(R.string.wait_for_job))
+            return
         }
-        val typedPassword = findViewById<EditText>(R.id.password_input).text.toString()
-        val typedPassphrase = findViewById<EditText>(R.id.passphrase_input).text.toString()
-        val existing = runCatching { store.secrets() }.getOrElse { _ ->
-            // Do not silently replace an unreadable Keystore blob unless the user
-            // actually supplied a full replacement credential for this method.
-            val replacing = (auth == AuthMethod.PASSWORD && typedPassword.isNotBlank()) ||
-                (auth == AuthMethod.KEY && pendingKey != null)
-            if (!replacing) {
-                append("Saved SSH credentials are unavailable. Re-enter the credential to replace them.")
-                toast("Re-enter the SSH credential")
-                return false
-            }
-            SavedSecrets(null, null, null)
-        }
-        val password = typedPassword.ifBlank { existing.password }
-        val passphrase = typedPassphrase.ifBlank { existing.passphrase }
-        val key = pendingKey ?: existing.privateKey
-        if (auth == AuthMethod.PASSWORD && password.isNullOrEmpty()) {
-            toast("Enter the SSH password")
-            return false
-        }
-        if (auth == AuthMethod.KEY && key == null) {
-            toast("Choose a private key")
-            return false
-        }
-        val previous = store.load()
-        val changed = profileRequiresNewSession(previous, host, sshPort, username, auth, remotePort)
-        try {
-            store.saveConnection(
-                host,
-                sshPort,
-                username,
-                auth,
-                remotePort,
-                findViewById<TextView>(R.id.key_name).text.toString(),
-                SavedSecrets(
-                    password = if (auth == AuthMethod.PASSWORD) password else null,
-                    privateKey = if (auth == AuthMethod.KEY) key else null,
-                    passphrase = if (auth == AuthMethod.KEY) passphrase else null,
-                ),
-            )
-        } catch (error: Exception) {
-            append("Could not save SSH credentials: ${error.message ?: "Keystore or storage error"}")
-            toast("Could not save SSH credentials")
-            return false
-        }
-        if (changed) invalidateConnectionContext()
-        if (typedPassword.isNotEmpty()) findViewById<EditText>(R.id.password_input).text.clear()
-        if (typedPassphrase.isNotEmpty()) findViewById<EditText>(R.id.passphrase_input).text.clear()
-        refreshSummary()
-        return true
+        startProgressUi(op, retry)
+        launchJob(block)
     }
 
-    private fun buildTarget(): SshTarget? {
-        if (!saveForm()) return null
-        val saved = store.load()
-        val secrets = try {
-            store.secrets()
-        } catch (error: StoredSecretsException) {
-            append("Saved SSH credentials are unavailable. Re-enter the credential.")
-            return null
+    private fun onJobFinished() {
+        when (currentScreen) {
+            Screen.HOME -> renderHome()
+            Screen.MANAGE -> renderManage()
+            Screen.SETUP -> renderSetup()
+            // Prepare cancelled: the journey ends back on Home, no failure.
+            Screen.PREPARE_INSTALL -> showScreen(Screen.HOME)
+            Screen.PROGRESS -> renderProgress()
+            // A job that ended while its trust prompt was up (cancellation)
+            // must not strand the user on Verify.
+            Screen.VERIFY -> if (verifyContinuation == null) showScreen(screenBeforeVerify) else Unit
+            else -> Unit
         }
-        return SshTarget(
-            host = saved.host,
-            port = saved.sshPort,
-            username = saved.username,
-            password = secrets.password,
-            privateKey = secrets.privateKey,
-            passphrase = secrets.passphrase,
+    }
+
+    // ---------------------------------------------------------------------
+    // Prepare install (WebUI password, live requirement checks)
+    // ---------------------------------------------------------------------
+
+    private fun wirePrepare() {
+        val watcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                findViewById<TextInputLayout>(R.id.web_password_confirm_field).error = null
+                updatePrepareRequirements()
+            }
+        }
+        findViewById<EditText>(R.id.web_password_input).addTextChangedListener(watcher)
+        findViewById<EditText>(R.id.web_password_confirm_input).addTextChangedListener(watcher)
+        findViewById<Button>(R.id.prepare_confirm).setOnClickListener {
+            val password = findViewById<EditText>(R.id.web_password_input).text.toString()
+            val confirm = findViewById<EditText>(R.id.web_password_confirm_input).text.toString()
+            if (!webPasswordAccepted(password) || password != confirm) {
+                findViewById<TextInputLayout>(R.id.web_password_confirm_field).error =
+                    getString(R.string.prepare_error_mismatch)
+                return@setOnClickListener
+            }
+            finishPrepare(password.toCharArray())
+        }
+        findViewById<Button>(R.id.prepare_cancel).setOnClickListener { finishPrepare(null) }
+    }
+
+    private suspend fun awaitPrepareInstall(): CharArray? = suspendCancellableCoroutine { cont ->
+        prepareContinuation = cont
+        resetPrepareScreen()
+        showScreen(Screen.PREPARE_INSTALL)
+        cont.invokeOnCancellation { prepareContinuation = null }
+    }
+
+    private fun finishPrepare(password: CharArray?) {
+        val continuation = prepareContinuation ?: return
+        prepareContinuation = null
+        findViewById<EditText>(R.id.web_password_input).text.clear()
+        findViewById<EditText>(R.id.web_password_confirm_input).text.clear()
+        if (continuation.isActive) continuation.resume(password)
+    }
+
+    private fun resetPrepareScreen() {
+        findViewById<EditText>(R.id.web_password_input).text.clear()
+        findViewById<EditText>(R.id.web_password_confirm_input).text.clear()
+        findViewById<TextInputLayout>(R.id.web_password_confirm_field).error = null
+        updatePrepareRequirements()
+    }
+
+    private fun updatePrepareRequirements() {
+        val password = findViewById<EditText>(R.id.web_password_input).text.toString()
+        val confirm = findViewById<EditText>(R.id.web_password_confirm_input).text.toString()
+        setRequirement(R.id.prepare_req_length_icon, password.length >= MIN_WEB_PASSWORD)
+        setRequirement(R.id.prepare_req_letter_icon, password.any { it.isLetter() } && password.any { it.isDigit() })
+        setRequirement(R.id.prepare_req_match_icon, confirm.isNotEmpty() && password == confirm)
+    }
+
+    private fun setRequirement(iconId: Int, met: Boolean) {
+        val icon = findViewById<ImageView>(iconId)
+        ImageViewCompat.setImageTintList(
+            icon,
+            ColorStateList.valueOf(color(if (met) R.color.status_success else R.color.on_surface_variant)),
         )
     }
 
-    private fun restoreForm() {
-        if (!store.hasConnection()) return
-        val saved = store.load()
-        findViewById<EditText>(R.id.host_input).setText(saved.host)
-        findViewById<EditText>(R.id.ssh_port_input).setText(saved.sshPort.toString())
-        findViewById<EditText>(R.id.username_input).setText(saved.username)
-        findViewById<EditText>(R.id.remote_port_input).setText(saved.remotePort.toString())
-        findViewById<RadioButton>(if (saved.auth == AuthMethod.KEY) R.id.auth_key else R.id.auth_password).isChecked = true
-        if (saved.keyName.isNotBlank()) findViewById<TextView>(R.id.key_name).text = saved.keyName
-        refreshSummary()
+    // ---------------------------------------------------------------------
+    // Progress surface
+    // ---------------------------------------------------------------------
+
+    private fun wireProgress() {
+        findViewById<Button>(R.id.progress_details_toggle).setOnClickListener {
+            progressDetailsExpanded = !progressDetailsExpanded
+            findViewById<View>(R.id.progress_log_scroll).visibility =
+                if (progressDetailsExpanded) View.VISIBLE else View.GONE
+        }
+        findViewById<Button>(R.id.progress_retry).setOnClickListener {
+            if (job?.isActive == true) {
+                snackbar(getString(R.string.wait_for_job))
+                return@setOnClickListener
+            }
+            progressRetryAction?.invoke()
+        }
+        findViewById<Button>(R.id.progress_back_home).setOnClickListener { showScreen(Screen.HOME) }
     }
 
-    private fun refreshSummary() {
-        if (!store.hasConnection()) return
-        val saved = store.load()
-        val fingerprint = if (saved.fingerprint.isBlank()) "not approved yet" else saved.fingerprint
-        findViewById<TextView>(R.id.summary_text).text =
-            "${saved.username}@${saved.host}:${saved.sshPort}\nHost key: $fingerprint\nExisting OpenCode port: ${saved.remotePort}"
-        findViewById<TextView>(R.id.log_text).text = log.toString()
+    private fun startProgressUi(op: DeployOp, retry: (() -> Unit)?) {
+        progressOp = op
+        progress = DeployProgress.initial(op)
+        progressRetryAction = retry
+        lineStream = LineStream()
+        findViewById<TextView>(R.id.progress_title).setText(titleForOp(op))
+        val target = findViewById<TextView>(R.id.progress_target)
+        if (store.hasConnection()) {
+            val saved = store.load()
+            target.text = "${saved.username}@${saved.host}:${saved.sshPort}"
+            target.visibility = View.VISIBLE
+        } else {
+            target.visibility = View.GONE
+        }
+        val container = findViewById<LinearLayout>(R.id.phase_container)
+        container.removeAllViews()
+        phaseRows = DeployProgress.phasesFor(op).map { id ->
+            val row = layoutInflater.inflate(R.layout.item_phase, container, false)
+            row.findViewById<TextView>(R.id.phase_label).setText(labelForPhase(id))
+            container.addView(row)
+            PhaseRow(
+                row.findViewById(R.id.phase_icon),
+                row.findViewById(R.id.phase_label),
+                row.findViewById(R.id.phase_state),
+            )
+        }
+        findViewById<View>(R.id.progress_linger_card).visibility = View.GONE
+        findViewById<View>(R.id.progress_state_card).visibility = View.GONE
+        renderProgress()
+        showScreen(Screen.PROGRESS)
     }
 
-    private fun append(message: String) {
-        val clean = message.trim()
-        if (clean.isEmpty()) return
-        if (log.isNotEmpty()) log.append('\n')
-        log.append(clean)
-        if (log.length > 60_000) log.delete(0, log.length - 40_000)
-        findViewById<TextView>(R.id.log_text).text = log.toString()
+    private fun updateProgress(transform: (DeployProgressState) -> DeployProgressState) {
+        val current = progress ?: return
+        progress = transform(current)
+        if (currentScreen == Screen.PROGRESS) renderProgress()
     }
 
-    private fun showSetup() {
-        findViewById<View>(R.id.setup_panel).visibility = View.VISIBLE
-        findViewById<View>(R.id.manage_panel).visibility = View.GONE
-        findViewById<View>(R.id.web_panel).visibility = View.GONE
+    private fun failProgress(message: String?) {
+        updateProgress { DeployProgress.fail(it, message) }
     }
 
-    private fun showManage() {
-        refreshSummary()
-        findViewById<View>(R.id.setup_panel).visibility = View.GONE
-        findViewById<View>(R.id.manage_panel).visibility = View.VISIBLE
-        findViewById<View>(R.id.web_panel).visibility = View.GONE
+    private fun renderProgress() {
+        val state = progress ?: return
+        stopPhaseAnimator()
+        val animations = NavigationPolicy.animationsEnabled(animatorScale())
+        state.phases.forEachIndexed { index, phase ->
+            val row = phaseRows.getOrNull(index) ?: return@forEachIndexed
+            when (phase.state) {
+                PhaseState.PENDING -> {
+                    row.icon.setImageResource(R.drawable.dot_idle)
+                    row.label.alpha = 1f
+                    row.state.setText(R.string.phase_state_pending)
+                    row.state.setTextColor(color(R.color.on_surface_variant))
+                }
+                PhaseState.ACTIVE -> {
+                    row.icon.setImageResource(R.drawable.ic_refresh)
+                    ImageViewCompat.setImageTintList(row.icon, ColorStateList.valueOf(color(R.color.primary)))
+                    row.label.alpha = 1f
+                    row.state.text = phase.detail?.takeIf { it.isNotBlank() }?.take(60)
+                        ?: getString(R.string.phase_state_active)
+                    row.state.setTextColor(color(R.color.primary))
+                    if (animations) startPhaseAnimator(row.icon)
+                }
+                PhaseState.DONE -> {
+                    row.icon.setImageResource(R.drawable.ic_check_circle)
+                    ImageViewCompat.setImageTintList(row.icon, ColorStateList.valueOf(color(R.color.status_success)))
+                    row.label.alpha = 1f
+                    row.state.text = phase.detail?.takeIf { it.isNotBlank() }?.take(60)
+                        ?: getString(R.string.phase_state_done)
+                    row.state.setTextColor(color(R.color.on_surface_variant))
+                }
+                PhaseState.FAILED -> {
+                    row.icon.setImageResource(R.drawable.ic_error)
+                    ImageViewCompat.setImageTintList(row.icon, ColorStateList.valueOf(color(R.color.status_error)))
+                    row.label.alpha = 1f
+                    row.state.setText(R.string.phase_state_failed)
+                    row.state.setTextColor(color(R.color.status_error))
+                }
+                PhaseState.SKIPPED -> {
+                    row.icon.setImageResource(R.drawable.dot_idle)
+                    row.label.alpha = 0.55f
+                    row.state.setText(R.string.phase_state_skipped)
+                    row.state.setTextColor(color(R.color.on_surface_variant))
+                }
+            }
+        }
+        val card = findViewById<MaterialCardView>(R.id.progress_state_card)
+        when {
+            state.failed -> {
+                card.visibility = View.VISIBLE
+                val icon = findViewById<ImageView>(R.id.progress_state_icon)
+                icon.setImageResource(R.drawable.ic_error)
+                ImageViewCompat.setImageTintList(icon, ColorStateList.valueOf(color(R.color.error)))
+                findViewById<TextView>(R.id.progress_state_title).setText(R.string.progress_failed_title)
+                findViewById<TextView>(R.id.progress_state_message).text = state.failureMessage.orEmpty()
+            }
+            state.stopped -> {
+                card.visibility = View.VISIBLE
+                val icon = findViewById<ImageView>(R.id.progress_state_icon)
+                icon.setImageResource(R.drawable.ic_warning)
+                ImageViewCompat.setImageTintList(icon, ColorStateList.valueOf(color(R.color.error)))
+                findViewById<TextView>(R.id.progress_state_title).setText(R.string.progress_stopped_title)
+                findViewById<TextView>(R.id.progress_state_message).setText(R.string.error_interrupted)
+            }
+            else -> card.visibility = View.GONE
+        }
+        findViewById<View>(R.id.progress_linger_card).visibility =
+            if (state.lingerNote) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.progress_busy).visibility =
+            if (job?.isActive == true && !state.failed && !state.stopped) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.progress_retry).isEnabled = job?.isActive != true
+        findViewById<View>(R.id.progress_log_scroll).visibility =
+            if (progressDetailsExpanded) View.VISIBLE else View.GONE
+        renderLogViews()
+    }
+
+    private fun startPhaseAnimator(view: View) {
+        activePhaseAnimator = ObjectAnimator.ofFloat(view, View.ROTATION, 0f, 360f).apply {
+            duration = PHASE_SPIN_MS
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            start()
+        }
+    }
+
+    private fun stopPhaseAnimator() {
+        activePhaseAnimator?.cancel()
+        activePhaseAnimator = null
+    }
+
+    /** Amber-dot pulse for Connecting/Reconnecting; only with system animations on. */
+    private fun setHomeDotPulse(dot: View, pulsing: Boolean) {
+        val animate = pulsing && NavigationPolicy.animationsEnabled(animatorScale())
+        if (animate && homeDotAnimator != null) return
+        stopHomeDotPulse()
+        if (!animate) return
+        homeDotAnimator = ObjectAnimator.ofFloat(dot, View.ALPHA, 1f, 0.35f).apply {
+            duration = HOME_PULSE_MS
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = LinearInterpolator()
+            start()
+        }
+    }
+
+    private fun stopHomeDotPulse() {
+        homeDotAnimator?.cancel()
+        homeDotAnimator = null
+        runCatching { findViewById<View>(R.id.home_status_dot).alpha = 1f }
+    }
+
+    private fun animatorScale(): Float = runCatching {
+        Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    }.getOrDefault(1f)
+
+    private fun confirmStopOperation() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.stop_dialog_title)
+            .setMessage(R.string.stop_dialog_body)
+            .setPositiveButton(R.string.stop_dialog_confirm) { _, _ -> stopOperation() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun stopOperation() {
+        job?.cancel()
+        autoReconnectJob?.cancel()
+        reconnectGate.userDisconnected()
+        wantConnected = false
+        ssh.disconnect()
+        invalidateTunnelAuthentication()
+        acceptedIdentity = null
+        updateProgress { DeployProgress.stop(it) }
+        append("Operation stopped")
+        errorBannerText = getString(R.string.error_interrupted)
+        errorBannerDetail = null
+        showScreen(Screen.HOME)
+    }
+
+    private fun titleForOp(op: DeployOp): Int = when (op) {
+        DeployOp.INSTALL -> R.string.progress_title_install
+        DeployOp.OPEN_MANAGED -> R.string.progress_title_open_managed
+        DeployOp.OPEN_EXISTING -> R.string.progress_title_open_existing
+        DeployOp.RESTART -> R.string.progress_title_restart
+        DeployOp.UPDATE -> R.string.progress_title_update
+        DeployOp.UNINSTALL -> R.string.progress_title_uninstall
+        DeployOp.STATUS -> R.string.progress_title_status
+    }
+
+    private fun labelForPhase(id: PhaseId): Int = when (id) {
+        PhaseId.CONNECT_SSH -> R.string.phase_connect_ssh
+        PhaseId.UPLOAD_INSTALLER -> R.string.phase_upload_installer
+        PhaseId.PREFLIGHT -> R.string.phase_preflight
+        PhaseId.DOWNLOAD -> R.string.phase_download
+        PhaseId.VERIFY_CHECKSUM -> R.string.phase_verify_checksum
+        PhaseId.UNPACK -> R.string.phase_unpack
+        PhaseId.VERIFY_BINARY -> R.string.phase_verify_binary
+        PhaseId.ACTIVATE -> R.string.phase_activate
+        PhaseId.SERVICE_READY -> R.string.phase_service_ready
+        PhaseId.RUN_COMMAND -> R.string.phase_run_command
+        PhaseId.PROBE_SERVICE -> R.string.phase_probe
+        PhaseId.OPEN_TUNNEL -> R.string.phase_tunnel
+        PhaseId.REOPEN_TUNNEL -> R.string.phase_reopen_tunnel
+        PhaseId.LAUNCH_WEB -> R.string.phase_launch
+    }
+
+    // ---------------------------------------------------------------------
+    // Web container
+    // ---------------------------------------------------------------------
+
+    private fun wireWeb() {
+        findViewById<Button>(R.id.web_nav_button).setOnClickListener {
+            if (webView?.canGoBack() == true) webView?.goBack() else showScreen(Screen.HOME)
+        }
+        findViewById<Button>(R.id.web_refresh_button).setOnClickListener { webView?.reload() }
+        findViewById<Button>(R.id.web_overflow_button).setOnClickListener { anchor ->
+            PopupMenu(this, anchor).apply {
+                menuInflater.inflate(R.menu.menu_web_overflow, menu)
+                setOnMenuItemClickListener { item ->
+                    when (item.itemId) {
+                        R.id.menu_reconnect -> { reconnectFlow(); true }
+                        R.id.menu_manage -> { showScreen(Screen.MANAGE); true }
+                        R.id.menu_disconnect -> { disconnect(); true }
+                        else -> false
+                    }
+                }
+                show()
+            }
+        }
+    }
+
+    /** The navigation slot is adaptive: back-arrow while history exists, else close. */
+    private fun updateWebNavIcon() {
+        val nav = findViewById<MaterialButton>(R.id.web_nav_button)
+        val canGoBack = webView?.canGoBack() == true
+        nav.setIconResource(if (canGoBack) R.drawable.ic_arrow_back else R.drawable.ic_close)
+        nav.contentDescription = getString(if (canGoBack) R.string.web_navigate_back else R.string.web_close)
     }
 
     private fun showWeb(port: Int) {
-        findViewById<TextView>(R.id.web_status).visibility = View.GONE
-        findViewById<View>(R.id.setup_panel).visibility = View.GONE
-        findViewById<View>(R.id.manage_panel).visibility = View.GONE
-        findViewById<View>(R.id.web_panel).visibility = View.VISIBLE
+        showScreen(Screen.WEB)
+        findViewById<View>(R.id.web_status_dot).setBackgroundResource(R.drawable.dot_success)
+        hideWebBanner()
+        updateWebNavIcon()
         attachWebView("http://$LOOPBACK:$port/")
     }
 
-    private fun showWebStatus(message: String) {
-        val status = findViewById<TextView>(R.id.web_status)
-        status.text = message
-        status.visibility = View.VISIBLE
+    private fun showWebBanner(message: String) {
+        if (currentScreen != Screen.WEB) return
+        bindBanner(findViewById(R.id.web_banner), message, detail = null, warning = true)
+        findViewById<View>(R.id.web_status_dot).setBackgroundResource(R.drawable.dot_warning)
+    }
+
+    private fun hideWebBanner() {
+        findViewById<View>(R.id.web_banner).visibility = View.GONE
+        if (currentScreen == Screen.WEB) {
+            findViewById<View>(R.id.web_status_dot).setBackgroundResource(R.drawable.dot_success)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -718,6 +1568,14 @@ class MainActivity : ComponentActivity() {
                 if (request.isForMainFrame && wantConnected && !ssh.isConnected()) scheduleReconnect()
             }
 
+            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                updateWebNavIcon()
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                updateWebNavIcon()
+            }
+
             override fun onReceivedHttpAuthRequest(view: WebView, handler: HttpAuthHandler, host: String, realm: String) {
                 if (!authReleaseAllowed(view.url, loadedUrl, host, localPort)) {
                     handler.cancel()
@@ -737,8 +1595,9 @@ class MainActivity : ComponentActivity() {
                 destroyWebView()
                 val now = SystemClock.elapsedRealtime()
                 if (detail.didCrash() && now - lastCrashAt < 10_000) {
-                    showWebStatus("WebView renderer crashed repeatedly.")
-                    showManage()
+                    errorBannerText = "WebView renderer crashed repeatedly."
+                    errorBannerDetail = null
+                    showScreen(Screen.HOME)
                 } else {
                     lastCrashAt = if (detail.didCrash()) now else 0L
                     if (localPort > 0) attachWebView("http://$LOOPBACK:$localPort/")
@@ -747,6 +1606,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         page.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                findViewById<LinearProgressIndicator>(R.id.web_progress).visibility =
+                    if (newProgress in 1..99) View.VISIBLE else View.GONE
+            }
+
             override fun onShowFileChooser(
                 view: WebView,
                 filePathCallback: ValueCallback<Array<Uri>>,
@@ -853,22 +1717,12 @@ class MainActivity : ComponentActivity() {
             handler.cancel()
             return
         }
-        val user = EditText(this).apply {
-            hint = getString(R.string.username)
-            setText(webUser)
-            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-        }
-        val pass = EditText(this).apply {
-            hint = getString(R.string.password)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-        }
-        val form = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 0)
-            addView(user)
-            addView(pass)
-        }
+        val form = layoutInflater.inflate(R.layout.dialog_basic_auth, null)
+        val user = form.findViewById<TextInputEditText>(R.id.auth_username_input)
+        val pass = form.findViewById<TextInputEditText>(R.id.auth_password_input)
+        user.setText(webUser)
+        user.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        pass.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         var handled = false
         fun finish(proceed: Boolean) {
             if (handled) return
@@ -883,52 +1737,15 @@ class MainActivity : ComponentActivity() {
             usedSavedWebPassword = true
             handler.proceed(webUser, pass.text.toString())
         }
-        authDialog = AlertDialog.Builder(this)
+        authDialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.auth_title)
-            .setMessage("Sign in to the forwarded OpenCode origin. Credentials are not put in the URL or saved on this phone.")
             .setView(form)
             .setPositiveButton(R.string.sign_in) { _, _ -> finish(true) }
             .setNegativeButton(R.string.cancel) { _, _ -> finish(false) }
             .setOnCancelListener { finish(false) }
             .show()
-    }
-
-    private fun promptWebPassword(onReady: (CharArray) -> Unit) {
-        val first = EditText(this).apply {
-            hint = getString(R.string.web_password_hint)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-        }
-        val second = EditText(this).apply {
-            hint = getString(R.string.web_password_confirm_hint)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-        }
-        val form = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 0)
-            addView(first)
-            addView(second)
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.web_password_title)
-            .setMessage(R.string.web_password_body)
-            .setView(form)
-            .setPositiveButton(R.string.continue_action, null)
-            .setNegativeButton(R.string.cancel, null)
-            .create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val password = first.text.toString()
-                if (password != second.text.toString() || !webPasswordAccepted(password)) {
-                    toast("Use matching passwords of at least 12 characters with a letter and a digit")
-                    return@setOnClickListener
-                }
-                dialog.dismiss()
-                onReady(password.toCharArray())
-            }
-        }
-        dialog.show()
+        // Dialogs focus their first field (spec §10).
+        user.requestFocus()
     }
 
     private fun saveDownload(request: PendingDownload, destination: Uri): Boolean =
@@ -983,8 +1800,123 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Management
+    // ---------------------------------------------------------------------
+
+    private fun wireManage() {
+        findViewById<Button>(R.id.manage_status_button).setOnClickListener { managedFlow("status") }
+        findViewById<Button>(R.id.manage_restart_button).setOnClickListener { managedFlow("restart") }
+        findViewById<Button>(R.id.manage_update_button).setOnClickListener { managedFlow("update") }
+        findViewById<Button>(R.id.manage_reconnect_button).setOnClickListener { reconnectFlow() }
+        findViewById<Button>(R.id.manage_edit_button).setOnClickListener { showScreen(Screen.SETUP) }
+        findViewById<Button>(R.id.manage_disconnect_button).setOnClickListener { disconnect() }
+        findViewById<Button>(R.id.manage_uninstall_button).setOnClickListener {
+            confirm(R.string.uninstall_title, R.string.uninstall_body) { managedFlow("uninstall") }
+        }
+        findViewById<Button>(R.id.manage_forget_button).setOnClickListener {
+            confirm(R.string.forget_title, R.string.forget_body) { forget() }
+        }
+        findViewById<Button>(R.id.manage_log_toggle).setOnClickListener {
+            manageLogExpanded = !manageLogExpanded
+            renderManage()
+        }
+    }
+
+    private fun renderManage() {
+        val target = findViewById<TextView>(R.id.manage_target)
+        if (store.hasConnection()) {
+            val saved = store.load()
+            target.text = "${saved.username}@${saved.host}:${saved.sshPort}"
+        } else {
+            target.text = getString(R.string.home_identity_unset)
+        }
+        val busy = job?.isActive == true
+        MANAGE_ACTION_IDS.forEach { findViewById<View>(it).isEnabled = !busy }
+        findViewById<View>(R.id.manage_log_scroll).visibility =
+            if (manageLogExpanded) View.VISIBLE else View.GONE
+        findViewById<Button>(R.id.manage_log_toggle)
+            .setText(if (manageLogExpanded) R.string.collapse else R.string.expand)
+        renderLogViews()
+    }
+
+    private fun managedFlow(command: String) {
+        if (!store.hasConnection()) {
+            showScreen(Screen.SETUP)
+            return
+        }
+        val op = when (command) {
+            "restart" -> DeployOp.RESTART
+            "update" -> DeployOp.UPDATE
+            "uninstall" -> DeployOp.UNINSTALL
+            else -> DeployOp.STATUS
+        }
+        launchOp(op, retry = { managedFlow(command) }) {
+            lastConnectError = null
+            lastConnectDetail = null
+            updateProgress { DeployProgress.activate(it, PhaseId.CONNECT_SSH) }
+            if (!ensureSsh()) {
+                failProgress(lastConnectError)
+                return@launchOp
+            }
+            managedNow(command)
+        }
+    }
+
+    private suspend fun managedNow(command: String) {
+        var uploadDir: String? = null
+        try {
+            val script = assets.open("install-opencode.sh").use { it.readBytes() }
+            updateProgress { DeployProgress.activate(it, PhaseId.UPLOAD_INSTALLER) }
+            val made = withContext(Dispatchers.IO) { ssh.exec(MKTEMP, timeoutMs = 20_000) }
+            val dir = made.stdout.trim()
+            if (made.exitCode != 0 || !uploadDirAllowed(dir)) {
+                failProgress(made.text.ifBlank { "Could not create a remote temporary directory" })
+                return
+            }
+            uploadDir = dir
+            val scriptPath = "$dir/install-opencode.sh"
+            withContext(Dispatchers.IO) { ssh.upload(script, scriptPath) }
+            updateProgress { DeployProgress.activate(it, PhaseId.RUN_COMMAND) }
+            val result = runScript(scriptPath, command, timeoutMs = 10 * 60_000)
+            if (result.exitCode != 0) {
+                append("Command failed")
+                failProgress("Command failed")
+                return
+            }
+            if (command == "restart" && localPort > 0) {
+                updateProgress { DeployProgress.activate(it, PhaseId.REOPEN_TUNNEL) }
+                openTunnel(MANAGED_PORT, LaunchMode.MANAGED)
+                if (progress?.failed == true) return
+            }
+            if (command == "uninstall") {
+                append("Android connection settings were kept. Forget connection is separate.")
+                // The managed service is gone: its tunnel is stale and no
+                // journey remains "last opened".
+                val hadTunnel = localPort > 0
+                stopWantingConnection()
+                if (hadTunnel) append("Tunnel closed: the managed service was removed.")
+                store.clearLastMode()
+            }
+            updateProgress { DeployProgress.succeed(it) }
+            snackbar(
+                getString(
+                    when (command) {
+                        "restart" -> R.string.managed_done_restart
+                        "update" -> R.string.managed_done_update
+                        "uninstall" -> R.string.managed_done_uninstall
+                        else -> R.string.managed_done_status
+                    }
+                )
+            )
+            showScreen(Screen.HOME)
+        } finally {
+            cleanupUploadDir(uploadDir)
+        }
+    }
+
     private fun confirm(title: Int, message: Int, action: () -> Unit) {
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(title)
             .setMessage(message)
             .setPositiveButton(R.string.continue_action) { _, _ -> action() }
@@ -992,18 +1924,104 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    private suspend fun ask(title: String, message: String, positive: String, negative: String): Boolean =
-        suspendCancellableCoroutine { cont ->
-            val dialog = AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(message)
-                .setPositiveButton(positive) { _, _ -> if (cont.isActive) cont.resume(true) }
-                .setNegativeButton(negative) { _, _ -> if (cont.isActive) cont.resume(false) }
-                .setOnCancelListener { if (cont.isActive) cont.resume(false) }
-                .create()
-            cont.invokeOnCancellation { dialog.dismiss() }
-            dialog.show()
+    // ---------------------------------------------------------------------
+    // Shared surfaces: banners, log, snackbar
+    // ---------------------------------------------------------------------
+
+    private fun wireBanners() {
+        findViewById<View>(R.id.home_error_banner).findViewById<Button>(R.id.banner_dismiss).setOnClickListener {
+            errorBannerText = null
+            errorBannerDetail = null
+            renderHome()
         }
+        findViewById<View>(R.id.setup_error_banner).findViewById<Button>(R.id.banner_dismiss).setOnClickListener {
+            errorBannerText = null
+            errorBannerDetail = null
+            renderSetup()
+        }
+        findViewById<View>(R.id.web_banner).findViewById<Button>(R.id.banner_dismiss).setOnClickListener {
+            hideWebBanner()
+        }
+    }
+
+    private fun bindBanner(root: View, title: String?, detail: String?, warning: Boolean) {
+        val card = root as MaterialCardView
+        if (title.isNullOrBlank()) {
+            card.visibility = View.GONE
+            return
+        }
+        card.visibility = View.VISIBLE
+        card.setCardBackgroundColor(
+            color(if (warning) R.color.banner_warning_background else R.color.error_container)
+        )
+        val foreground = color(if (warning) R.color.banner_warning_foreground else R.color.on_error_container)
+        val icon = root.findViewById<ImageView>(R.id.banner_icon)
+        icon.setImageResource(if (warning) R.drawable.ic_warning else R.drawable.ic_error)
+        ImageViewCompat.setImageTintList(
+            icon,
+            ColorStateList.valueOf(color(if (warning) R.color.banner_warning_foreground else R.color.error)),
+        )
+        val titleView = root.findViewById<TextView>(R.id.banner_title)
+        titleView.text = title
+        titleView.setTextColor(foreground)
+        val detailView = root.findViewById<TextView>(R.id.banner_detail)
+        if (detail.isNullOrBlank()) {
+            detailView.visibility = View.GONE
+        } else {
+            detailView.visibility = View.VISIBLE
+            detailView.text = detail
+            detailView.setTextColor(foreground)
+        }
+        val dismiss = root.findViewById<MaterialButton>(R.id.banner_dismiss)
+        dismiss.iconTint = ColorStateList.valueOf(foreground)
+    }
+
+    private fun append(message: String) {
+        val clean = message.trim()
+        if (clean.isEmpty()) return
+        if (log.isNotEmpty()) log.append('\n')
+        log.append(clean)
+        if (log.length > 60_000) log.delete(0, log.length - 40_000)
+        renderLogViews()
+    }
+
+    private fun renderLogViews() {
+        val text = log.toString()
+        val manageLog = findViewById<TextView>(R.id.manage_log)
+        manageLog.text = text.ifEmpty { getString(R.string.manage_log_empty) }
+        val progressLog = findViewById<TextView>(R.id.progress_log)
+        progressLog.text = text
+        if (progressDetailsExpanded && currentScreen == Screen.PROGRESS) {
+            findViewById<View>(R.id.progress_log_scroll).post {
+                findViewById<android.widget.ScrollView>(R.id.progress_log_scroll).fullScroll(View.FOCUS_DOWN)
+            }
+        }
+        if (manageLogExpanded && currentScreen == Screen.MANAGE) {
+            findViewById<View>(R.id.manage_log_scroll).post {
+                findViewById<android.widget.ScrollView>(R.id.manage_log_scroll).fullScroll(View.FOCUS_DOWN)
+            }
+        }
+    }
+
+    private fun refreshSurfaces() {
+        renderLogViews()
+        when (currentScreen) {
+            Screen.HOME -> renderHome()
+            Screen.MANAGE -> renderManage()
+            Screen.SETUP -> renderSetup()
+            else -> Unit
+        }
+    }
+
+    private fun snackbar(message: String) {
+        Snackbar.make(findViewById(R.id.root_container), message, Snackbar.LENGTH_LONG).show()
+    }
+
+    private fun color(res: Int): Int = ContextCompat.getColor(this, res)
+
+    // ---------------------------------------------------------------------
+    // Trust-boundary helpers (unchanged)
+    // ---------------------------------------------------------------------
 
     private fun syncTunnelIdentity(remotePort: Int) {
         val saved = store.load()
@@ -1058,9 +2076,6 @@ class MainActivity : ComponentActivity() {
         runCatching { WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword() }
     }
 
-    private var lastExternalUrl: String? = null
-    private var lastExternalAt = 0L
-
     private fun openExternal(uri: Uri?) {
         if (uri == null) return
         val value = uri.toString()
@@ -1088,10 +2103,7 @@ class MainActivity : ComponentActivity() {
         }
         webView = null
         loadedUrl = null
-    }
-
-    private fun toast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        findViewById<LinearProgressIndicator>(R.id.web_progress).visibility = View.GONE
     }
 
     private data class PendingDownload(val url: String, val mimeType: String, val name: String, val identity: String)
@@ -1101,7 +2113,26 @@ class MainActivity : ComponentActivity() {
         const val RECONNECT_SETTLE_MS = 400L
         const val MAX_KEY = 256 * 1024
         const val MAX_DOWNLOAD_REDIRECTS = 5
+        const val MIN_WEB_PASSWORD = 12
+        const val PHASE_SPIN_MS = 1200L
+        const val HOME_PULSE_MS = 900L
         val SCRIPT_COMMANDS = setOf("preflight", "install", "status", "restart", "update", "uninstall")
+        val MANAGE_ACTION_IDS = listOf(
+            R.id.manage_status_button, R.id.manage_restart_button, R.id.manage_update_button,
+            R.id.manage_reconnect_button, R.id.manage_edit_button, R.id.manage_disconnect_button,
+            R.id.manage_uninstall_button, R.id.manage_forget_button,
+        )
+        val WEB_OPENING_OPS = setOf(DeployOp.INSTALL, DeployOp.OPEN_MANAGED, DeployOp.OPEN_EXISTING)
+        val SCREEN_IDS = mapOf(
+            Screen.WELCOME to R.id.screen_welcome,
+            Screen.SETUP to R.id.screen_setup,
+            Screen.VERIFY to R.id.screen_verify,
+            Screen.HOME to R.id.screen_home,
+            Screen.PREPARE_INSTALL to R.id.screen_prepare,
+            Screen.PROGRESS to R.id.screen_progress,
+            Screen.WEB to R.id.screen_web,
+            Screen.MANAGE to R.id.screen_manage,
+        )
         const val MKTEMP =
             "mkdir -p \"\$HOME/.local/share/anthracite\" && mktemp -d \"\$HOME/.local/share/anthracite/upload.XXXXXX\""
     }

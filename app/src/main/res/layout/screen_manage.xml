@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/screen_manage"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="@dimen/screen_padding_h"
+        android:paddingVertical="@dimen/screen_padding_v">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/manage"
+            android:textAppearance="@style/TextAppearance.Anthracite.Headline" />
+
+        <TextView
+            android:id="@+id/manage_target"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xxs"
+            android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xl"
+            android:text="@string/manage_section_service"
+            android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_status_button"
+            style="@style/Widget.Anthracite.Button.Outlined"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/manage_status"
+            app:icon="@drawable/ic_info" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_restart_button"
+            style="@style/Widget.Anthracite.Button.Outlined"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/restart"
+            app:icon="@drawable/ic_restart" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_update_button"
+            style="@style/Widget.Anthracite.Button.Outlined"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/update"
+            app:icon="@drawable/ic_update" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xl"
+            android:text="@string/manage_section_connection"
+            android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_reconnect_button"
+            style="@style/Widget.Anthracite.Button.Outlined"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/reconnect"
+            app:icon="@drawable/ic_link" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_edit_button"
+            style="@style/Widget.Anthracite.Button.Outlined"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/edit_setup"
+            app:icon="@drawable/ic_edit" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_disconnect_button"
+            style="@style/Widget.Anthracite.Button.Outlined"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/disconnect"
+            app:icon="@drawable/ic_power" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xl"
+            android:text="@string/manage_section_danger"
+            android:textAppearance="@style/TextAppearance.Anthracite.Label"
+            android:textColor="@color/text_warning" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xs"
+            android:text="@string/manage_danger_note"
+            android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_uninstall_button"
+            style="@style/Widget.Anthracite.Button.Danger"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/uninstall"
+            app:icon="@drawable/ic_delete" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_forget_button"
+            style="@style/Widget.Anthracite.Button.Danger"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_s"
+            android:text="@string/forget"
+            app:icon="@drawable/ic_close" />
+
+        <TextView
+            android:id="@+id/manage_section_log_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xl"
+            android:text="@string/manage_section_log"
+            android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/manage_log_toggle"
+            style="@style/Widget.Anthracite.Button.Text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/expand"
+            app:icon="@drawable/ic_expand_more"
+            app:iconGravity="textEnd"
+            app:iconSize="@dimen/icon_m" />
+
+        <ScrollView
+            android:id="@+id/manage_log_scroll"
+            style="@style/Widget.Anthracite.LogSurface"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/log_panel_height_manage"
+            android:layout_marginBottom="@dimen/space_l"
+            android:accessibilityLiveRegion="polite"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/manage_log"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/manage_log_empty"
+                android:textAppearance="@style/TextAppearance.Anthracite.Log"
+                android:textIsSelectable="true" />
+        </ScrollView>
+    </LinearLayout>
+</ScrollView>

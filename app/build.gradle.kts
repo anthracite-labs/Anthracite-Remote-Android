@@ -58,8 +58,10 @@ android {
 
 dependencies {
     implementation("androidx.activity:activity:1.13.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.core:core:1.19.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+    implementation("com.google.android.material:material:1.13.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("com.github.mwiede:jsch:2.28.8")
     // JSch selects its Java 15 Ed25519/X25519 classes from a multi-release jar.
@@ -69,6 +71,8 @@ dependencies {
 
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.apache.sshd:sshd-core:2.20.0")
     testImplementation("org.slf4j:slf4j-nop:2.0.20")

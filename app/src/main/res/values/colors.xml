@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Anthracite Remote design tokens (light rendering).
+  Developer Dark design language: graphite neutrals, coal-green brand accent,
+  semantic status colors. Dark overrides live in values-night/colors.xml.
+  All pairs target WCAG AA (>=4.5:1 body text, >=3:1 UI components).
+-->
+<resources>
+    <!-- Surfaces -->
+    <color name="background">#F4F6F5</color>
+    <color name="on_background">#1F2933</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="on_surface">#1F2933</color>
+    <color name="surface_elevated">#EDF0EE</color>
+    <color name="on_surface_variant">#52606D</color>
+    <color name="outline">#7A8794</color>
+    <color name="outline_variant">#C6CFCA</color>
+    <color name="surface_inverse">#313A36</color>
+    <color name="on_surface_inverse">#F0F3F0</color>
+
+    <!-- Brand: coal green -->
+    <color name="primary">#3E7C59</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="primary_container">#D9E9DF</color>
+    <color name="on_primary_container">#1C3A2A</color>
+    <color name="primary_inverse">#8CCBA3</color>
+
+    <color name="secondary">#4F6357</color>
+    <color name="on_secondary">#FFFFFF</color>
+    <color name="secondary_container">#DDE5E0</color>
+    <color name="on_secondary_container">#1B2A22</color>
+
+    <color name="tertiary">#3F4850</color>
+    <color name="on_tertiary">#FFFFFF</color>
+    <color name="tertiary_container">#E1E8EC</color>
+    <color name="on_tertiary_container">#161D22</color>
+
+    <color name="error">#B3261E</color>
+    <color name="on_error">#FFFFFF</color>
+    <color name="error_container">#F9DEDC</color>
+    <color name="on_error_container">#410E0B</color>
+
+    <!-- Semantic status (dots, chips, phase icons) -->
+    <color name="status_success">#2E6B4A</color>
+    <color name="status_warning">#B26A00</color>
+    <color name="status_error">#B3261E</color>
+    <color name="status_idle">#7A8794</color>
+    <color name="text_warning">#8A5200</color>
+
+    <!-- Inline warning banner (web status strip lineage) -->
+    <color name="banner_warning_background">#FFF4E5</color>
+    <color name="banner_warning_foreground">#8A4B08</color>
+
+    <!-- Log / terminal surface keeps the developer-dark signature in both themes -->
+    <color name="log_background">#E7EBE8</color>
+    <color name="log_foreground">#334E68</color>
+</resources>

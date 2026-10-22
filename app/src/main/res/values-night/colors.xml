@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Anthracite Remote design tokens (dark rendering — the signature theme). -->
+<resources>
+    <!-- Surfaces: graphite with a faint green cast (anthracite) -->
+    <color name="background">#101413</color>
+    <color name="on_background">#E4E9E5</color>
+    <color name="surface">#171C1A</color>
+    <color name="on_surface">#E4E9E5</color>
+    <color name="surface_elevated">#1E2422</color>
+    <color name="on_surface_variant">#A7B2AC</color>
+    <color name="outline">#8A9490</color>
+    <color name="outline_variant">#2E3634</color>
+    <color name="surface_inverse">#E4E9E5</color>
+    <color name="on_surface_inverse">#171C1A</color>
+
+    <!-- Brand: brightened coal green for contrast on graphite -->
+    <color name="primary">#7DC89B</color>
+    <color name="on_primary">#10241A</color>
+    <color name="primary_container">#2C5540</color>
+    <color name="on_primary_container">#CFEBD9</color>
+    <color name="primary_inverse">#3E7C59</color>
+
+    <color name="secondary">#B6CCC0</color>
+    <color name="on_secondary">#22352C</color>
+    <color name="secondary_container">#32483D</color>
+    <color name="on_secondary_container">#D2E8DC</color>
+
+    <color name="tertiary">#B9C4CB</color>
+    <color name="on_tertiary">#232C31</color>
+    <color name="tertiary_container">#39424A</color>
+    <color name="on_tertiary_container">#D5E0E7</color>
+
+    <color name="error">#F2B8B5</color>
+    <color name="on_error">#601410</color>
+    <color name="error_container">#8C1D18</color>
+    <color name="on_error_container">#F9DEDC</color>
+
+    <!-- Semantic status -->
+    <color name="status_success">#6FCF97</color>
+    <color name="status_warning">#F2B84C</color>
+    <color name="status_error">#F2726B</color>
+    <color name="status_idle">#8A9490</color>
+    <color name="text_warning">#F2B84C</color>
+
+    <!-- Inline warning banner -->
+    <color name="banner_warning_background">#3A2E1A</color>
+    <color name="banner_warning_foreground">#F0C48A</color>
+
+    <!-- Log / terminal surface -->
+    <color name="log_background">#0C100F</color>
+    <color name="log_foreground">#9FD4B2</color>
+</resources>

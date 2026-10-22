@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/screen_progress"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="@dimen/screen_padding_h"
+        android:paddingVertical="@dimen/screen_padding_v">
+
+        <TextView
+            android:id="@+id/progress_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/progress_title_install"
+            android:textAppearance="@style/TextAppearance.Anthracite.Headline" />
+
+        <TextView
+            android:id="@+id/progress_target"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xxs"
+            android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall"
+            android:visibility="gone" />
+
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progress_busy"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_m"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:indicatorColor="@color/primary"
+            app:trackColor="@color/outline_variant"
+            app:trackThickness="@dimen/stroke_thin" />
+
+        <LinearLayout
+            android:id="@+id/phase_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_l"
+            android:orientation="vertical" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/progress_state_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_l"
+            android:visibility="gone"
+            app:cardBackgroundColor="@color/error_container"
+            app:cardCornerRadius="@dimen/radius_m"
+            app:cardElevation="0dp"
+            app:strokeWidth="0dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="@dimen/space_l">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/progress_state_icon"
+                        android:layout_width="@dimen/icon_m"
+                        android:layout_height="@dimen/icon_m"
+                        android:contentDescription="@null"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_error"
+                        app:tint="@color/error" />
+
+                    <TextView
+                        android:id="@+id/progress_state_title"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_s"
+                        android:layout_weight="1"
+                        android:text="@string/progress_failed_title"
+                        android:textAppearance="@style/TextAppearance.Anthracite.Body"
+                        android:textColor="@color/on_error_container"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/progress_state_message"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_s"
+                    android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall"
+                    android:textColor="@color/on_error_container"
+                    android:textIsSelectable="true" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_m"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/progress_retry"
+                        style="@style/Widget.Anthracite.Button.Text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/try_again"
+                        android:textColor="@color/on_error_container"
+                        app:icon="@drawable/ic_refresh"
+                        app:iconTint="@color/on_error_container" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/progress_back_home"
+                        style="@style/Widget.Anthracite.Button.Text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/space_s"
+                        android:text="@string/back"
+                        android:textColor="@color/on_error_container"
+                        app:iconTint="@color/on_error_container" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <LinearLayout
+            android:id="@+id/progress_linger_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_l"
+            android:background="@drawable/bg_banner_warning"
+            android:orientation="horizontal"
+            android:padding="@dimen/space_m"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="@dimen/icon_m"
+                android:layout_height="@dimen/icon_m"
+                android:layout_marginTop="@dimen/space_xxs"
+                android:contentDescription="@null"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_warning"
+                app:tint="@color/banner_warning_foreground" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/space_s"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/progress_note_linger_title"
+                    android:textAppearance="@style/TextAppearance.Anthracite.Body"
+                    android:textColor="@color/banner_warning_foreground"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_xs"
+                    android:text="@string/progress_note_linger_body"
+                    android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall"
+                    android:textColor="@color/banner_warning_foreground" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/progress_details_toggle"
+            style="@style/Widget.Anthracite.Button.Text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_m"
+            android:text="@string/progress_details"
+            app:icon="@drawable/ic_expand_more"
+            app:iconGravity="textEnd"
+            app:iconSize="@dimen/icon_m" />
+
+        <ScrollView
+            android:id="@+id/progress_log_scroll"
+            style="@style/Widget.Anthracite.LogSurface"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/log_panel_height_progress"
+            android:layout_marginBottom="@dimen/space_l"
+            android:accessibilityLiveRegion="polite"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/progress_log"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="@style/TextAppearance.Anthracite.Log"
+                android:textIsSelectable="true" />
+        </ScrollView>
+    </LinearLayout>
+</ScrollView>

@@ -70,10 +70,22 @@ internal class ConnectionStore(context: Context) {
             .putString(KEY_AUTH, if (auth == AuthMethod.KEY) AUTH_KEY else AUTH_PASSWORD)
             .putInt(KEY_REMOTE_PORT, remotePort)
             .putString(KEY_KEY_NAME, keyName)
-        // Host keys are scoped to the network endpoint, not to credentials.
-        if (prefs.getString(KEY_HOST, "") != trimmedHost || prefs.getInt(KEY_SSH_PORT, 22) != sshPort) {
+        // A remembered OpenCode journey belongs to the complete connection
+        // profile. Never reuse its "Open" action for a different user, host,
+        // authentication method, key, or target port.
+        val endpointChanged = prefs.getString(KEY_HOST, "") != trimmedHost ||
+            prefs.getInt(KEY_SSH_PORT, 22) != sshPort
+        val profileChanged = endpointChanged ||
+            prefs.getString(KEY_USER, "") != username.trim() ||
+            prefs.getString(KEY_AUTH, AUTH_PASSWORD) !=
+                (if (auth == AuthMethod.KEY) AUTH_KEY else AUTH_PASSWORD) ||
+            prefs.getInt(KEY_REMOTE_PORT, 4096) != remotePort ||
+            prefs.getString(KEY_KEY_NAME, "") != keyName
+        if (endpointChanged) {
+            // SSH host keys belong to the network endpoint, not to credentials.
             editor.remove(KEY_HOST_KEY).remove(KEY_HOST_KEY_TYPE).remove(KEY_FINGERPRINT)
         }
+        if (profileChanged) editor.remove(KEY_LAST_MODE)
         persist(editor)
     }
 
@@ -154,6 +166,35 @@ internal class ConnectionStore(context: Context) {
         persist(prefs.edit().clear())
     }
 
+    /**
+     * Non-secret UI journey state, stored beside the profile so [forget] clears
+     * it with everything else. [lastMode] records which remote OpenCode the
+     * phone opened most recently so the Home action reconnects the same journey;
+     * it is never used to infer trust or credentials.
+     */
+    fun lastMode(): LaunchMode? = when (prefs.getString(KEY_LAST_MODE, null)) {
+        MODE_MANAGED -> LaunchMode.MANAGED
+        MODE_EXISTING -> LaunchMode.EXISTING
+        else -> null
+    }
+
+    fun saveLastMode(mode: LaunchMode) {
+        persist(
+            prefs.edit().putString(KEY_LAST_MODE, if (mode == LaunchMode.MANAGED) MODE_MANAGED else MODE_EXISTING)
+        )
+    }
+
+    /** Used after the managed service is uninstalled: no journey is "last" anymore. */
+    fun clearLastMode() {
+        persist(prefs.edit().remove(KEY_LAST_MODE))
+    }
+
+    fun introSeen(): Boolean = prefs.getBoolean(KEY_INTRO_SEEN, false)
+
+    fun setIntroSeen(seen: Boolean) {
+        persist(prefs.edit().putBoolean(KEY_INTRO_SEEN, seen))
+    }
+
     private fun encryptedBlobForRollback(): ByteArray? {
         val file = secretFile()
         if (!file.exists()) return null
@@ -205,5 +246,9 @@ internal class ConnectionStore(context: Context) {
         const val KEY_FINGERPRINT = "fingerprint"
         const val AUTH_PASSWORD = "password"
         const val AUTH_KEY = "key"
+        const val KEY_LAST_MODE = "last_mode"
+        const val KEY_INTRO_SEEN = "intro_seen"
+        const val MODE_MANAGED = "managed"
+        const val MODE_EXISTING = "existing"
     }
 }

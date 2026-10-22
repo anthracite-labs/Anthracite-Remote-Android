@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/screen_home"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="@dimen/screen_padding_h"
+        android:paddingVertical="@dimen/screen_padding_v">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/home_overflow_button"
+            style="@style/Widget.Anthracite.Button.Icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:contentDescription="@string/more_actions"
+            app:icon="@drawable/ic_more_vert" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/home_section_server"
+            android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+
+        <TextView
+            android:id="@+id/home_server_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xxs"
+            android:text="@string/home_identity_unset"
+            android:textAppearance="@style/TextAppearance.Anthracite.Display" />
+
+        <TextView
+            android:id="@+id/home_server_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xs"
+            android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/home_status_card"
+            style="@style/Widget.Anthracite.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_l">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="@dimen/touch_target_min"
+                android:orientation="horizontal"
+                android:paddingHorizontal="@dimen/space_l"
+                android:paddingVertical="@dimen/space_m">
+
+                <View
+                    android:id="@+id/home_status_dot"
+                    android:layout_width="@dimen/dot_size"
+                    android:layout_height="@dimen/dot_size"
+                    android:background="@drawable/dot_idle" />
+
+                <TextView
+                    android:id="@+id/home_status_text"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/space_m"
+                    android:layout_weight="1"
+                    android:accessibilityLiveRegion="polite"
+                    android:text="@string/home_status_idle"
+                    android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <include
+            android:id="@+id/home_error_banner"
+            layout="@layout/view_error_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_l" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/home_cta"
+            style="@style/Widget.Anthracite.Button.Cta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_l"
+            android:text="@string/cta_setup"
+            app:icon="@drawable/ic_launch" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/home_secondary"
+            style="@style/Widget.Anthracite.Button.Text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xs"
+            android:text="@string/cta_secondary_existing" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/home_details_toggle"
+            style="@style/Widget.Anthracite.Button.Text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_m"
+            android:text="@string/home_details_toggle"
+            app:icon="@drawable/ic_expand_more"
+            app:iconGravity="textEnd"
+            app:iconSize="@dimen/icon_m" />
+
+        <LinearLayout
+            android:id="@+id/home_details_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_s"
+                android:text="@string/home_details_fingerprint"
+                android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+
+            <TextView
+                android:id="@+id/home_fingerprint_value"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xxs"
+                android:text="@string/home_details_fingerprint_unset"
+                android:textAppearance="@style/TextAppearance.Anthracite.Mono"
+                android:textIsSelectable="true" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_m"
+                android:text="@string/home_details_tunnel"
+                android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+
+            <TextView
+                android:id="@+id/home_tunnel_value"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xxs"
+                android:text="@string/home_details_tunnel_none"
+                android:textAppearance="@style/TextAppearance.Anthracite.Mono" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_m"
+                android:text="@string/home_details_mode"
+                android:textAppearance="@style/TextAppearance.Anthracite.Label" />
+
+            <TextView
+                android:id="@+id/home_mode_value"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xxs"
+                android:textAppearance="@style/TextAppearance.Anthracite.Mono" />
+
+            <TextView
+                android:id="@+id/home_remote_port_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_m"
+                android:text="@string/home_details_remote_port"
+                android:textAppearance="@style/TextAppearance.Anthracite.Label"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/home_remote_port_value"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xxs"
+                android:textAppearance="@style/TextAppearance.Anthracite.Mono"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_3xl"
+            android:text="@string/home_footer"
+            android:textAppearance="@style/TextAppearance.Anthracite.MonoSmall" />
+    </LinearLayout>
+</ScrollView>

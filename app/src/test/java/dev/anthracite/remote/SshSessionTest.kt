@@ -4,11 +4,16 @@ import com.jcraft.jsch.JSch
 import org.apache.sshd.common.config.keys.KeyUtils
 import org.apache.sshd.common.keyprovider.KeyPairProvider
 import org.apache.sshd.common.util.security.SecurityUtils
+import org.apache.sshd.server.Environment
+import org.apache.sshd.server.ExitCallback
 import org.apache.sshd.server.SshServer
 import org.apache.sshd.server.auth.password.PasswordAuthenticator
 import org.apache.sshd.server.auth.password.UserAuthPasswordFactory
 import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator
 import org.apache.sshd.server.auth.pubkey.UserAuthPublicKeyFactory
+import org.apache.sshd.server.channel.ChannelSession
+import org.apache.sshd.server.command.Command
+import org.apache.sshd.server.command.CommandFactory
 import org.apache.sshd.server.forward.AcceptAllForwardingFilter
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.junit.Assert.assertEquals
@@ -17,6 +22,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -26,6 +33,7 @@ import java.nio.file.Files
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.spec.ECGenParameterSpec
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -280,6 +288,75 @@ class SshSessionTest {
             peer.join(1_000)
             client.disconnect()
         }
+    }
+
+    @Test
+    fun `exec streams output lines to the additive listener without changing the result`() {
+        val stderrLine = "warn: streamed-stderr"
+        val stdoutLines = listOf("step: download", "step: verify-hash", "ok: done")
+        withAndroidAlgorithms {
+            val server = sshServer(ecdsaHostKey(), AtomicInteger())
+            server.commandFactory = CommandFactory { _, _ -> streamingCommand(stdoutLines, stderrLine) }
+            server.start()
+            val client = SshClient()
+            try {
+                val unknown = client.connect(passwordTarget(server.port), null) as? ConnectOutcome.UnknownHostKey
+                assertNotNull("server did not present a host key", unknown)
+                assertTrue(client.connect(passwordTarget(server.port), unknown!!.key) is ConnectOutcome.Connected)
+
+                val stream = LineStream()
+                val received = CopyOnWriteArrayList<String>()
+                val result = client.exec("stream-test", timeoutMs = 15_000) { chunk -> received.addAll(stream.accept(chunk)) }
+                received.addAll(stream.flush())
+
+                assertEquals(0, result.exitCode)
+                assertEquals(
+                    "streamed stdout lines in order",
+                    stdoutLines,
+                    received.filterNot { it == stderrLine },
+                )
+                assertTrue("streamed stderr line", received.contains(stderrLine))
+                stdoutLines.forEach { assertTrue("result stdout is complete", result.stdout.contains(it)) }
+                assertTrue("result stderr is complete", result.stderr.contains(stderrLine))
+
+                // The default (no listener) path returns an identical result.
+                val silent = client.exec("stream-test", timeoutMs = 15_000)
+                assertEquals(result.stdout, silent.stdout)
+                assertEquals(result.stderr, silent.stderr)
+                assertEquals(result.exitCode, silent.exitCode)
+            } finally {
+                client.disconnect()
+                server.stop(true)
+            }
+        }
+    }
+
+    private fun streamingCommand(stdoutLines: List<String>, stderrLine: String) = object : Command {
+        private var output: OutputStream? = null
+        private var error: OutputStream? = null
+        private var exit: ExitCallback? = null
+
+        override fun setInputStream(`in`: InputStream) = Unit
+        override fun setOutputStream(out: OutputStream) { output = out }
+        override fun setErrorStream(err: OutputStream) { error = err }
+        override fun setExitCallback(callback: ExitCallback) { exit = callback }
+
+        override fun start(channelSession: ChannelSession?, env: Environment?) {
+            val out = output
+            if (out == null) {
+                exit?.onExit(1)
+                return
+            }
+            stdoutLines.forEach { line -> out.write((line + "\n").toByteArray(Charsets.UTF_8)) }
+            out.flush()
+            error?.let { err ->
+                err.write((stderrLine + "\n").toByteArray(Charsets.UTF_8))
+                err.flush()
+            }
+            exit?.onExit(0)
+        }
+
+        override fun destroy(channelSession: ChannelSession?) = Unit
     }
 
     private fun sshServer(hostKey: KeyPair, attempts: AtomicInteger): SshServer {

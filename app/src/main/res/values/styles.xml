@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Typography: system sans for prose, monospace for technical identity. -->
+    <style name="TextAppearance.Anthracite.Display" parent="TextAppearance.Material3.HeadlineMedium">
+        <item name="android:textSize">@dimen/text_display</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">-0.01</item>
+        <item name="android:textColor">?attr/colorOnBackground</item>
+    </style>
+
+    <style name="TextAppearance.Anthracite.Headline" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="android:textSize">@dimen/text_headline</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">?attr/colorOnBackground</item>
+    </style>
+
+    <style name="TextAppearance.Anthracite.Title" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
+    </style>
+
+    <style name="TextAppearance.Anthracite.Body" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
+    </style>
+
+    <style name="TextAppearance.Anthracite.Label" parent="TextAppearance.Material3.LabelMedium">
+        <item name="android:textSize">@dimen/text_label</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.06</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
+    </style>
+
+    <style name="TextAppearance.Anthracite.Mono" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textSize">@dimen/text_mono</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
+    </style>
+
+    <style name="TextAppearance.Anthracite.MonoSmall" parent="TextAppearance.Anthracite.Mono">
+        <item name="android:textSize">@dimen/text_mono_small</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
+    </style>
+
+    <style name="TextAppearance.Anthracite.Log" parent="TextAppearance.Anthracite.MonoSmall">
+        <item name="android:textColor">@color/log_foreground</item>
+        <item name="android:lineSpacingMultiplier">1.3</item>
+    </style>
+
+    <!-- Buttons: 48dp+ targets, 8dp corners (technical, not pill). -->
+    <style name="Widget.Anthracite.Button" parent="Widget.Material3.Button">
+        <item name="android:minHeight">@dimen/touch_target_min</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textSize">@dimen/text_button</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">@dimen/radius_s</item>
+    </style>
+
+    <style name="Widget.Anthracite.Button.Cta" parent="Widget.Anthracite.Button">
+        <item name="android:minHeight">@dimen/cta_min_height</item>
+        <item name="android:textStyle">bold</item>
+        <item name="iconGravity">textStart</item>
+        <item name="iconPadding">@dimen/space_s</item>
+        <item name="iconSize">@dimen/icon_m</item>
+    </style>
+
+    <style name="Widget.Anthracite.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">@dimen/touch_target_min</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textSize">@dimen/text_button</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">@dimen/radius_s</item>
+    </style>
+
+    <style name="Widget.Anthracite.Button.Text" parent="Widget.Material3.Button.TextButton">
+        <item name="android:minHeight">@dimen/touch_target_min</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textSize">@dimen/text_button</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">@dimen/radius_s</item>
+    </style>
+
+    <style name="Widget.Anthracite.Button.Danger" parent="Widget.Anthracite.Button.Outlined">
+        <item name="strokeColor">@color/error</item>
+        <item name="android:textColor">@color/error</item>
+        <item name="iconTint">@color/error</item>
+        <item name="rippleColor">@color/error_container</item>
+    </style>
+
+    <style name="Widget.Anthracite.Button.Icon" parent="Widget.Material3.Button.IconButton">
+        <item name="android:minWidth">@dimen/touch_target_min</item>
+        <item name="android:minHeight">@dimen/touch_target_min</item>
+        <item name="iconSize">@dimen/icon_l</item>
+        <item name="iconTint">?attr/colorOnSurfaceVariant</item>
+    </style>
+
+    <!-- Inputs -->
+    <style name="Widget.Anthracite.TextField" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="boxCornerRadiusTopStart">@dimen/radius_s</item>
+        <item name="boxCornerRadiusTopEnd">@dimen/radius_s</item>
+        <item name="boxCornerRadiusBottomStart">@dimen/radius_s</item>
+        <item name="boxCornerRadiusBottomEnd">@dimen/radius_s</item>
+        <item name="errorTextColor">@color/error</item>
+        <item name="boxStrokeErrorColor">@color/error</item>
+    </style>
+
+    <style name="Widget.Anthracite.TextField.Monospace" parent="Widget.Anthracite.TextField">
+        <item name="materialThemeOverlay">@style/ThemeOverlay.Anthracite.TextField.Mono</item>
+    </style>
+
+    <style name="ThemeOverlay.Anthracite.TextField.Mono" parent="">
+        <item name="editTextStyle">@style/Widget.Anthracite.EditText.Mono</item>
+    </style>
+
+    <style name="Widget.Anthracite.EditText.Mono" parent="Widget.Material3.TextInputEditText.OutlinedBox">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:minHeight">@dimen/touch_target_min</item>
+    </style>
+
+    <!-- Surfaces -->
+    <style name="Widget.Anthracite.Card" parent="Widget.Material3.CardView.Outlined">
+        <item name="cardCornerRadius">@dimen/radius_m</item>
+        <item name="cardBackgroundColor">@color/surface_elevated</item>
+        <item name="strokeColor">@color/outline_variant</item>
+        <item name="strokeWidth">@dimen/stroke_thin</item>
+        <item name="cardElevation">0dp</item>
+    </style>
+
+    <style name="Widget.Anthracite.Toolbar" parent="Widget.Material3.Toolbar">
+        <item name="android:background">@color/surface</item>
+        <item name="android:minHeight">@dimen/toolbar_height</item>
+        <item name="titleTextColor">@color/on_surface</item>
+        <item name="titleTextAppearance">@style/TextAppearance.Anthracite.Title</item>
+        <item name="navigationIconTint">?attr/colorOnSurface</item>
+    </style>
+
+    <style name="Widget.Anthracite.LogSurface" parent="">
+        <item name="android:background">@color/log_background</item>
+        <item name="android:padding">@dimen/space_m</item>
+    </style>
+
+    <!-- Dialogs keep the 16dp radius token instead of the M3 default. -->
+    <style name="ThemeOverlay.Anthracite.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.Anthracite.Dialog</item>
+    </style>
+
+    <style name="ShapeAppearance.Anthracite.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">@dimen/radius_l</item>
+    </style>
+</resources>
