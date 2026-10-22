@@ -31,6 +31,7 @@ import dev.anthracite.remote.ui.RowAdapter
 import dev.anthracite.remote.ui.addActionButton
 import dev.anthracite.remote.ui.confirm
 import dev.anthracite.remote.workspace.Workspace
+import dev.anthracite.remote.workspace.connectWorkspace
 import dev.anthracite.remote.workspace.io
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch

@@ -13,5 +13,4 @@
     android:minWidth="@dimen/touch_target_min"
     android:minHeight="@dimen/touch_target_min"
     android:paddingHorizontal="@dimen/space_m"
-    android:textSize="@dimen/text_label"
-    app:checkable="true" />
+    android:textSize="@dimen/text_label" />

@@ -333,6 +333,18 @@ internal data class RepoRef(val owner: String, val repo: String) {
  * token that can be revoked independently. Every write is a separate, explicit
  * call that the UI must confirm with the exact target visible.
  */
+internal enum class ReviewEvent(val apiValue: String, val label: String) {
+    COMMENT("COMMENT", "Comment"),
+    APPROVE("APPROVE", "Approve"),
+    REQUEST_CHANGES("REQUEST_CHANGES", "Request changes"),
+}
+
+internal enum class MergeMethod(val apiValue: String, val label: String) {
+    MERGE("merge", "Create a merge commit"),
+    SQUASH("squash", "Squash and merge"),
+    REBASE("rebase", "Rebase and merge"),
+}
+
 internal class GitHubApi(
     private val transport: HttpTransport,
     private val tokenProvider: () -> String?,
@@ -453,6 +465,7 @@ internal class GitHubApi(
                 },
             )
         }
+    }
 
     fun commentOnIssue(repo: RepoRef, number: Int, body: String): GitHubResult<String> {
         val safeBody = sanitizeBody(body) ?: return GitHubResult.Invalid("Comment is empty")
@@ -618,18 +631,6 @@ internal class GitHubApi(
             }
         }
         return builder.toString()
-    }
-
-    internal enum class ReviewEvent(val apiValue: String, val label: String) {
-        COMMENT("COMMENT", "Comment"),
-        APPROVE("APPROVE", "Approve"),
-        REQUEST_CHANGES("REQUEST_CHANGES", "Request changes"),
-    }
-
-    internal enum class MergeMethod(val apiValue: String, val label: String) {
-        MERGE("merge", "Create a merge commit"),
-        SQUASH("squash", "Squash and merge"),
-        REBASE("rebase", "Rebase and merge"),
     }
 
     private companion object {
