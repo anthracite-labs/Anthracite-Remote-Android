@@ -46,7 +46,9 @@ internal data class KubePod(
 
 internal object DeployCommands {
     fun detectTools(): String =
-        "for t in docker podman kubectl systemctl; do p=$(command -v \"$t\" 2>/dev/null) && printf 'tool.%s=%s\\n' \"$t\" \"$p\"; done"
+        "for t in docker podman kubectl systemctl; do " +
+            "p=$(command -v \"\$t\" 2>/dev/null) && " +
+            "printf 'tool.%s=%s\\n' \"\$t\" \"\$p\"; done"
 
     fun dockerPs(): String = "docker ps -a --no-trunc --format '{{json .}}'"
 
@@ -202,7 +204,8 @@ internal fun parsePodmanPs(stdout: String): Pair<List<ContainerSummary>, Int> {
 /** Parses `kubectl get pods -o json`. */
 internal fun parseKubePods(stdout: String): Pair<List<KubePod>, String?> {
     val root = runCatching { MiniJson.parse(stdout) }.getOrNull() ?: return emptyList<KubePod>() to "unreadable JSON"
-    val items = root.obj("items")?.asArray()?.items ?: return emptyList<KubePod>() to "no items in response"
+    val items = root.asObject()?.obj("items")?.asArray()?.items
+        ?: return emptyList<KubePod>() to "no items in response"
     val pods = items.mapNotNull { item ->
         val pod = item.asObject() ?: return@mapNotNull null
         val metadata = pod.obj("metadata") ?: return@mapNotNull null
