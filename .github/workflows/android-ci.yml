@@ -76,7 +76,7 @@ jobs:
           java-version: "17"
           cache: gradle
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4.0.1
+        uses: android-actions/setup-android@v4.0.4
         with:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
@@ -159,7 +159,7 @@ jobs:
           java-version: "17"
           cache: gradle
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4.0.1
+        uses: android-actions/setup-android@v4.0.4
         with:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
@@ -204,7 +204,7 @@ jobs:
           java-version: "17"
           cache: gradle
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4.0.1
+        uses: android-actions/setup-android@v4.0.4
         with:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
