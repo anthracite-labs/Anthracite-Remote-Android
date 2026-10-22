@@ -64,8 +64,14 @@ internal object TmuxCommands {
 
     fun killSession(name: String): String = "tmux kill-session -t ${quoteName(name)}"
 
+    /**
+     * tmux reads `:` as a session/window separator and `.` as a window/pane
+     * separator, so a name containing either addresses something other than the
+     * session the user picked. Such names are refused rather than quoted.
+     */
     fun quoteName(name: String): String {
         require(PosixShell.isToolName(name)) { "invalid tmux session name" }
+        require(!name.contains(':') && !name.contains('.')) { "tmux session name contains a target separator" }
         return PosixShell.quote(name)
     }
 }

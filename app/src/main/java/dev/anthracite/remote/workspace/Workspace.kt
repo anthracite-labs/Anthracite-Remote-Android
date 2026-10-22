@@ -43,6 +43,17 @@ internal object Workspace {
     var profile: HostProfile? = null
         private set
 
+    /**
+     * Records the profile a successful connection belongs to.
+     *
+     * The setter stays private: only a completed host-key decision may change the
+     * active profile, so no screen can point the workspace at a host it has not
+     * authenticated.
+     */
+    fun adopt(connected: HostProfile) {
+        profile = connected
+    }
+
     var lastFacts: HostFacts? = null
 
     fun store(context: Context): HostStore {
@@ -138,7 +149,7 @@ internal suspend fun connectWorkspace(activity: Activity, profile: HostProfile):
     )
     return when (val outcome = Workspace.ssh.connect(target, profile.hostKey)) {
         is ConnectOutcome.Connected -> {
-            Workspace.profile = profile
+            Workspace.adopt(profile)
             runCatching { store.markUsed(profile.id, System.currentTimeMillis()) }
             null
         }
@@ -151,7 +162,7 @@ internal suspend fun connectWorkspace(activity: Activity, profile: HostProfile):
             runCatching { store.updateHostKey(profile.id, outcome.key, outcome.keyType, outcome.fingerprint) }
             val retry = Workspace.ssh.connect(target, outcome.key)
             if (retry is ConnectOutcome.Connected) {
-                Workspace.profile = store.find(profile.id) ?: profile
+                Workspace.adopt(store.find(profile.id) ?: profile)
                 null
             } else {
                 describeFailure(retry)

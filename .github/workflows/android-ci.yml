@@ -180,16 +180,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resource, id, manifest and secret checks
         run: python3 ci/static_checks.py
-      - name: Every shell script parses under bash and dash
+      - name: Every committed shell script parses
         run: |
           set -euo pipefail
+          status=0
           while IFS= read -r script; do
-            bash -n "$script"
-            case "$script" in
-              app/src/test/host/*|*provision-run-test*) continue ;;
-            esac
-            dash -n "$script" || echo "::warning file=$script::not dash-compatible (bash-only by design)"
+            if ! bash -n "$script"; then
+              echo "::error file=$script::$script does not parse under bash"
+              status=1
+            fi
           done < <(git ls-files '*.sh')
+          exit "$status"
 
   unit_tests:
     name: JUnit — ${{ matrix.test_class }}
@@ -211,6 +212,7 @@ jobs:
           - test_class: ReconnectGateTest
           - test_class: SshSessionTest
           - test_class: DeployParserTest
+          - test_class: GitHubApiTest
           - test_class: GitHubTokenStoreTest
           - test_class: GitParserTest
           - test_class: HostFactsParserTest
@@ -222,6 +224,7 @@ jobs:
           - test_class: RemotePathTest
           - test_class: SecretStoreTest
           - test_class: SftpBrowserTest
+          - test_class: TmuxParsingTest
           - test_class: TerminalEmulatorTest
           - test_class: TerminalKeysTest
     steps:

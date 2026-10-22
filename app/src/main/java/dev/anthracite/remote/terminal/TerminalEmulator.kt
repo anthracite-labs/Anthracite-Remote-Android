@@ -775,12 +775,12 @@ internal class TerminalEmulator(
     }
 
     private fun parseExtendedColor(start: Int): ExtendedColor {
-        if (start >= paramCount) return ExtendedColor(COLOR_NONE, 0, 0, 0, start)
+        if (start >= paramCount) return ExtendedColor(COLOR_NONE, 0, 0, 0, 0, start)
         val mode = params[start]
         return when (mode) {
             EXT_MODE_PALETTE -> {
                 val value = params.getOrElse(start + 1) { -1 }
-                ExtendedColor(COLOR_PALETTE, value.coerceIn(-1, 255), 0, 0, start + 2)
+                ExtendedColor(COLOR_PALETTE, value.coerceIn(-1, 255), 0, 0, 0, start + 2)
             }
             EXT_MODE_RGB -> {
                 // Both `38;2;r;g;b` and `38:2::r:g:b` reduce to this form, where an
@@ -789,14 +789,14 @@ internal class TerminalEmulator(
                 if (base < paramCount && params[base] < 0) base++
                 if (base + 2 >= paramCount) {
                     // Not enough components: consume what is present.
-                    return ExtendedColor(COLOR_NONE, 0, 0, 0, paramCount)
+                    return ExtendedColor(COLOR_NONE, 0, 0, 0, 0, paramCount)
                 }
                 val red = params.getOrElse(base) { 0 }.coerceIn(0, 255)
                 val green = params.getOrElse(base + 1) { 0 }.coerceIn(0, 255)
                 val blue = params.getOrElse(base + 2) { 0 }.coerceIn(0, 255)
                 ExtendedColor(COLOR_RGB, 0, red, green, blue, base + 3)
             }
-            else -> ExtendedColor(COLOR_NONE, 0, 0, 0, start + 1)
+            else -> ExtendedColor(COLOR_NONE, 0, 0, 0, 0, start + 1)
         }
     }
 

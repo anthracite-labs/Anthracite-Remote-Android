@@ -81,6 +81,9 @@ internal object RemotePath {
     }
 }
 
+/** Consecutive zero-length reads tolerated before the transfer is called stalled. */
+private const val MAX_EMPTY_READS = 64
+
 /**
  * Reads a stream into memory but never past [maxBytes].
  *
@@ -94,10 +97,20 @@ internal fun readBounded(input: java.io.InputStream, maxBytes: Long): ByteArray 
     val buffer = ByteArray(32 * 1024)
     val output = ByteArrayOutputStream(minOf(maxBytes, 64L * 1024).toInt())
     var total = 0L
+    var stalled = 0
     while (true) {
         val read = input.read(buffer)
         if (read < 0) break
-        if (read == 0) continue
+        // A well-behaved stream blocks instead of returning 0 forever. Treat a
+        // run of empty reads as a stall rather than spinning on the caller's
+        // thread with no progress and no limit reached.
+        if (read == 0) {
+            if (++stalled > MAX_EMPTY_READS) {
+                throw RemoteFileException("The transfer stalled without progress")
+            }
+            continue
+        }
+        stalled = 0
         total += read
         if (total > maxBytes) {
             throw RemoteFileException(

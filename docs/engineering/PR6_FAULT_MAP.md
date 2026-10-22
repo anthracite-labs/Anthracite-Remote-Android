@@ -12,7 +12,9 @@ PLAUSIBLE / NEEDS TEST, or NOT APPLICABLE.
 
 Baseline: PR head `1ed50d66fcfca6daa6df642aa6fff04af85bb071`, main `84bc457`.
 Reviewed failing run: <https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39813806057>
-(re-run jobs at `119946851788` etc.).
+(re-run jobs at `119946851788`), then the first run of the new `compile` job at
+<https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39814295783>,
+which reported the complete set of eleven errors in one pass.
 
 ## Register
 
@@ -35,9 +37,9 @@ Reviewed failing run: <https://github.com/anthracite-labs/Anthracite-Remote-Andr
 | C3 | P2 | CI | `.github/workflows/android-ci.yml` | No job covered resource linking, R-id completeness, manifest sanity or secret hygiene independently of Kotlin | Review | Diagnostics were all Gradle-shaped | A resource problem hid behind Kotlin errors | `ci/static_checks.py` in its own job | self-test in this session (injected a bogus `R.string`, got exactly one finding) | FIXED (pending CI) |
 | E1 | P1 | Claims | `docs/support-matrix.md` | Six distributions are listed as "verified in a container" with no linked run | Document review | Rows were written from intent, not evidence | Users are told a distribution is supported on evidence that does not exist | Mark every row unverified until a matrix run exists; link the run when it does | distro matrix job (tracked, not yet added) | CONFIRMED (document corrected) |
 | E2 | P2 | Coverage | `app/src/test` | No test for `GitHubApi` against a mock `HttpTransport`, none for `parseTmuxSessions` or `CredentialCrypto` reopen | Review | Those areas were only exercised through the UI | Regressions in HTTP error mapping and tmux parsing would be invisible | Add mock-transport and tmux-parser tests | tracked below | PLAUSIBLE / NEEDS TEST |
-| W1 | P0 (stale report) | Workspace | `workspace/Workspace.kt:141,154` | Reported as "private profile access" | Reviewed head predates the fix; current source has `var profile … private set` and an internal `connectWorkspace` | — | — | — | compile run 119945178387 | NOT APPLICABLE (already fixed before this review) |
-| K1 | P0 (stale report) | Keys | `terminal/TerminalKeys.kt:86-89` | Reported `String` vs `Char` | Current source passes `String` finals consistently | — | — | — | compile job | NOT APPLICABLE (already fixed) |
-| K2 | P0 (stale report) | Emulator | `terminal/TerminalEmulator.kt:778` | Reported missing `ExtendedColor` argument | Current source passes five/six arguments | — | — | — | compile job | NOT APPLICABLE (already fixed) |
+| W1 | P0 | Workspace | `workspace/Workspace.kt:141,154` | Cannot access `profile`: it is private | `compile` job annotations, run <https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39814295783> | `profile` has a `private set`, and `private` on an object member is object-scoped, not file-scoped, so the top-level `connectWorkspace` cannot assign it | Every workspace screen: nothing compiled | `Workspace.adopt(...)` writes the profile inside the object, keeping the setter private so only a completed host-key decision can change it | compile job (was previously listed here as "not applicable" — that judgement was wrong and is corrected) | FIXED (pending CI) |
+| K1 | P0 | Keys | `terminal/TerminalKeys.kt:86-89` | Argument type mismatch: `String` but `Char` expected | same annotations | F1–F4 passed `"P"`…`"S"` to `function(modifiers, final: Char)` | Terminal could not compile | Pass `Char` literals `'P'`–`'S'`; SS3/CSI output unchanged | `TerminalKeysTest` covers F1–F4 with and without modifiers | FIXED (pending CI) |
+| K2 | P0 | Emulator | `terminal/TerminalEmulator.kt:778,783,792,799` | No value passed for parameter `next` | same annotations | Four `ExtendedColor` constructions omitted the sixth constructor argument | Terminal could not compile | Supply the `next` index each branch means (palette: `start + 2`, insufficient RGB: `paramCount`, otherwise `start + 1`, out of parameters: `start`) | `TerminalEmulatorTest` (SGR 38/48 parsing) | FIXED (pending CI) |
 
 ## Security and architecture checklist
 
@@ -56,7 +58,7 @@ Reviewed failing run: <https://github.com/anthracite-labs/Anthracite-Remote-Andr
 
 ## Next actions
 
-1. Land B1–B4, S1–S3, G1, F1–F2 and read the next full CI result.
+1. Read the next `compile` result; clear whatever it reports beyond W1/K1/K2.
 2. Add `GitHubApi` mock-transport coverage and `parseTmuxSessions` cases (E2).
 3. Add a real distribution matrix job and link its run in `docs/support-matrix.md` (E1).
 4. Device pass for IME, rendering and touch once an emulator run exists.

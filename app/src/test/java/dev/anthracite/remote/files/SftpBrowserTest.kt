@@ -8,6 +8,7 @@ import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyPairGenerator
+import java.security.spec.ECGenParameterSpec
 import org.apache.sshd.common.file.virtualfs.VirtualFileSystemFactory
 import org.apache.sshd.common.keyprovider.KeyPairProvider
 import org.apache.sshd.server.SshServer
@@ -18,6 +19,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -43,7 +45,11 @@ class SftpBrowserTest {
         server = SshServer.setUpDefaultServer()
         server.host = "127.0.0.1"
         server.port = 0
-        val hostKey = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        // Same key type as SshSessionTest: a JDK ECDSA key is advertised
+        // consistently by MINA on every JDK, without an optional provider.
+        val hostKey = KeyPairGenerator.getInstance("EC").apply {
+            initialize(ECGenParameterSpec("secp256r1"))
+        }.generateKeyPair()
         server.keyPairProvider = KeyPairProvider.wrap(hostKey)
         server.passwordAuthenticator = PasswordAuthenticator { user, password, _ ->
             user == USER && password == PASSWORD
@@ -167,10 +173,8 @@ class SftpBrowserTest {
         assertThrows(RemoteFileException::class.java) {
             readBounded(ByteArrayInputStream(oversized), maxBytes = 4096)
         }
-        assertArrayEquals(
-            ByteArray(4096) { 1 },
-            readBounded(ByteArrayInputStream(oversized), maxBytes = 4096L * 16),
-        )
+        val exact = ByteArray(4096) { 1 }
+        assertArrayEquals(exact, readBounded(ByteArrayInputStream(exact), maxBytes = 4096L))
     }
 
     @Test
@@ -195,9 +199,21 @@ class SftpBrowserTest {
     }
 
     @Test
+    fun `a stream that never progresses is reported as stalled, not spun on`() {
+        val stuck = object : InputStream() {
+            override fun read(): Int = 0
+            override fun read(b: ByteArray, off: Int, len: Int): Int = 0
+        }
+        val failure = assertThrows(RemoteFileException::class.java) {
+            readBounded(stuck, maxBytes = 4096)
+        }
+        assertTrue(failure.message.orEmpty().contains("stalled"))
+    }
+
+    @Test
     fun `a missing path is reported, not invented`() {
         // stat() reports absence as null rather than inventing an entry.
-        assertEquals(null, browser.stat("/does-not-exist"))
+        assertNull(browser.stat("/does-not-exist"))
         // ...while delete() says so explicitly.
         assertThrows(RemoteFileException::class.java) { browser.delete("/does-not-exist", false) }
     }
