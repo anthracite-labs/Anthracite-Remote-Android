@@ -2,6 +2,7 @@ package dev.anthracite.remote.terminal
 
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -72,6 +73,13 @@ class TerminalLifecycleTest {
             }
             shellChannel.send("before")
             await { shell.emulator.screenText().contains("before") }
+            first.moveToState(Lifecycle.State.CREATED)
+            assertNull(shell.listener)
+            assertNull(tmux.listener)
+            shellChannel.send("while stopped")
+            await { shell.emulator.screenText().contains("while stopped") }
+            first.moveToState(Lifecycle.State.RESUMED)
+            first.onActivity { assertNotNull(shell.listener); assertNotNull(tmux.listener) }
             first.recreate()
             first.onActivity { activity ->
                 assertNotSame(oldListener, tmux.listener)

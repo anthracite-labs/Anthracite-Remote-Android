@@ -89,21 +89,40 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
         super.onSaveInstanceState(outState)
     }
 
+    override fun onStart() {
+        super.onStart()
+        TerminalTabs.all().forEach { tab ->
+            if (tab.session !in boundListeners) bindSession(tab.session)
+        }
+        scheduleRender()
+    }
+
     override fun onResume() {
         super.onResume()
         scrollOffset = 0
         scheduleRender()
     }
 
+    override fun onStop() {
+        unbindSessions()
+        renderHandler.removeCallbacksAndMessages(null)
+        renderQueued = false
+        super.onStop()
+    }
+
     override fun onDestroy() {
         destroyed = true
+        unbindSessions()
+        renderHandler.removeCallbacksAndMessages(null)
+        terminalView.listener = null
+        super.onDestroy()
+    }
+
+    private fun unbindSessions() {
         boundListeners.forEach { (session, observer) ->
             if (session.listener === observer) session.listener = null
         }
         boundListeners.clear()
-        renderHandler.removeCallbacksAndMessages(null)
-        terminalView.listener = null
-        super.onDestroy()
     }
 
     // ------------------------------------------------------------------ menu
