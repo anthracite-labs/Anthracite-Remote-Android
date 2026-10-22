@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Web container: compact custom toolbar (back-in-web, status dot, overflow,
+  close), an optional warning banner, a page-load progress hairline, and the
+  full-bleed WebView host. No horizontal screen padding: the WebUI owns its
+  own layout.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/screen_web"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:id="@+id/web_toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/surface"
+        android:gravity="center_vertical"
+        android:minHeight="@dimen/toolbar_height"
+        android:orientation="horizontal"
+        android:paddingHorizontal="@dimen/space_xs">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/web_back_button"
+            style="@style/Widget.Anthracite.Button.Icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/web_navigate_back"
+            app:icon="@drawable/ic_arrow_back"
+            app:iconTint="@color/on_surface" />
+
+        <View
+            android:id="@+id/web_status_dot"
+            android:layout_width="@dimen/dot_size"
+            android:layout_height="@dimen/dot_size"
+            android:layout_marginStart="@dimen/space_xs"
+            android:background="@drawable/dot_success" />
+
+        <TextView
+            android:id="@+id/web_title_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_s"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/web_title"
+            android:textAppearance="@style/TextAppearance.Anthracite.Title" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/web_overflow_button"
+            style="@style/Widget.Anthracite.Button.Icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/more_actions"
+            app:icon="@drawable/ic_more_vert"
+            app:iconTint="@color/on_surface" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/web_close_button"
+            style="@style/Widget.Anthracite.Button.Icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/web_close"
+            app:icon="@drawable/ic_close"
+            app:iconTint="@color/on_surface" />
+    </LinearLayout>
+
+    <com.google.android.material.progressindicator.LinearProgressIndicator
+        android:id="@+id/web_progress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:indeterminate="true"
+        android:visibility="gone"
+        app:indicatorColor="@color/primary"
+        app:trackColor="@color/outline_variant"
+        app:trackThickness="@dimen/stroke_thin" />
+
+    <include
+        android:id="@+id/web_banner"
+        layout="@layout/view_error_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="@dimen/space_m"
+        android:layout_marginTop="@dimen/space_m" />
+
+    <FrameLayout
+        android:id="@+id/web_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+</LinearLayout>

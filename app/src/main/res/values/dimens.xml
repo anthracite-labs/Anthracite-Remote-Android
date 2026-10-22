@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Spacing scale -->
+    <dimen name="space_xxs">2dp</dimen>
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_s">8dp</dimen>
+    <dimen name="space_m">12dp</dimen>
+    <dimen name="space_l">16dp</dimen>
+    <dimen name="space_xl">24dp</dimen>
+    <dimen name="space_2xl">32dp</dimen>
+    <dimen name="space_3xl">48dp</dimen>
+
+    <!-- Screen geometry. values-w840dp / values-w1200dp grow the side padding
+         so the content column caps near 600dp and centers on large screens. -->
+    <dimen name="screen_padding_h">20dp</dimen>
+    <dimen name="screen_padding_v">16dp</dimen>
+    <dimen name="section_gap">24dp</dimen>
+
+    <!-- Targets and shapes -->
+    <dimen name="touch_target_min">48dp</dimen>
+    <dimen name="cta_min_height">56dp</dimen>
+    <dimen name="toolbar_height">56dp</dimen>
+    <dimen name="radius_s">8dp</dimen>
+    <dimen name="radius_m">12dp</dimen>
+    <dimen name="radius_l">16dp</dimen>
+    <dimen name="stroke_thin">1dp</dimen>
+
+    <!-- Icons and indicators -->
+    <dimen name="icon_s">16dp</dimen>
+    <dimen name="icon_m">20dp</dimen>
+    <dimen name="icon_l">24dp</dimen>
+    <dimen name="icon_xl">48dp</dimen>
+    <dimen name="dot_size">10dp</dimen>
+    <dimen name="logo_size">72dp</dimen>
+
+    <!-- Type scale (sp — scales with the user's font setting) -->
+    <dimen name="text_display">28sp</dimen>
+    <dimen name="text_headline">22sp</dimen>
+    <dimen name="text_title">18sp</dimen>
+    <dimen name="text_body">15sp</dimen>
+    <dimen name="text_button">15sp</dimen>
+    <dimen name="text_label">13sp</dimen>
+    <dimen name="text_mono">13sp</dimen>
+    <dimen name="text_mono_small">12sp</dimen>
+</resources>

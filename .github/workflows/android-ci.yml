@@ -62,7 +62,10 @@ jobs:
         include:
           - test_class: AtomicFileStoreTest
           - test_class: CredentialCryptoTest
+          - test_class: DeployProgressTest
+          - test_class: HomeStateTest
           - test_class: InstallScriptTest
+          - test_class: NavigationPolicyTest
           - test_class: PickerPolicyTest
           - test_class: PolicyTest
           - test_class: ReconnectGateTest

@@ -192,7 +192,17 @@ internal class SshClient {
         }
     }
 
-    fun exec(command: String, stdin: ByteArray? = null, timeoutMs: Long = 30_000): ExecResult {
+    /**
+     * Runs one command and returns its complete output.
+     *
+     * [onOutput] is an additive observer for long-running commands: it receives
+     * raw byte chunks on the calling (I/O) thread as they arrive, before the
+     * caps and result assembly below. It never changes the returned
+     * [ExecResult], the output caps, or the timeout behavior, and an exception
+     * thrown by the listener cannot break the channel loop. Redacting secrets
+     * from observed chunks is the caller's responsibility.
+     */
+    fun exec(command: String, stdin: ByteArray? = null, timeoutMs: Long = 30_000, onOutput: ((ByteArray) -> Unit)? = null): ExecResult {
         val current = currentSession().session ?: error("SSH is not connected")
         val channel = current.openChannel("exec") as ChannelExec
         channel.setCommand(command)
@@ -210,8 +220,8 @@ internal class SshClient {
             val deadline = System.nanoTime() + timeoutMs * 1_000_000
             val buffer = ByteArray(4096)
             while (!channel.isClosed) {
-                drain(remoteOut, stdout, buffer)
-                drain(remoteErr, stderr, buffer)
+                drain(remoteOut, stdout, buffer, onOutput)
+                drain(remoteErr, stderr, buffer, onOutput)
                 if (stdout.size() > OUTPUT_CAP || stderr.size() > OUTPUT_CAP) {
                     channel.disconnect()
                     error("remote output exceeded ${OUTPUT_CAP} bytes")
@@ -222,8 +232,8 @@ internal class SshClient {
                 }
                 Thread.sleep(30)
             }
-            drain(remoteOut, stdout, buffer)
-            drain(remoteErr, stderr, buffer)
+            drain(remoteOut, stdout, buffer, onOutput)
+            drain(remoteErr, stderr, buffer, onOutput)
             var status = channel.exitStatus
             var spins = 0
             while (status == -1 && spins < 25) {
@@ -360,11 +370,21 @@ internal class SshClient {
         return RemoteHttpProbe(status, challenges)
     }
 
-    private fun drain(input: java.io.InputStream, output: ByteArrayOutputStream, buffer: ByteArray) {
+    private fun drain(
+        input: java.io.InputStream,
+        output: ByteArrayOutputStream,
+        buffer: ByteArray,
+        onOutput: ((ByteArray) -> Unit)? = null,
+    ) {
         while (input.available() > 0) {
             val read = input.read(buffer)
             if (read < 0) return
             output.write(buffer, 0, read)
+            if (onOutput != null && read > 0) {
+                // Observation must never break the command loop; the listener
+                // receives a private copy because [buffer] is reused.
+                runCatching { onOutput(buffer.copyOf(read)) }
+            }
         }
     }
 

@@ -57,8 +57,10 @@ android {
 
 dependencies {
     implementation("androidx.activity:activity:1.13.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.core:core:1.19.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+    implementation("com.google.android.material:material:1.13.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("com.github.mwiede:jsch:2.28.8")
     // JSch selects its Java 15 Ed25519/X25519 classes from a multi-release jar.

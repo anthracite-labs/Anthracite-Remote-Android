@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- w840dp: (840 - 2*132) = 576dp content column, centered. -->
+    <dimen name="screen_padding_h">132dp</dimen>
+</resources>

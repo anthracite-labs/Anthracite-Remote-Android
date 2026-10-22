@@ -1,51 +1,198 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Anthracite Remote</string>
-    <string name="setup_title">Server setup</string>
-    <string name="setup_body">OpenCode stays on your Ubuntu machine. This phone only opens an SSH tunnel to its loopback WebUI.</string>
-    <string name="host_hint">Host</string>
-    <string name="ssh_port_hint">SSH port</string>
-    <string name="default_ssh_port">22</string>
-    <string name="default_remote_port">4096</string>
-    <string name="username_hint">Linux username</string>
-    <string name="auth_password">Password</string>
-    <string name="auth_key">Private key</string>
-    <string name="ssh_password_hint">SSH password</string>
-    <string name="choose_key">Choose private key</string>
-    <string name="no_key">No key selected</string>
-    <string name="passphrase_hint">Key passphrase, if any</string>
-    <string name="remote_port_hint">Existing OpenCode port</string>
-    <string name="save">Save</string>
-    <string name="manage_title">Deploy / Manage</string>
-    <string name="connect_existing">Connect existing</string>
-    <string name="install_opencode">Install OpenCode</string>
-    <string name="open_webui">Open WebUI</string>
-    <string name="reconnect">Reconnect</string>
-    <string name="restart">Restart</string>
-    <string name="update">Update</string>
-    <string name="uninstall">Uninstall managed OpenCode</string>
-    <string name="disconnect">Disconnect</string>
-    <string name="forget">Forget connection</string>
-    <string name="edit_setup">Edit setup</string>
-    <string name="back">Back</string>
-    <string name="refresh">Refresh</string>
-    <string name="manage">Manage</string>
+
+    <!-- Common actions -->
     <string name="approve">Approve</string>
     <string name="cancel">Cancel</string>
     <string name="continue_action">Continue</string>
+    <string name="back">Back</string>
+    <string name="close">Close</string>
+    <string name="refresh">Refresh</string>
+    <string name="manage">Manage</string>
+    <string name="reconnect">Reconnect</string>
+    <string name="restart">Restart</string>
+    <string name="update">Update</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="forget">Forget connection</string>
+    <string name="uninstall">Uninstall managed OpenCode</string>
+    <string name="edit_setup">Edit server</string>
+    <string name="try_again">Try again</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="more_actions">More actions</string>
+    <string name="expand">Expand</string>
+    <string name="collapse">Collapse</string>
+
+    <!-- Welcome -->
+    <string name="welcome_title">Your OpenCode, on your machine</string>
+    <string name="welcome_body">Anthracite Remote connects this phone to OpenCode on your own Ubuntu server over SSH, then shows OpenCode\'s own WebUI through a protected tunnel. Your projects and provider credentials never leave Linux.</string>
+    <string name="welcome_point_tunnel_title">Protected tunnel</string>
+    <string name="welcome_point_tunnel_body">The WebUI is reached through an encrypted SSH tunnel bound to this phone\'s loopback interface. There is no Anthracite backend.</string>
+    <string name="welcome_point_verify_title">Verified servers</string>
+    <string name="welcome_point_verify_body">The server\'s SSH host key is checked before authentication. A changed key is refused until you approve it out of band.</string>
+    <string name="welcome_point_private_title">Credentials stay yours</string>
+    <string name="welcome_point_private_body">SSH credentials are encrypted with the Android Keystore. The WebUI password is never stored on this phone.</string>
+    <string name="welcome_cta">Get started</string>
+    <string name="welcome_footer">Direct SSH · pinned release · SHA-256 verified</string>
+
+    <!-- Setup -->
+    <string name="setup_title">Server setup</string>
+    <string name="setup_body">Enter the SSH details of your Ubuntu machine. Advanced options keep sensible defaults.</string>
+    <string name="label_host">Host</string>
+    <string name="label_username">Linux username</string>
+    <string name="label_ssh_port">SSH port</string>
+    <string name="label_ssh_password">SSH password</string>
+    <string name="label_passphrase">Key passphrase (if any)</string>
+    <string name="label_remote_port">Existing OpenCode port</string>
+    <string name="default_ssh_port">22</string>
+    <string name="default_remote_port">4096</string>
+    <string name="setup_section_auth">Authentication</string>
+    <string name="auth_password">Password</string>
+    <string name="auth_key">Private key</string>
+    <string name="setup_auth_help">How this phone signs in to SSH.</string>
+    <string name="choose_key">Choose private key</string>
+    <string name="no_key">No key selected</string>
+    <string name="key_selected">Key: %1$s</string>
+    <string name="setup_section_advanced">Advanced options</string>
+    <string name="setup_advanced_summary">SSH port %1$s · existing OpenCode port %2$s</string>
+    <string name="setup_help_existing_port">Only used when you connect to an OpenCode service that already runs on the server.</string>
+    <string name="setup_connecting">Connecting…</string>
+    <string name="error_config_invalid">Enter a host, username, and valid ports.</string>
+    <string name="error_password_required">Enter the SSH password.</string>
+    <string name="error_key_required">Choose a private key.</string>
+    <string name="error_credentials_unavailable">Saved SSH credentials are unavailable. Re-enter the credential to replace them.</string>
+    <string name="error_save_failed">Could not save SSH credentials.</string>
+    <string name="error_key_unreadable">Could not read that private key.</string>
+
+    <!-- Verify server identity -->
+    <string name="host_key_title">Verify host key</string>
+    <string name="verify_first_body">First connection to this server. The key below is checked before authentication. Approve only if it matches the server.</string>
+    <string name="verify_server_label">Server</string>
+    <string name="verify_key_type_label">Key type</string>
+    <string name="verify_fingerprint_label">SHA-256 fingerprint</string>
+    <string name="verify_copy">Copy fingerprint</string>
+    <string name="verify_copied">Fingerprint copied</string>
+    <string name="verify_hint">Compare it with the server\'s own host key, for example the output of ssh-keygen -lf on the host, or your provider\'s published fingerprint.</string>
+    <string name="host_key_changed_title">Host key changed</string>
+    <string name="verify_changed_body">Connection refused: the server key no longer matches the fingerprint you approved. This can mean the server was rebuilt — or that someone is intercepting the connection.</string>
+    <string name="verify_saved_label">Approved fingerprint</string>
+    <string name="verify_presented_label">Presented fingerprint</string>
+    <string name="verify_changed_hint">Approve the new fingerprint only after checking it out of band.</string>
+    <string name="approve_new_key">Approve new fingerprint</string>
+
+    <!-- Home -->
+    <string name="home_section_server">Server</string>
+    <string name="home_identity_unset">No server configured</string>
+    <string name="home_status_no_server">No server configured</string>
+    <string name="home_status_idle">Not connected</string>
+    <string name="home_status_connecting">Connecting…</string>
+    <string name="home_status_ssh">SSH connected</string>
+    <string name="home_status_tunnel">Tunnel ready</string>
+    <string name="home_status_reconnecting">Reconnecting…</string>
+    <string name="home_status_error">Attention needed</string>
+    <string name="home_details_toggle">Connection details</string>
+    <string name="home_details_fingerprint">Host key</string>
+    <string name="home_details_fingerprint_unset">not approved yet</string>
+    <string name="home_details_tunnel">Tunnel</string>
+    <string name="home_details_tunnel_value">127.0.0.1:%1$d → 127.0.0.1:%2$d</string>
+    <string name="home_details_tunnel_none">not open</string>
+    <string name="home_details_mode">Journey</string>
+    <string name="home_mode_managed">Managed install</string>
+    <string name="home_mode_existing">Existing service</string>
+    <string name="home_details_remote_port">Existing OpenCode port</string>
+    <string name="cta_setup">Set up server</string>
+    <string name="cta_install_launch">Install &amp; Launch OpenCode</string>
+    <string name="cta_open">Open OpenCode</string>
+    <string name="cta_secondary_existing">Connect to an existing installation instead</string>
+    <string name="cta_secondary_install">Install a managed OpenCode instead</string>
+    <string name="error_auth_failed">SSH authentication failed. Check the username, password, or private key.</string>
+    <string name="error_unreachable">Cannot reach the server.</string>
+    <string name="error_interrupted">Operation stopped. Nothing was undone on the server — it is safe to try again.</string>
+    <string name="home_footer">The tunnel binds to this phone’s loopback interface only. No traffic routes through third-party servers.</string>
+
+    <!-- Prepare installation -->
+    <string name="prepare_title">Prepare installation</string>
     <string name="web_password_title">WebUI password</string>
     <string name="web_password_body">Choose a password of at least 12 characters with a letter and a digit. It is sent over SSH and stored only on the Linux host. The WebUI username is opencode. This phone does not save it.</string>
     <string name="web_password_hint">WebUI password</string>
     <string name="web_password_confirm_hint">Confirm password</string>
-    <string name="host_key_title">Verify host key</string>
-    <string name="host_key_changed_title">Host key changed</string>
-    <string name="approve_new_key">Approve new fingerprint</string>
+    <string name="prepare_require_length">At least 12 characters</string>
+    <string name="prepare_require_letter_digit">Contains a letter and a digit</string>
+    <string name="prepare_require_match">Passwords match</string>
+    <string name="prepare_error_mismatch">Use matching passwords of at least 12 characters with a letter and a digit.</string>
+    <string name="prepare_summary_title">What happens next</string>
+    <string name="prepare_summary_1">Preflight checks confirm Ubuntu 24.04, CPU architecture, disk space, and systemd --user on the server.</string>
+    <string name="prepare_summary_2">The pinned OpenCode release is downloaded on the server and verified against its SHA-256 checksum.</string>
+    <string name="prepare_summary_3">OpenCode is installed as your user\'s systemd service, bound to 127.0.0.1:4096 on the server.</string>
+    <string name="prepare_summary_4">The phone checks that the service demands HTTP Basic authentication, opens the tunnel, and shows the WebUI.</string>
+    <string name="prepare_note_linger">If persistence after logout or reboot needs an administrator action, the installer prints the exact command. It appears in the technical log.</string>
+
+    <!-- Progress / deployment -->
+    <string name="progress_title_install">Installing OpenCode</string>
+    <string name="progress_title_open_managed">Opening OpenCode</string>
+    <string name="progress_title_open_existing">Connecting to existing OpenCode</string>
+    <string name="progress_title_restart">Restarting service</string>
+    <string name="progress_title_update">Checking for approved update</string>
+    <string name="progress_title_uninstall">Uninstalling managed OpenCode</string>
+    <string name="progress_title_status">Checking service status</string>
+    <string name="phase_connect_ssh">Connect over SSH</string>
+    <string name="phase_upload_installer">Upload installer</string>
+    <string name="phase_preflight">Preflight checks</string>
+    <string name="phase_download">Download pinned release</string>
+    <string name="phase_verify_checksum">Verify SHA-256 checksum</string>
+    <string name="phase_unpack">Unpack archive</string>
+    <string name="phase_verify_binary">Verify binary</string>
+    <string name="phase_activate">Activate release</string>
+    <string name="phase_service_ready">Service ready</string>
+    <string name="phase_run_command">Run remote command</string>
+    <string name="phase_probe">Verify sign-in is required</string>
+    <string name="phase_tunnel">Open secure tunnel</string>
+    <string name="phase_launch">Launch OpenCode WebUI</string>
+    <string name="phase_reopen_tunnel">Reopen tunnel</string>
+    <string name="phase_state_done">Done</string>
+    <string name="phase_state_active">In progress</string>
+    <string name="phase_state_failed">Failed</string>
+    <string name="phase_state_pending">Pending</string>
+    <string name="progress_details">Technical details</string>
+    <string name="progress_failed_title">Step failed</string>
+    <string name="progress_stopped_title">Operation stopped</string>
+    <string name="progress_note_linger_title">Persistence limitation</string>
+    <string name="progress_note_linger_body">The service stops when the last login session ends unless an administrator enables lingering. The exact command is in the technical log.</string>
+    <string name="stop_dialog_title">Stop this operation?</string>
+    <string name="stop_dialog_body">The remote command is interrupted. Work already completed on the server stays in place, and operations are safe to re-run.</string>
+    <string name="stop_dialog_confirm">Stop operation</string>
+
+    <!-- Web container -->
+    <string name="web_title">OpenCode</string>
+    <string name="web_navigate_back">Back in OpenCode</string>
+    <string name="web_close">Close OpenCode</string>
+    <string name="banner_network_lost">Network lost. The tunnel will reconnect when the network returns.</string>
+    <string name="banner_reconnecting">Reconnecting the tunnel…</string>
+    <string name="auth_title">OpenCode sign in</string>
+    <string name="auth_body">Sign in to the forwarded OpenCode origin. Credentials are not put in the URL or saved on this phone.</string>
+    <string name="username">Username</string>
+    <string name="password">Password</string>
+    <string name="sign_in">Sign in</string>
+
+    <!-- Management -->
+    <string name="manage_section_service">Service</string>
+    <string name="manage_section_connection">Connection</string>
+    <string name="manage_section_danger">Danger zone</string>
+    <string name="manage_danger_note">These actions run on your server or erase data saved on this phone. Nothing here happens automatically.</string>
+    <string name="manage_status">Check status</string>
+    <string name="manage_section_log">Session log</string>
+    <string name="manage_log_empty">No events yet.</string>
     <string name="uninstall_title">Uninstall managed OpenCode?</string>
     <string name="uninstall_body">This removes only the managed binary and service. Projects, provider credentials, and sessions on the Linux host are kept.</string>
     <string name="forget_title">Forget this connection?</string>
     <string name="forget_body">This removes the saved SSH connection from this phone. It does not uninstall OpenCode or delete Linux files.</string>
-    <string name="auth_title">OpenCode sign in</string>
-    <string name="username">Username</string>
-    <string name="password">Password</string>
-    <string name="sign_in">Sign in</string>
+    <string name="managed_done_restart">Service restarted.</string>
+    <string name="managed_done_update">Update check finished.</string>
+    <string name="managed_done_uninstall">Managed OpenCode uninstalled.</string>
+    <string name="managed_done_status">Status retrieved.</string>
+    <string name="wait_for_job">Wait for the current step to finish.</string>
+
+    <!-- Downloads / misc feedback -->
+    <string name="download_saved">Download saved</string>
+    <string name="download_failed">Download failed</string>
 </resources>
