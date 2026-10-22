@@ -3,7 +3,8 @@
 What has been *observed*, and what is only *expected*. A row is added here only
 with the CI run, container image or host that produced it, linked by run URL.
 
-**Current state: no distribution row below has a linked matrix run.** They are
+**Current state: no distribution row below has a linked matrix run.**
+The latest review and CI blockers are tracked in [PR7_REVIEW.md](engineering/PR7_REVIEW.md). They are
 listed as *unverified* on purpose. A scheduled container matrix job is the next
 step (see `docs/engineering/PR6_FAULT_MAP.md`, item E1); when it lands, each row
 gets its run URL and image digest, and only then may it be called verified.

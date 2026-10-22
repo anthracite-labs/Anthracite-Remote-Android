@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 class HostsActivity : AppCompatActivity() {
     private lateinit var adapter: RowAdapter
     private lateinit var emptyView: TextView
+    private lateinit var addButton: MaterialButton
     private lateinit var store: HostStore
     private var pendingKey: ByteArray? = null
 
@@ -53,7 +54,8 @@ class HostsActivity : AppCompatActivity() {
             adapter = this@HostsActivity.adapter
             setOnItemClickListener { _, _, position, _ -> showHostOptions(rows[position]) }
         }
-        findViewById<MaterialButton>(R.id.hosts_add).setOnClickListener { showAddForm() }
+        addButton = findViewById(R.id.hosts_add)
+        addButton.setOnClickListener { showAddForm() }
         runCatching { Workspace.importLegacyIfNeeded(this) }
     }
 
@@ -65,10 +67,10 @@ class HostsActivity : AppCompatActivity() {
     private var rows: List<Pair<Row, HostProfile>> = emptyList()
 
     private fun load() {
-        val hosts = runCatching { store.list() }.getOrElse { error ->
-            Toast.makeText(this, error.message ?: "Host list is unreadable", Toast.LENGTH_LONG).show()
-            emptyList()
-        }
+        val result = runCatching { store.list() }
+        val hosts = result.getOrElse { emptyList() }
+        addButton.isEnabled = result.isSuccess
+        emptyView.text = getString(if (result.isSuccess) R.string.hosts_empty else R.string.hosts_unreadable)
         rows = hosts.map { host ->
             val subtitle = buildString {
                 append(host.endpoint)
