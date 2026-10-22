@@ -1,0 +1,295 @@
+name: Android CI — parallel
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# JVM test classes run on separate hosted runners.
+# Test shards, shell checks, dependency resolution, lint, and APK assembly
+# have no job dependencies, so a failing check cannot prevent other checks.
+# max-parallel is a ceiling, not a reservation of 20 runners.
+jobs:
+  shell:
+    name: Shell installer validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Installer syntax
+        id: syntax
+        continue-on-error: true
+        run: bash -n app/src/main/assets/install-opencode.sh
+      - name: Installer regression suite
+        id: regressions
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          bash app/src/test/shell/install-opencode-test.sh 2>&1 | tee ci-diagnostics/shell-tests.log
+      - name: Upload shell diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pr1-shell-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ci-diagnostics/
+      - name: Mark shell failures
+        if: always()
+        env:
+          SYNTAX_RESULT: ${{ steps.syntax.outcome }}
+          REGRESSION_RESULT: ${{ steps.regressions.outcome }}
+        run: |
+          test "$SYNTAX_RESULT" = success
+          test "$REGRESSION_RESULT" = success
+
+  unit_tests:
+    name: JUnit — ${{ matrix.test_class }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - test_class: AtomicFileStoreTest
+          - test_class: CredentialCryptoTest
+          - test_class: InstallScriptTest
+          - test_class: PickerPolicyTest
+          - test_class: PolicyTest
+          - test_class: ReconnectGateTest
+          - test_class: SshSessionTest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.1
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
+      - name: Run JUnit shard
+        id: test
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          ./gradlew :app:testDebugUnitTest --tests "dev.anthracite.remote.${{ matrix.test_class }}" --stacktrace \
+            > ci-diagnostics/unit-tests.log 2>&1
+      - name: Report test errors
+        if: steps.test.outcome == 'failure'
+        run: bash .github/workflows/emit-failure.sh ci-diagnostics/unit-tests.log
+      - name: Upload test results even on failure
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pr1-junit-${{ matrix.test_class }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ci-diagnostics/
+            app/build/test-results/testDebugUnitTest/
+            app/build/reports/tests/testDebugUnitTest/
+      - name: Mark shard failure
+        if: always()
+        env:
+          TEST_RESULT: ${{ steps.test.outcome }}
+        run: test "$TEST_RESULT" = success
+
+  dependencies:
+    name: Gradle dependency resolution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Resolve runtime dependency graph
+        id: resolve
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          ./gradlew :app:dependencies --configuration debugRuntimeClasspath --stacktrace \
+            > ci-diagnostics/debug-runtime-classpath.log 2>&1
+      - name: Report dependency errors
+        if: steps.resolve.outcome == 'failure'
+        run: bash .github/workflows/emit-failure.sh ci-diagnostics/debug-runtime-classpath.log
+      - name: Upload dependency report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pr1-dependencies-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ci-diagnostics/
+      - name: Mark dependency failures
+        if: always()
+        env:
+          RESOLVE_RESULT: ${{ steps.resolve.outcome }}
+        run: test "$RESOLVE_RESULT" = success
+
+  lint:
+    name: Android lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.1
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
+      - name: Run Android lint
+        id: lint
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          ./gradlew lintDebug --stacktrace > ci-diagnostics/lint.log 2>&1
+      - name: Report lint errors
+        if: steps.lint.outcome == 'failure'
+        run: bash .github/workflows/emit-failure.sh ci-diagnostics/lint.log
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pr1-lint-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ci-diagnostics/
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
+      - name: Mark lint failures
+        if: always()
+        env:
+          LINT_RESULT: ${{ steps.lint.outcome }}
+        run: test "$LINT_RESULT" = success
+
+  apk:
+    name: Build and inspect debug APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.1
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
+      - name: Assemble debug APK
+        id: assemble
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          ./gradlew assembleDebug --stacktrace > ci-diagnostics/assemble.log 2>&1
+      - name: Report APK compilation errors
+        if: steps.assemble.outcome == 'failure'
+        run: bash .github/workflows/emit-failure.sh ci-diagnostics/assemble.log
+      - name: Inspect APK
+        id: inspect
+        if: steps.assemble.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          sha256sum "$apk" | tee ci-diagnostics/apk-sha256.txt
+          stat -c '%s %n' "$apk" | tee ci-diagnostics/apk-size.txt
+          unzip -Z1 "$apk" > ci-diagnostics/apk-entries.txt
+          grep -Fxq 'assets/install-opencode.sh' ci-diagnostics/apk-entries.txt
+          grep -Fxq 'assets/THIRD-PARTY-NOTICES.md' ci-diagnostics/apk-entries.txt
+          grep -Fxq 'assets/LICENSE' ci-diagnostics/apk-entries.txt
+          if grep -E '(^|/)(libopencode[^/]*|opencode-linux[^/]*)$|^jni/' ci-diagnostics/apk-entries.txt; then
+            echo "APK must not bundle the OpenCode runtime" >&2
+            exit 1
+          fi
+          sdk_dir="$ANDROID_HOME"
+          test -n "$sdk_dir"
+          aapt=$(find "$sdk_dir/build-tools" -type f -name aapt | sort | tail -n 1)
+          test -n "$aapt"
+          "$aapt" dump badging "$apk" | tee ci-diagnostics/apk-badging.txt
+          "$aapt" dump permissions "$apk" | tee ci-diagnostics/apk-permissions.txt
+          grep -Fq "package: name='dev.anthracite.remote'" ci-diagnostics/apk-badging.txt
+          grep -Fq "sdkVersion:'28'" ci-diagnostics/apk-badging.txt
+          grep -Fq "targetSdkVersion:'36'" ci-diagnostics/apk-badging.txt
+          if grep -E 'android.permission.(READ|WRITE)_EXTERNAL_STORAGE|android.permission.MANAGE_EXTERNAL_STORAGE' ci-diagnostics/apk-permissions.txt; then
+            echo "Unexpected Android storage permission" >&2
+            exit 1
+          fi
+      - name: Upload debug APK and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pr1-apk-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            ci-diagnostics/
+      - name: Mark build or inspection failures
+        if: always()
+        env:
+          ASSEMBLE_RESULT: ${{ steps.assemble.outcome }}
+          INSPECT_RESULT: ${{ steps.inspect.outcome }}
+        run: |
+          test "$ASSEMBLE_RESULT" = success
+          test "$INSPECT_RESULT" = success
+
+  summary:
+    name: Overall verification
+    needs: [shell, unit_tests, dependencies, lint, apk]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check every independent validation job
+        env:
+          SHELL_RESULT: ${{ needs.shell.result }}
+          UNIT_RESULT: ${{ needs.unit_tests.result }}
+          DEPENDENCY_RESULT: ${{ needs.dependencies.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          APK_RESULT: ${{ needs.apk.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for job in SHELL UNIT DEPENDENCY LINT APK; do
+            var="${job}_RESULT"
+            result="${!var}"
+            echo "$job: $result"
+            if [ "$result" != success ]; then failed=1; fi
+          done
+          exit "$failed"
