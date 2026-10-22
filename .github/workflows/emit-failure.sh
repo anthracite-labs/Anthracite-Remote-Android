@@ -28,10 +28,13 @@ for filename in sorted(glob.glob("app/build/test-results/testDebugUnitTest/**/*.
         print(f"JUnit {case.attrib.get('classname', '?')}.{case.attrib.get('name', '?')}: {message}{suffix}")
 PY
   fi
+  # aapt2 and javac report differently from Kotlin; surface those first so a
+  # resource error is not hidden behind a wall of `e:` lines.
+  grep -E 'ERROR:|: error:|error: ' "$file" | head -n 10 || true
   grep -E 'Dependency |requires |requires libraries|minCompileSdk|AAR metadata|e: |FAILED|What went wrong|Execution failed' "$file" || true
   echo '--- tail ---'
   tail -n 25 "$file"
-} | head -n 12 | while IFS= read -r line; do
+} | head -n 24 | while IFS= read -r line; do
   line=${line//$'\r'/}
   line=${line//::/:}
   line=${line//%/%25}
