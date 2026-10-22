@@ -94,6 +94,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
         TerminalTabs.all().forEach { tab ->
             if (tab.session !in boundListeners) bindSession(tab.session)
         }
+        pendingState = activeSession?.lastCloseState?.let(::describeClosed)
         scheduleRender()
     }
 

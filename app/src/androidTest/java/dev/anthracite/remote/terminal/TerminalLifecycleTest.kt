@@ -123,8 +123,17 @@ class TerminalLifecycleTest {
             }
             assertNull(session.listener)
         }
-        channel.close()
-        await { session.lastCloseState != null }
+        ActivityScenario.launch(TerminalActivity::class.java).use { paused ->
+            paused.moveToState(Lifecycle.State.CREATED)
+            assertNull(session.listener)
+            channel.close()
+            await { session.lastCloseState != null }
+            paused.moveToState(Lifecycle.State.RESUMED)
+            paused.onActivity { activity ->
+                assertTrue(activity.findViewById<TextView>(R.id.terminal_status).text
+                    .contains(session.lastCloseState!!.reason))
+            }
+        }
         ActivityScenario.launch(TerminalActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 assertTrue(activity.findViewById<TextView>(R.id.terminal_status).text
