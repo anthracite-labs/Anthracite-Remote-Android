@@ -1,0 +1,5 @@
+# Protect CI and the remote install/SSH boundary.
+* @anthracite-labs
+/.github/workflows/ @anthracite-labs
+/app/src/main/assets/ @anthracite-labs
+/app/src/main/java/dev/anthracite/remote/ @anthracite-labs

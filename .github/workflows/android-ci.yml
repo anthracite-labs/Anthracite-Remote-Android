@@ -250,6 +250,33 @@ jobs:
             echo "Unexpected Android storage permission" >&2
             exit 1
           fi
+      - name: MobSF static APK analysis (baseline, non-blocking)
+        id: mobsf
+        if: steps.inspect.outcome == 'success' && github.event_name != 'pull_request'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics/mobsf
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          api_key="$(openssl rand -hex 32)"
+          docker run --detach --rm --name mobsf-anthracite             -p 127.0.0.1:8000:8000 -e MOBSF_API_KEY="$api_key"             opensecurity/mobile-security-framework-mobsf:latest
+          trap 'docker logs --tail 200 mobsf-anthracite > ci-diagnostics/mobsf/container.log 2>&1 || true; docker rm -f mobsf-anthracite >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 90); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8000/; then break; fi
+            sleep 4
+          done
+          curl --fail --show-error --silent --max-time 60 -X POST             http://127.0.0.1:8000/api/v1/upload             -H "Authorization: $api_key" -F "file=@$apk"             -o ci-diagnostics/mobsf/upload.json
+          hash="$(jq -er '.hash | select(type == "string" and length > 0)' ci-diagnostics/mobsf/upload.json)"
+          curl --fail --show-error --silent --max-time 900 -X POST             http://127.0.0.1:8000/api/v1/scan             -H "Authorization: $api_key" --data-urlencode "hash=$hash"             -o ci-diagnostics/mobsf/scan.json
+          jq -e 'has("error") | not' ci-diagnostics/mobsf/scan.json
+          curl --fail --show-error --silent --max-time 60 -X POST             http://127.0.0.1:8000/api/v1/report_json             -H "Authorization: $api_key" --data-urlencode "hash=$hash"             -o ci-diagnostics/mobsf/report.json
+          jq -e 'has("error") | not' ci-diagnostics/mobsf/report.json
+          docker image inspect opensecurity/mobile-security-framework-mobsf:latest             --format '{{join .RepoDigests "\\n"}}' > ci-diagnostics/mobsf/image-digest.txt
+      - name: Report MobSF scan failure
+        if: steps.mobsf.outcome == 'failure'
+        run: echo "::warning::MobSF baseline scan failed; see APK diagnostics artifact"
+
       - name: Upload debug APK and diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.2
