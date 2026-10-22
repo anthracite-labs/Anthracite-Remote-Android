@@ -322,14 +322,35 @@ class SshSessionTest {
         passphrase = null,
     )
 
+    @Test
+    fun `ss listener parsing distinguishes loopback, IPv4 mapped IPv6, and wildcard bindings`(){
+        val port = 43121
+        assertEquals(LOOPBACK, parseSsLocalAddress("LISTEN 0 50 127.0.0.1:43121 0.0.0.0:*", port))
+        assertEquals("::1", parseSsLocalAddress("LISTEN 0 50 [::1]:43121 [::]:*", port))
+        assertEquals("::ffff:127.0.0.1", parseSsLocalAddress("LISTEN 0 50 [::ffff:127.0.0.1]:43121 *:*", port))
+        assertEquals("0.0.0.0", parseSsLocalAddress("LISTEN 0 50 0.0.0.0:43121 0.0.0.0:*", port))
+        assertEquals("::", parseSsLocalAddress("LISTEN 0 50 [::]:43121 [::]:*", port))
+        assertEquals(null, parseSsLocalAddress("LISTEN 0 50 127.0.0.1:43122 0.0.0.0:*", port))
+    }
+
     private fun assertLoopbackOnly(port: Int) {
         val process = ProcessBuilder("ss", "-H", "-ltn").start()
         val output = process.inputStream.bufferedReader().readText()
         assertEquals("ss command failed", 0, process.waitFor())
-        val lines = output.lines().filter { it.contains(":$port") || it.contains(":$port ") }
-        assertTrue("no listener for $port in [$output]", lines.isNotEmpty())
-        assertTrue("listener was not bound to numeric loopback: $lines", lines.any { it.contains("$LOOPBACK:$port") })
-        assertFalse("listener was exposed beyond loopback: $lines", lines.any { it.contains("0.0.0.0:$port") || it.contains("*:$port") })
+
+        // 'ss' may show 127.0.0.1 as [::ffff:127.0.0.1] on Linux.
+        // Inspect the Local Address column, not text fragments from other columns.
+        val addresses = output.lineSequence().mapNotNull { parseSsLocalAddress(it, port) }.toList()
+        assertTrue("no listener for $port in [$output]", addresses.isNotEmpty())
+        val loopbacks = setOf(LOOPBACK, "::1", "::ffff:$LOOPBACK")
+        assertTrue("listener was exposed beyond loopback: $addresses", addresses.all { it in loopbacks })
+    }
+
+    private fun parseSsLocalAddress(line: String, port: Int): String? {
+        val local = line.trim().split(Regex("\\s+")).getOrNull(3) ?: return null
+        val suffix = ":$port"
+        if (!local.endsWith(suffix)) return null
+        return local.removeSuffix(suffix).removePrefix("[").removeSuffix("]").lowercase()
     }
 
     private fun withAndroidAlgorithms(block: () -> Unit) {
