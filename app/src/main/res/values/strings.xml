@@ -101,6 +101,7 @@
     <string name="home_details_mode">Journey</string>
     <string name="home_mode_managed">Managed install</string>
     <string name="home_mode_existing">Existing service</string>
+    <string name="home_mode_none">Not opened yet</string>
     <string name="home_details_remote_port">Existing OpenCode port</string>
     <string name="cta_setup">Set up server</string>
     <string name="cta_install_launch">Install &amp; Launch OpenCode</string>

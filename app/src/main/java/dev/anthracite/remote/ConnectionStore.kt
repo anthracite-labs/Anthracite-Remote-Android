@@ -172,6 +172,11 @@ internal class ConnectionStore(context: Context) {
         )
     }
 
+    /** Used after the managed service is uninstalled: no journey is "last" anymore. */
+    fun clearLastMode() {
+        persist(prefs.edit().remove(KEY_LAST_MODE))
+    }
+
     fun introSeen(): Boolean = prefs.getBoolean(KEY_INTRO_SEEN, false)
 
     fun setIntroSeen(seen: Boolean) {
