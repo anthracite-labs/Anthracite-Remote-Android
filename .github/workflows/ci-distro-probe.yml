@@ -1,0 +1,61 @@
+# Temporary, feature-branch-only read-only discovery coverage. Remove after evidence.
+name: Temporary Linux container discovery
+on:
+  push:
+    branches: [arena/53b81d55-anthracite-remote-android]
+    paths: [.github/workflows/ci-distro-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  discovery:
+    name: Read-only probe — ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - {label: debian-12, image: 'debian:12', os_id: debian, manager: apt-get}
+          - {label: ubuntu-24.04, image: 'ubuntu:24.04', os_id: ubuntu, manager: apt-get}
+          - {label: fedora-42, image: 'fedora:42', os_id: fedora, manager: dnf}
+          - {label: archlinux, image: 'archlinux:latest', os_id: arch, manager: pacman}
+          - {label: opensuse-tumbleweed, image: 'opensuse/tumbleweed:latest', os_id: opensuse-tumbleweed, manager: zypper}
+          - {label: alpine-3.21, image: 'alpine:3.21', os_id: alpine, manager: apk}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run probe without network, writes or container privileges
+        env:
+          IMAGE: ${{ matrix.image }}
+          EXPECTED_OS: ${{ matrix.os_id }}
+          EXPECTED_MANAGER: ${{ matrix.manager }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-distro-evidence
+          docker pull "$IMAGE" > ci-distro-evidence/pull.txt
+          digest=$(docker image inspect "$IMAGE" --format '{{ index .RepoDigests 0 }}')
+          test -n "$digest"
+          printf '%s\n' "$digest" | tee ci-distro-evidence/image-digest.txt
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --pids-limit 128 --memory 512m --cpus 1 \
+            --user 65534:65534 \
+            --mount "type=bind,src=$PWD/app/src/main/assets/host/anthracite-probe.sh,dst=/anthracite-probe.sh,readonly" \
+            --entrypoint /bin/sh "$digest" /anthracite-probe.sh \
+            > ci-distro-evidence/probe.txt
+          grep -Fxq "os_id=$EXPECTED_OS" ci-distro-evidence/probe.txt
+          grep -Eq "^tool\.$EXPECTED_MANAGER=/" ci-distro-evidence/probe.txt
+          grep -Fxq 'probe_version=1' ci-distro-evidence/probe.txt
+          grep -Fxq 'done=1' ci-distro-evidence/probe.txt
+          test "$(grep -c '^done=1$' ci-distro-evidence/probe.txt)" -eq 1
+      - name: Upload image digest and bounded probe evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distro-probe-${{ matrix.label }}-${{ github.run_id }}
+          path: ci-distro-evidence/
+          if-no-files-found: warn
+          retention-days: 14
