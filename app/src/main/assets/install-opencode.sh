@@ -55,7 +55,10 @@ assert_under() {
 is_ubuntu_2404() {
   local file=$1 id="" version=""
   [ -f "$file" ] || return 1
+  # The distro metadata path is intentionally dynamic for preflight tests.
+  # shellcheck disable=SC1090
   id=$(. "$file" && printf '%s' "${ID:-}")
+  # shellcheck disable=SC1090
   version=$(. "$file" && printf '%s' "${VERSION_ID:-}")
   [ "$id" = "ubuntu" ] && [ "$version" = "24.04" ]
 }
@@ -210,7 +213,8 @@ http_code() {
 
 ensure_runtime_dir() {
   if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export XDG_RUNTIME_DIR
   fi
 }
 
@@ -237,7 +241,7 @@ loopback_listener() {
   local addr
   addr=$(listener_address) || return 1
   case "$addr" in
-    127.0.0.1:${PORT}|\[::1\]:${PORT}) return 0 ;;
+    127.0.0.1:"${PORT}"|\[::1\]:"${PORT}") return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -248,7 +252,7 @@ foreign_listener() {
   addr=$(listener_address) || return 1
   [ -n "$addr" ] || return 1
   case "$addr" in
-    127.0.0.1:${PORT}|\[::1\]:${PORT}) return 1 ;;
+    127.0.0.1:"${PORT}"|\[::1\]:"${PORT}") return 1 ;;
     *) return 0 ;;
   esac
 }

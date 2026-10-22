@@ -676,7 +676,7 @@ class MainActivity : AppCompatActivity() {
         cta.setText(
             when (ui.cta) {
                 HomeCta.SET_UP -> R.string.cta_setup
-                HomeCta.INSTALL_AND_LAUNCH -> R.string.cta_install_launch
+                HomeCta.INSTALL_AND_LAUNCH -> R.string.cta_prepare_install
                 HomeCta.OPEN_OPENCODE -> R.string.cta_open
             }
         )

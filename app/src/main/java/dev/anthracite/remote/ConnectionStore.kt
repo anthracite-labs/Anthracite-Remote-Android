@@ -70,10 +70,22 @@ internal class ConnectionStore(context: Context) {
             .putString(KEY_AUTH, if (auth == AuthMethod.KEY) AUTH_KEY else AUTH_PASSWORD)
             .putInt(KEY_REMOTE_PORT, remotePort)
             .putString(KEY_KEY_NAME, keyName)
-        // Host keys are scoped to the network endpoint, not to credentials.
-        if (prefs.getString(KEY_HOST, "") != trimmedHost || prefs.getInt(KEY_SSH_PORT, 22) != sshPort) {
+        // A remembered OpenCode journey belongs to the complete connection
+        // profile. Never reuse its "Open" action for a different user, host,
+        // authentication method, key, or target port.
+        val endpointChanged = prefs.getString(KEY_HOST, "") != trimmedHost ||
+            prefs.getInt(KEY_SSH_PORT, 22) != sshPort
+        val profileChanged = endpointChanged ||
+            prefs.getString(KEY_USER, "") != username.trim() ||
+            prefs.getString(KEY_AUTH, AUTH_PASSWORD) !=
+                (if (auth == AuthMethod.KEY) AUTH_KEY else AUTH_PASSWORD) ||
+            prefs.getInt(KEY_REMOTE_PORT, 4096) != remotePort ||
+            prefs.getString(KEY_KEY_NAME, "") != keyName
+        if (endpointChanged) {
+            // SSH host keys belong to the network endpoint, not to credentials.
             editor.remove(KEY_HOST_KEY).remove(KEY_HOST_KEY_TYPE).remove(KEY_FINGERPRINT)
         }
+        if (profileChanged) editor.remove(KEY_LAST_MODE)
         persist(editor)
     }
 
