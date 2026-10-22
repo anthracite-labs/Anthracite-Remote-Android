@@ -325,11 +325,11 @@ internal class SftpBrowser(private val ssh: SshClient) {
         if (error.id == ChannelSftp.SSH_FX_NO_SUCH_FILE) false else throw error
     }
 
-    /** Hidden, collision-resistant, and short enough for a 255-byte name limit. */
+    /** Short ASCII stem: the server's 255 limit is in bytes, not UTF-16 chars. */
     private fun tempPath(parent: String, name: String): String {
         val suffix = UUID.randomUUID().toString().replace("-", "").take(16)
-        val budget = 255 - suffix.length - HIDDEN_PREFIX.length - TEMP_SUFFIX.length - 1
-        val stem = name.take(budget.coerceAtLeast(1))
+        val stem = name.filter { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' }
+            .take(32).ifEmpty { "upload" }
         return "$parent/$HIDDEN_PREFIX$stem.$suffix$TEMP_SUFFIX"
     }
 

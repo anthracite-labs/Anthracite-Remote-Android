@@ -201,7 +201,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     val identity = tmux.probe().sessions.singleOrNull { it.name == name }
                         ?: throw IllegalStateException("Could not establish the tmux session identity")
                     if (identity.id.isBlank()) throw IllegalStateException("tmux returned no session id")
-                    tmux.attach(name, Workspace.TERM, gridCols, gridRows) to identity
+                    tmux.attach(identity.id, Workspace.TERM, gridCols, gridRows) to identity
                 }
             }
             result.onSuccess { (pty, identity) ->
@@ -258,7 +258,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
             val result = runCatching {
                 io {
                     TmuxManager(Workspace.ssh)
-                        .attach(target.name, Workspace.TERM, gridCols, gridRows)
+                        .attach(target.id, Workspace.TERM, gridCols, gridRows)
                 }
             }
             result.onSuccess { pty ->

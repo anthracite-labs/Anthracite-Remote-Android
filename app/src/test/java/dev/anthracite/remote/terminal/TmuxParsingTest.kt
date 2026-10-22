@@ -77,6 +77,7 @@ class TmuxParsingTest {
         assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(listed, "work", "\$2"))
         assertEquals(TmuxPresence.UNKNOWN, tmuxPresence(listed, "other", id))
         assertEquals("tmux kill-session -t '\$1'", TmuxCommands.killSessionId(id))
+        assertEquals("exec tmux attach-session -t '\$1'", TmuxCommands.attachId(id))
         assertThrows(IllegalArgumentException::class.java) { TmuxCommands.killSessionId("work") }
     }
 

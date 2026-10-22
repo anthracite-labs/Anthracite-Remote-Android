@@ -151,6 +151,14 @@ class SftpBrowserTest {
     }
 
     @Test
+    fun `long unicode destination does not make the temporary name exceed filesystem byte limit`() {
+        val name = "中".repeat(80) // 240 UTF-8 bytes, a legal ext4 filename
+        browser.upload("/$name", byteArrayOf(42), overwrite = false)
+        assertArrayEquals(byteArrayOf(42), Files.readAllBytes(root.resolve(name)))
+        assertTrue(root.toFile().listFiles().orEmpty().none { it.name.endsWith(".anthracite.tmp") })
+    }
+
+    @Test
     fun `upload refuses to replace an existing file without consent`() {
         Files.write(root.resolve("keep.txt"), "original".toByteArray())
         assertThrows(RemoteFileException::class.java) {

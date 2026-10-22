@@ -60,15 +60,19 @@ internal object TmuxCommands {
 
     fun attachCommand(name: String): String = "exec tmux attach-session -t ${quoteName(name)}"
 
+    fun attachId(id: String): String = "exec tmux attach-session -t ${quoteId(id)}"
+
     fun detachClients(name: String): String = "tmux detach-client -s ${quoteName(name)}"
 
     fun killSession(name: String): String = "tmux kill-session -t ${quoteName(name)}"
 
     // tmux's host-issued session id stays unique when a name is reused. Never
     // kill a new session which acquired the old name after the user's selection.
-    fun killSessionId(id: String): String {
+    fun killSessionId(id: String): String = "tmux kill-session -t ${quoteId(id)}"
+
+    private fun quoteId(id: String): String {
         require(id.matches(Regex("\\$[0-9]+"))) { "invalid tmux session id" }
-        return "tmux kill-session -t ${PosixShell.quote(id)}"
+        return PosixShell.quote(id)
     }
 
     /**
@@ -199,14 +203,14 @@ internal class TmuxManager(private val ssh: SshClient) {
 
     /** Opens the interactive attachment. The returned PTY is owned by the terminal tab. */
     fun attach(
-        name: String,
+        id: String,
         term: String,
         cols: Int,
         rows: Int,
         widthPx: Int = 0,
         heightPx: Int = 0,
     ): dev.anthracite.remote.SshPty =
-        ssh.openPtyCommand(TmuxCommands.attachCommand(name), term, cols, rows, widthPx, heightPx)
+        ssh.openPtyCommand(TmuxCommands.attachId(id), term, cols, rows, widthPx, heightPx)
 
     private companion object {
         const val TIMEOUT_MS = 15_000L
