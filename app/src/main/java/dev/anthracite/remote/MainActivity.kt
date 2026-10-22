@@ -448,7 +448,7 @@ class MainActivity : ComponentActivity() {
         localPort = assigned
         tunneledRemotePort = remotePort
         val code = withContext(Dispatchers.IO) { awaitHttp(assigned) }
-        ensureActive()
+        coroutineContext.ensureActive()
         reconnectGate.userConnected()
         wantConnected = true
         append("Tunnel 127.0.0.1:$assigned -> 127.0.0.1:$remotePort HTTP $code")
