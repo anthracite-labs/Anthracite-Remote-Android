@@ -94,3 +94,29 @@ Security boundaries: host-key verification still uses strict pinned-byte matchin
 credentials remain in Keystore-backed storage; terminal UI rebinding never ends a
 tmux host session. These design controls relate to OWASP MASVS-NETWORK/STORAGE,
 ASVS V9/V6 and NIST SSDF PW.7/RV.1; they are not certification claims.
+
+
+## Corrective follow-up — first tmux session on a clean account
+
+**New source finding:** A host with tmux installed but no tmux socket directory can return
+`error connecting to /tmp/tmux-1000/default (No such file or directory)`
+when `list-sessions` runs. The previous strict `tmuxNoSessions` classifier accepted
+`no sessions` and `no server running on ...` but not this standard first-use case,
+causing `TmuxManager.probe()` to throw before the user could create their first
+managed session. Upstream tmux documentation/discussions demonstrate this message.
+
+**Fix:** `tmuxMissingSocket` recognizes exactly exit 1, empty stdout and the
+single-line expected Unix socket error only for **discovery**. A matching result
+means no sessions are accessible through the selected socket. Because deletion
+of a socket can strand a running server, stop verification remains **UNKNOWN**
+for that same error; it must not be used to claim a managed process stopped.
+Unexpected exit statuses, permission errors, connection refusals and multiline
+messages continue to fail closed.
+
+**Regression test:** `TmuxParsingTest` covers first-use empty listing,
+the same error remaining unknown for stop verification, and hostile/nonmatching
+errors that must stay errors.
+
+**Validation status:** Code and test committed to PR #7 after the previous
+`6e1e215` review; Kotlin regex syntax was checked independently. Full
+GitHub Actions results for the new revision are required before integration.
