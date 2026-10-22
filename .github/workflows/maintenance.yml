@@ -1,0 +1,66 @@
+name: Maintenance
+
+# Destructive operations are manual only. No cron, push, or PR trigger.
+on:
+  workflow_dispatch:
+    inputs:
+      purge_runs:
+        description: Delete all completed workflow runs (irreversible)
+        type: boolean
+        default: false
+      purge_caches:
+        description: Delete all GitHub Actions caches
+        type: boolean
+        default: false
+      confirmation:
+        description: Type PURGE to confirm selected operations
+        type: string
+        required: true
+
+permissions:
+  actions: write
+
+concurrency:
+  group: maintenance
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  cleanup:
+    name: Manual Actions cleanup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Validate confirmation and selected operations
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          PURGE_RUNS: ${{ inputs.purge_runs }}
+          PURGE_CACHES: ${{ inputs.purge_caches }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRMATION" != PURGE ]]; then
+            echo "::error::Type PURGE in confirmation before running maintenance."
+            exit 1
+          fi
+          if [[ "$PURGE_RUNS" != true && "$PURGE_CACHES" != true ]]; then
+            echo "::error::Select at least one cleanup operation."
+            exit 1
+          fi
+
+      - name: Purge GitHub Actions caches
+        if: inputs.purge_caches
+        run: gh cache delete --all --succeed-on-no-caches --repo "$GH_REPO"
+
+      - name: Remove completed workflow run history
+        if: inputs.purge_runs
+        run: |
+          set -euo pipefail
+          ids="$(gh api --paginate "repos/$GH_REPO/actions/runs?status=completed&per_page=100" --jq '.workflow_runs[].id')"
+          if [[ -z "$ids" ]]; then
+            echo "No completed workflow runs to remove."
+            exit 0
+          fi
+          printf '%s\n' "$ids" | xargs -r -P4 -I{} gh api -X DELETE "repos/$GH_REPO/actions/runs/{}"

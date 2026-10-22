@@ -12,6 +12,7 @@ android {
         applicationId = "dev.anthracite.remote"
         minSdk = 28
         targetSdk = 36
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = 1
         versionName = "1.0.0"
     }
@@ -66,6 +67,8 @@ dependencies {
     // Bouncy Castle implementations are the ones that actually run.
     implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.apache.sshd:sshd-core:2.20.0")
     testImplementation("org.slf4j:slf4j-nop:2.0.20")
