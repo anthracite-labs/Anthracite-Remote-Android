@@ -3,11 +3,31 @@
 What has been *observed*, and what is only *expected*. A row is added here only
 with the CI run, container image or host that produced it, linked by run URL.
 
-**Current state: no distribution row below has a linked matrix run.**
-The latest review and CI blockers are tracked in [PR7_REVIEW.md](engineering/PR7_REVIEW.md). They are
-listed as *unverified* on purpose. A scheduled container matrix job is the next
-step (see `docs/engineering/PR6_FAULT_MAP.md`, item E1); when it lands, each row
-gets its run URL and image digest, and only then may it be called verified.
+**Current state:** six distribution images passed a **read-only discovery probe**
+under an isolated, unprivileged GitHub-hosted Docker matrix. [Run 39859014222](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39859014222)
+executed six jobs with zero skips/failures; each job artifact
+`distro-probe-<distribution>-39859014222` contains the observed OS fields,
+package-manager path and resolved image digest. Artifact bytes are not accessible
+from this sandbox because GitHub redirects the download to a restricted host;
+no digest values are asserted here. Images were fetched by mutable public tag and
+then executed by the resolved digest **within the same job**. These are not
+reproducibly pinned input images for a later run.
+
+**Guided provisioning remains unverified on all rows below.** No package install,
+job recovery, host supervisor, SSH connection, login/logout or device interaction
+was exercised by this container probe. The latest review is
+[PR7_REVIEW.md](engineering/PR7_REVIEW.md).
+
+## Container-only read-only discovery (not provisioning)
+
+| Image | Observed ID and package-manager command | Evidence |
+| --- | --- | --- |
+| `debian:12` | `debian`, `apt-get` | [run 39859014222](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39859014222), artifact `distro-probe-debian-12-39859014222` |
+| `ubuntu:24.04` | `ubuntu`, `apt-get` | same run, artifact `distro-probe-ubuntu-24.04-39859014222` |
+| `fedora:42` | `fedora`, `dnf` | same run, artifact `distro-probe-fedora-42-39859014222` |
+| `archlinux:latest` | `arch`, `pacman` | same run, artifact `distro-probe-archlinux-39859014222` |
+| `opensuse/tumbleweed:latest` | `opensuse-tumbleweed`, `zypper` | same run, artifact `distro-probe-opensuse-tumbleweed-39859014222` |
+| `alpine:3.21` | `alpine`, `apk` | same run, artifact `distro-probe-alpine-3.21-39859014222` |
 
 ## Guided provisioning
 
