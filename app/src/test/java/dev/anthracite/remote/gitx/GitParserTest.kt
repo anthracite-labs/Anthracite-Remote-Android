@@ -109,9 +109,8 @@ class GitParserTest {
     fun `every git command pins the directory and disables helpers`() {
         val directory = "/srv/my project"
         val status = GitCommands.status(directory)
-        assertTrue(status.startsWith("git -C '/srv/my project'"))
+        assertTrue(status.startsWith("git -c color.ui=false -C '/srv/my project'"))
         assertTrue(status.contains("--porcelain=v2"))
-        assertTrue(status.contains("--no-color"))
         assertTrue(status.contains("--no-ext-diff"))
 
         val diff = GitCommands.diff(directory, staged = false, path = "/srv/my project/a b.kt")

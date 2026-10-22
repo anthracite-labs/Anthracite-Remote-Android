@@ -16,6 +16,7 @@ import dev.anthracite.remote.github.GitHubApi
 import dev.anthracite.remote.github.GitHubAuth
 import dev.anthracite.remote.github.GitHubIdentity
 import dev.anthracite.remote.github.GitHubResult
+import dev.anthracite.remote.github.GitHubTokenException
 import dev.anthracite.remote.github.GitHubTokenStore
 import dev.anthracite.remote.github.MergeMethod
 import dev.anthracite.remote.github.PullDetail
@@ -30,6 +31,7 @@ import dev.anthracite.remote.ui.RowAdapter
 import dev.anthracite.remote.ui.addActionButton
 import dev.anthracite.remote.ui.choose
 import dev.anthracite.remote.ui.confirm
+import dev.anthracite.remote.ui.promptSecret
 import dev.anthracite.remote.ui.promptText
 import dev.anthracite.remote.workspace.Workspace
 import dev.anthracite.remote.workspace.io
@@ -94,7 +96,13 @@ class GitHubActivity : AppCompatActivity() {
         }
         auth = GitHubAuth(transport, clientId)
         tokens = GitHubTokenStore(Workspace.secrets(this), Workspace.key())
-        token = tokens.read()
+        token = try {
+            tokens.read()
+        } catch (error: GitHubTokenException) {
+            runCatching { tokens.clear() }
+            showStatus(getString(R.string.github_token_unreadable))
+            null
+        }
         if (token == null) {
             showSignedOut()
         } else {
@@ -174,7 +182,7 @@ class GitHubActivity : AppCompatActivity() {
     }
 
     private fun promptToken() {
-        promptText(
+        promptSecret(
             this,
             getString(R.string.github_use_token),
             getString(R.string.github_token_detail),
@@ -182,10 +190,19 @@ class GitHubActivity : AppCompatActivity() {
             val candidate = value.trim()
             if (candidate.length < 20) {
                 showStatus(getString(R.string.github_token_invalid))
-                return@promptText
+                return@promptSecret
             }
             validateToken(candidate)
         }
+    }
+
+    /** Stores the token, reporting a storage failure instead of crashing the screen. */
+    private fun remember(value: String): Boolean = try {
+        tokens.write(value)
+        true
+    } catch (error: Exception) {
+        showStatus(getString(R.string.github_token_store_failed))
+        false
     }
 
     private fun validateToken(candidate: String) {
@@ -196,7 +213,7 @@ class GitHubActivity : AppCompatActivity() {
             result.onSuccess { observed ->
                 token = candidate
                 identity = observed
-                tokens.write(candidate)
+                if (!remember(candidate)) return@onSuccess
                 subtitle.text = getString(R.string.github_signed_in, observed.login)
                 loadRepositories()
             }.onFailure {
@@ -236,7 +253,7 @@ class GitHubActivity : AppCompatActivity() {
                 when (val poll = io { auth.poll(code) }) {
                     is TokenPoll.Success -> {
                         token = poll.token
-                        tokens.write(poll.token)
+                        if (!remember(poll.token)) return@launch
                         loadIdentity()
                         return@launch
                     }

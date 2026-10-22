@@ -10,7 +10,7 @@ import dev.anthracite.remote.host.PosixShell
  * The phone never opens the repository, never rewrites it and never parses
  * human-readable, localized output. Structured formats are used instead:
  * `--porcelain=v2 -z` (NUL separated, paths verbatim), `--format` with explicit
- * separators, and `--no-color` diffs.
+ * separators, and colour disabled with the global `-c color.ui=false` option.
  */
 internal data class GitStatusEntry(
     val path: String,
@@ -226,9 +226,18 @@ internal fun parseGitLog(stdout: String): List<GitCommit> = stdout.lineSequence(
  * (refs, hashes, paths) and quotes them exactly once.
  */
 internal object GitCommands {
+    /**
+     * `color.ui=false` as a global option, not `--no-color`.
+     *
+     * `git fetch`, `git pull`, `git push` and `git status` do not accept
+     * `--no-color` (verified against git 2.39.5: "error: unknown option
+     * `no-color'" and no such entry in their manuals), so a per-subcommand flag
+     * would break every remote operation. A `-c` setting is accepted by every
+     * subcommand and also covers diff/show/log output.
+     */
     private fun base(directory: String): String {
         require(PosixShell.isQuotablePath(directory)) { "invalid working directory" }
-        return "git -C ${PosixShell.quote(directory)}"
+        return "git -c color.ui=false -C ${PosixShell.quote(directory)}"
     }
 
     fun status(directory: String): String = "${base(directory)} status --porcelain=v2 --branch -z"
@@ -239,21 +248,21 @@ internal object GitCommands {
             require(PosixShell.isQuotablePath(pathValue)) { "invalid path" }
             " -- ${PosixShell.quote(pathValue)}"
         }.orEmpty()
-        return "${base(directory)} diff$scope --no-color --no-ext-diff --unified=3$target"
+        return "${base(directory)} diff$scope --no-ext-diff --unified=3$target"
     }
 
     fun show(directory: String, commit: String): String {
         require(PosixShell.isCommitish(commit)) { "invalid commit" }
-        return "${base(directory)} show --no-color --no-ext-diff --format=fuller ${PosixShell.quote(commit)}"
+        return "${base(directory)} show --no-ext-diff --format=fuller ${PosixShell.quote(commit)}"
     }
 
     fun log(directory: String, limit: Int = 30): String {
         val count = limit.coerceIn(1, 200)
-        return "${base(directory)} log -n $count --no-color --pretty=format:%H%x09%an%x09%ar%x09%s"
+        return "${base(directory)} log -n $count --pretty=format:%H%x09%an%x09%ar%x09%s"
     }
 
     fun branches(directory: String): String =
-        "${base(directory)} branch --no-color --format=%(refname:short)%09%(HEAD)"
+        "${base(directory)} branch --format=%(refname:short)%09%(HEAD)"
 
     fun stage(directory: String, path: String): String {
         require(PosixShell.isQuotablePath(path)) { "invalid path" }
@@ -273,14 +282,14 @@ internal object GitCommands {
         return "${base(directory)} commit -m ${PosixShell.quote(cleaned)}"
     }
 
-    fun fetch(directory: String): String = "${base(directory)} fetch --prune --no-color"
+    fun fetch(directory: String): String = "${base(directory)} fetch --prune"
 
-    fun pull(directory: String): String = "${base(directory)} pull --ff-only --no-color"
+    fun pull(directory: String): String = "${base(directory)} pull --ff-only"
 
     /** Force is only ever `--force-with-lease`, and only after explicit confirmation. */
     fun push(directory: String, force: Boolean): String {
-        val flags = if (force) "--force-with-lease --no-color" else "--no-color"
-        return "${base(directory)} push $flags"
+        val flags = if (force) " --force-with-lease" else ""
+        return "${base(directory)} push$flags"
     }
 
     fun checkout(directory: String, ref: String): String {

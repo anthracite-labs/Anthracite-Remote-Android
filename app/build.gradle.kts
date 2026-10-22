@@ -75,5 +75,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.apache.sshd:sshd-core:2.20.0")
+    // SFTP subsystem for the in-process server used by the file-browser tests.
+    testImplementation("org.apache.sshd:sshd-sftp:2.20.0")
     testImplementation("org.slf4j:slf4j-nop:2.0.20")
 }

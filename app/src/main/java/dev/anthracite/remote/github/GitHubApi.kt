@@ -451,7 +451,7 @@ internal class GitHubApi(
     fun listChecks(repo: RepoRef, ref: String): GitHubResult<List<CheckSummary>> {
         if (!ref.matches(Regex("[A-Za-z0-9._/-]{1,200}"))) return GitHubResult.Invalid("Invalid ref")
         return request("GET", "/repos/$repo/commits/$ref/check-runs?per_page=50") { json, _ ->
-            val array = json.obj("check_runs")?.asArray()
+            val array = json.asObject()?.obj("check_runs")?.asArray()
                 ?: return@request GitHubResult.Failed("Unexpected check response")
             GitHubResult.Ok(
                 array.items.mapNotNull { item ->
@@ -474,7 +474,7 @@ internal class GitHubApi(
             "/repos/$repo/issues/${positive(number)}/comments",
             jsonBody(mapOf("body" to safeBody)),
         ) { json, _ ->
-            GitHubResult.Ok(json.string("html_url") ?: "Comment created")
+            GitHubResult.Ok(json.asObject()?.string("html_url") ?: "Comment created")
         }
     }
 
@@ -491,7 +491,7 @@ internal class GitHubApi(
             "POST",
             "/repos/$repo/pulls/${positive(number)}/reviews",
             jsonBody(payload),
-        ) { json, _ -> GitHubResult.Ok(json.string("state") ?: event.apiValue) }
+        ) { json, _ -> GitHubResult.Ok(json.asObject()?.string("state") ?: event.apiValue) }
     }
 
     fun mergePull(repo: RepoRef, number: Int, method: MergeMethod, expectedHeadSha: String?): GitHubResult<MergeOutcome> {
@@ -502,11 +502,12 @@ internal class GitHubApi(
             }
         }
         return request("PUT", "/repos/$repo/pulls/${positive(number)}/merge", jsonBody(payload)) { json, _ ->
+            val body = json.asObject() ?: return@request GitHubResult.Failed("Unexpected merge response")
             GitHubResult.Ok(
                 MergeOutcome(
-                    merged = json.bool("merged") ?: false,
-                    message = json.string("message").orEmpty(),
-                    sha = json.string("sha"),
+                    merged = body.bool("merged") ?: false,
+                    message = body.string("message").orEmpty(),
+                    sha = body.string("sha"),
                 ),
             )
         }

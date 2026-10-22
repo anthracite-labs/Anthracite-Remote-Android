@@ -6,6 +6,7 @@ import com.jcraft.jsch.SftpException
 import dev.anthracite.remote.SshClient
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.util.UUID
 
 /**
  * Remote path handling for the SFTP browser.
@@ -78,6 +79,34 @@ internal object RemotePath {
         val prefix = if (resolvedBase == "/") "/" else "$resolvedBase/"
         return resolvedCandidate.startsWith(prefix)
     }
+}
+
+/**
+ * Reads a stream into memory but never past [maxBytes].
+ *
+ * This is the bound that matters: `stat` is only a hint, and a hostile or busy
+ * host can hand back more bytes than it advertised. The buffer is grown by the
+ * bytes actually read, so the process cannot be pushed past the cap by a stream
+ * that keeps producing data.
+ */
+internal fun readBounded(input: java.io.InputStream, maxBytes: Long): ByteArray {
+    require(maxBytes > 0) { "read limit must be positive" }
+    val buffer = ByteArray(32 * 1024)
+    val output = ByteArrayOutputStream(minOf(maxBytes, 64L * 1024).toInt())
+    var total = 0L
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) break
+        if (read == 0) continue
+        total += read
+        if (total > maxBytes) {
+            throw RemoteFileException(
+                "The stream exceeded the ${maxBytes / 1024} KB transfer limit while it was being read",
+            )
+        }
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
 }
 
 internal data class RemoteEntry(
@@ -226,40 +255,73 @@ internal class SftpBrowser(private val ssh: SshClient) {
         withSftp { it.rmdir(path) }
     }
 
+    /**
+     * Downloads a file with the byte cap enforced *while streaming*.
+     *
+     * `stat` is only a hint: a file can grow between the check and the read, and a
+     * server may report a size it does not honour. The reader therefore aborts as
+     * soon as the cap would be exceeded, before the buffer grows past it, and the
+     * partial content is discarded.
+     */
     fun download(path: String, maxBytes: Long = MAX_DOWNLOAD_BYTES): ByteArray {
         require(RemotePath.isValid(path)) { "invalid remote path" }
+        require(maxBytes > 0) { "download limit must be positive" }
         val attributes = stat(path, followLinks = true) ?: throw RemoteFileException("File not found")
         if (attributes.directory) throw RemoteFileException("That path is a directory")
-        if (attributes.sizeBytes > maxBytes) {
-            throw RemoteFileException(
-                "File is ${attributes.sizeBytes / 1024} KB; the preview limit is ${maxBytes / 1024} KB",
-            )
-        }
+        if (attributes.sizeBytes > maxBytes) throw tooLarge(attributes.sizeBytes, maxBytes)
         return withSftp { sftp ->
-            val output = ByteArrayOutputStream(attributes.sizeBytes.toInt().coerceAtLeast(64))
-            sftp.get(path, output)
-            val bytes = output.toByteArray()
-            if (bytes.size > maxBytes) throw RemoteFileException("File grew beyond the transfer limit while reading")
-            bytes
+            sftp.get(path).use { input -> readBounded(input, maxBytes) }
         }
     }
 
-    /** Uploads to a temporary name and renames, so the final name is never partial. */
+    private fun tooLarge(observed: Long, maxBytes: Long): RemoteFileException =
+        RemoteFileException("File is ${observed / 1024} KB; the transfer limit is ${maxBytes / 1024} KB")
+
+    /**
+     * Uploads to a unique temporary name in the destination directory and renames.
+     *
+     * SFTP v3 has no exclusive-create, so "never overwrite" can only be a check
+     * followed by a second check immediately before the rename. That is stated
+     * rather than promised: the window is narrowed, not removed. A unique
+     * temporary name means two phones uploading to the same directory cannot
+     * overwrite each other's partial file.
+     */
     fun upload(path: String, bytes: ByteArray, overwrite: Boolean) {
         require(RemotePath.isValid(path)) { "invalid remote path" }
         val parent = RemotePath.parent(path) ?: throw RemoteFileException("Destination has no parent directory")
-        val existing = stat(path, followLinks = false)
-        if (existing != null && !overwrite) throw RemoteFileException("A file already exists at that path")
-        val temporary = "$parent/.${RemotePath.name(path)}.anthracite.tmp"
+        val name = RemotePath.name(path)
+        if (stat(path, followLinks = false) != null && !overwrite) {
+            throw RemoteFileException("A file already exists at that path")
+        }
+        val temporary = tempPath(parent, name)
         withSftp { sftp ->
             try {
                 sftp.put(ByteArrayInputStream(bytes), temporary, ChannelSftp.OVERWRITE)
+                if (!overwrite && existsOn(sftp, path)) {
+                    throw RemoteFileException("A file appeared at that path while the upload was running")
+                }
                 sftp.rename(temporary, path)
             } catch (error: Exception) {
                 runCatching { sftp.rm(temporary) }
                 throw error
             }
         }
+    }
+
+    /** Same channel, no second SFTP session, no symlink following. */
+    private fun existsOn(sftp: ChannelSftp, path: String): Boolean = try {
+        sftp.lstat(path)
+        true
+    } catch (error: SftpException) {
+        if (error.id == ChannelSftp.SSH_FX_NO_SUCH_FILE) false else throw error
+    }
+
+    /** Hidden, collision-resistant, and short enough for a 255-byte name limit. */
+    private fun tempPath(parent: String, name: String): String {
+        val suffix = UUID.randomUUID().toString().replace("-", "").take(16)
+        val budget = 255 - suffix.length - HIDDEN_PREFIX.length - TEMP_SUFFIX.length - 1
+        val stem = name.take(budget.coerceAtLeast(1))
+        return "$parent/$HIDDEN_PREFIX$stem.$suffix$TEMP_SUFFIX"
     }
 
     private fun <T> withSftp(block: (ChannelSftp) -> T): T = ssh.withSession { session ->
@@ -297,5 +359,7 @@ internal class SftpBrowser(private val ssh: SshClient) {
         const val MAX_ENTRIES = 5_000
         const val MAX_DEPTH = 32
         const val MAX_DOWNLOAD_BYTES = 8L * 1024 * 1024
+        const val HIDDEN_PREFIX = "."
+        const val TEMP_SUFFIX = ".anthracite.tmp"
     }
 }

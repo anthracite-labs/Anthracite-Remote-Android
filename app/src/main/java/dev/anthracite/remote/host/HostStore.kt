@@ -228,10 +228,7 @@ internal class HostStore(
         if (!preferences.commit()) throw HostStoreException("Could not save the host list on this phone")
     }
 
-    private fun secretName(id: String): String {
-        require(id.matches(ID_PATTERN)) { "invalid host id" }
-        return "$id.bin"
-    }
+    private fun secretName(id: String): String = SecretNames.hostCredential(id)
 
     companion object {
         const val MAX_HOSTS = 50
@@ -383,17 +380,50 @@ internal class SharedPreferencesAdapter(private val preferences: SharedPreferenc
 }
 
 /**
- * Keystore-backed secret blobs for host credentials.
+ * Valid names for sealed secret blobs.
  *
- * Uses the same fail-closed rules as the legacy store: a dedicated alias, GCM
- * with randomized IVs, the app's no-backup directory, and atomic replacement.
+ * One rule for every secret the app keeps, so a new feature cannot pick a name
+ * the store silently refuses. Names are flat file names: lowercase, digits,
+ * dots, dashes and underscores only, no path separators, no leading dot, no
+ * `..`, and short enough for any filesystem the app might run on.
  */
-internal class KeystoreSecretStore(context: Context) : SecretStore {
-    private val directory = File(context.applicationContext.noBackupFilesDir, "hosts")
+internal object SecretNames {
+    const val MAX_LENGTH = 64
+    private val PATTERN = Regex("[a-z0-9][a-z0-9._-]{0,63}")
 
+    fun isValid(name: String): Boolean =
+        name.length <= MAX_LENGTH && PATTERN.matches(name) && !name.contains("..")
+
+    fun require(name: String): String {
+        require(isValid(name)) { "invalid secret name" }
+        return name
+    }
+
+    /** Host profile credentials keep the id as their prefix so they are easy to audit. */
+    fun hostCredential(profileId: String): String {
+        require(profileId.matches(HostStore.ID_PATTERN)) { "invalid host id" }
+        return "$profileId.bin"
+    }
+}
+
+/**
+ * Sealed secret blobs stored as files.
+ *
+ * Writes go to a temporary file in the same directory, are flushed to disk, made
+ * owner-only and then renamed over the target, so a crash cannot leave a
+ * half-written credential behind. Reads validate the name and the length before
+ * returning anything.
+ *
+ * This class has no Android dependency, which is what makes the round-trip
+ * testable on the JVM; [KeystoreSecretStore] only chooses the directory.
+ */
+internal class FileSecretStore(private val directory: File) : SecretStore {
     override fun write(name: String, bytes: ByteArray) {
-        require(name.matches(Regex("[a-f0-9]{16}\\.bin"))) { "invalid secret name" }
-        if (!directory.exists() && !directory.mkdirs()) throw HostStoreException("Could not create the host directory")
+        SecretNames.require(name)
+        require(bytes.isNotEmpty()) { "refusing to store an empty secret" }
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw HostStoreException("Could not create the secret directory")
+        }
         val target = File(directory, name)
         val temporary = File.createTempFile(".${target.name}.", ".tmp", directory)
         try {
@@ -406,27 +436,45 @@ internal class KeystoreSecretStore(context: Context) : SecretStore {
                 output.flush()
                 output.fd.sync()
             }
-            if (!temporary.renameTo(target)) throw HostStoreException("Could not replace the host credential file")
+            if (!temporary.renameTo(target)) throw HostStoreException("Could not replace the secret file")
         } finally {
             if (temporary.exists()) temporary.delete()
         }
     }
 
     override fun read(name: String): ByteArray? {
+        SecretNames.require(name)
         val file = File(directory, name)
         if (!file.isFile) return null
-        if (file.length() !in 13L..CredentialCrypto.MAX_CIPHERTEXT_BYTES.toLong()) {
-            throw HostStoreException("Stored credential has an invalid length")
+        if (file.length() !in CredentialCrypto.MIN_CIPHERTEXT_BYTES.toLong()..CredentialCrypto.MAX_CIPHERTEXT_BYTES.toLong()) {
+            throw HostStoreException("Stored secret has an invalid length")
         }
         return file.readBytes()
     }
 
     override fun delete(name: String) {
+        SecretNames.require(name)
         val file = File(directory, name)
         if (file.exists() && !file.delete() && file.exists()) {
-            throw HostStoreException("Could not delete the host credential file")
+            throw HostStoreException("Could not delete the secret file")
         }
     }
+}
+
+/**
+ * Keystore-sealed secret blobs in the app's no-backup directory.
+ *
+ * Uses the same fail-closed rules as the legacy store: a dedicated alias, GCM
+ * with randomized IVs, a directory excluded from backup, and atomic replacement.
+ */
+internal class KeystoreSecretStore(context: Context) : SecretStore {
+    private val files = FileSecretStore(File(context.applicationContext.noBackupFilesDir, "hosts"))
+
+    override fun write(name: String, bytes: ByteArray) = files.write(name, bytes)
+
+    override fun read(name: String): ByteArray? = files.read(name)
+
+    override fun delete(name: String) = files.delete(name)
 }
 
 internal object HostKeys {

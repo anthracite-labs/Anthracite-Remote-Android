@@ -100,6 +100,41 @@ internal fun choose(
         .show()
 }
 
+/**
+ * A single-line secret prompt.
+ *
+ * A personal access token is a credential, so the field is masked, excluded from
+ * autofill and from the IME's personalized-learning corpus, and not written to
+ * the activity's saved instance state. Pasting stays possible because retyping a
+ * 40-character token on a phone is how users end up choosing weaker tokens.
+ */
+internal fun promptSecret(
+    activity: Activity,
+    title: String,
+    message: String,
+    onConfirm: (String) -> Unit,
+) {
+    val input = android.widget.EditText(activity).apply {
+        inputType = android.text.InputType.TYPE_CLASS_TEXT or
+            android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD or
+            android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        isSingleLine = true
+        imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or
+            android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+        isSaveEnabled = false
+        importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        hint = title
+        contentDescription = title
+    }
+    AlertDialog.Builder(activity)
+        .setTitle(title)
+        .setMessage(message)
+        .setView(input)
+        .setPositiveButton(R.string.continue_action) { _, _ -> onConfirm(input.text.toString()) }
+        .setNegativeButton(R.string.cancel, null)
+        .show()
+}
+
 internal fun promptText(
     activity: Activity,
     title: String,

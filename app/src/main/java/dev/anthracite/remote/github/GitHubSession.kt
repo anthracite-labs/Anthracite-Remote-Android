@@ -18,9 +18,21 @@ internal class GitHubTokenStore(
     private val key: SecretKey,
     private val name: String = DEFAULT_NAME,
 ) {
+    /**
+     * Returns the stored token, or null when none is stored.
+     *
+     * A blob that exists but cannot be opened is *not* reported as "signed out":
+     * that would hide tampering or a rotated Keystore key behind an innocent
+     * state. It throws instead, and the caller clears the unusable blob and asks
+     * the user to sign in again.
+     */
     fun read(): String? {
-        val blob = runCatching { secrets.read(name) }.getOrNull() ?: return null
-        val opened = runCatching { CredentialCrypto.open(blob, key) }.getOrNull() ?: return null
+        val blob = secrets.read(name) ?: return null
+        val opened = try {
+            CredentialCrypto.open(blob, key)
+        } catch (error: Exception) {
+            throw GitHubTokenException("The stored GitHub token could not be decrypted", error)
+        }
         return opened.password?.takeIf { it.isNotBlank() }
     }
 
@@ -35,10 +47,13 @@ internal class GitHubTokenStore(
     }
 
     fun clear() {
-        runCatching { secrets.delete(name) }
+        secrets.delete(name)
     }
 
-    private companion object {
+    companion object {
+        /** Valid under [dev.anthracite.remote.host.SecretNames]; asserted by a unit test. */
         const val DEFAULT_NAME = "github_token.v1"
     }
 }
+
+internal class GitHubTokenException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)

@@ -1,12 +1,19 @@
 #!/bin/bash
-# Print a short failure excerpt as GitHub annotations. The Actions log blob is
-# not readable from the development environment, and the Checks API keeps only
-# a small number of annotations. Prefer the JUnit failure message when it exists:
-# it identifies a failed assertion rather than only Gradle's task wrapper.
+# Print a short failure excerpt as GitHub annotations.
+#
+# The Actions log blob is not always readable from the development environment and
+# the Checks API keeps only a small number of annotations, so this prints the JUnit
+# failure message when one exists: it identifies a failed assertion rather than
+# only Gradle's task wrapper. Output is capped without piping into `head` inside a
+# `pipefail` pipeline, which used to surface as a spurious "Broken pipe".
 set -euo pipefail
-file=${1:?log file}
+
+file=${1:?usage: emit-failure.sh <log file> [max lines]}
+limit=${2:-12}
+
 [ -f "$file" ] || exit 0
-{
+
+details=$(
   if [ -d app/build/test-results/testDebugUnitTest ]; then
     python3 - <<'PY' || true
 import glob
@@ -28,15 +35,27 @@ for filename in sorted(glob.glob("app/build/test-results/testDebugUnitTest/**/*.
         print(f"JUnit {case.attrib.get('classname', '?')}.{case.attrib.get('name', '?')}: {message}{suffix}")
 PY
   fi
-  # aapt2 and javac report differently from Kotlin; surface those first so a
-  # resource error is not hidden behind a wall of `e:` lines.
-  grep -E 'ERROR:|: error:|error: ' "$file" | head -n 10 || true
+  # Resource linking and javac report differently from Kotlin; surface those
+  # first so a resource error is not hidden behind a wall of `e:` lines.
+  grep -E 'ERROR:|: error:|error: ' "$file" || true
   grep -E 'Dependency |requires |requires libraries|minCompileSdk|AAR metadata|e: |FAILED|What went wrong|Execution failed' "$file" || true
-  echo '--- tail ---'
-  tail -n 25 "$file"
-} | head -n 24 | while IFS= read -r line; do
+  if ! grep -qE 'ERROR:|e: |FAILED|What went wrong|Execution failed' "$file"; then
+    printf -- '--- log tail ---\n'
+    tail -n 20 "$file" || true
+  fi
+)
+
+count=0
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
   line=${line//$'\r'/}
   line=${line//::/:}
   line=${line//%/%25}
   printf '::error::%s\n' "$line"
-done
+  count=$((count + 1))
+  if [ "$count" -ge "$limit" ]; then
+    printf '::notice::Further distinct errors were suppressed; the full log is in the job artifact.\n'
+    break
+  fi
+done <<< "$details"
+exit 0

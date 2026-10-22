@@ -246,6 +246,8 @@
     <string name="github_rate_limited">GitHub rate-limited this account. Try again in about %1$d seconds.</string>
     <string name="github_not_found">GitHub did not find that resource, or the token cannot see it.</string>
     <string name="github_failed">The GitHub request failed.</string>
+    <string name="github_token_unreadable">The saved GitHub token could not be decrypted on this phone, so it was removed. Sign in again.</string>
+    <string name="github_token_store_failed">The token was accepted by GitHub but could not be stored securely on this phone, so it was not kept.</string>
 
     <!-- Containers and Kubernetes -->
     <string name="deploy_title">Deployments</string>

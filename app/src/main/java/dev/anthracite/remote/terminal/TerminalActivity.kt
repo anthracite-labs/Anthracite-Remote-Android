@@ -153,7 +153,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     // One quoted `cd` for the initial directory only. The shell
                     // decides what to do with it; Anthracite does not parse the
                     // shell's response.
-                    session.write("cd " + PosixShell.quote(directory) + "\n")
+                    session.write(("cd " + PosixShell.quote(directory) + "\n").toByteArray(Charsets.UTF_8))
                     pendingDirectory = null
                 }
             }.onFailure { showNotice(getString(R.string.terminal_open_failed, it.message ?: "")) }

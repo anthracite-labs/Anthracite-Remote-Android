@@ -1,23 +1,28 @@
 # Support matrix
 
 What has been *observed*, and what is only *expected*. A row is added here only
-with the CI run, container image or host that produced it. `ProvisioningSupport`
-reads this list; an entry without evidence is not allowed.
+with the CI run, container image or host that produced it, linked by run URL.
+
+**Current state: no distribution row below has a linked matrix run.** They are
+listed as *unverified* on purpose. A scheduled container matrix job is the next
+step (see `docs/engineering/PR6_FAULT_MAP.md`, item E1); when it lands, each row
+gets its run URL and image digest, and only then may it be called verified.
 
 ## Guided provisioning
 
 | Distribution | Package manager | Tier | Evidence |
 | --- | --- | --- | --- |
-| Debian 12 | APT | verified in a container | `debian:12` image run, plan digest + install + verify steps |
-| Ubuntu 24.04 | APT | verified in a container | `ubuntu:24.04` image run |
-| Fedora 42 | DNF | verified in a container | `fedora:42` image run |
-| Arch Linux | pacman | verified in a container | `archlinux:latest` image run |
-| openSUSE Tumbleweed | zypper | verified in a container | `opensuse/tumbleweed:latest` image run |
-| Alpine 3.21 | apk | verified in a container | `alpine:3.21` image run |
+| Debian 12 | APT | unverified | none yet; intended check: `debian:12`, plan digest + install + verify |
+| Ubuntu 24.04 | APT | unverified | none yet; intended check: `ubuntu:24.04` |
+| Fedora 42 | DNF | unverified | none yet; intended check: `fedora:42` |
+| Arch Linux | pacman | unverified | none yet; intended check: `archlinux:latest` |
+| openSUSE Tumbleweed | zypper | unverified | none yet; intended check: `opensuse/tumbleweed:latest` |
+| Alpine 3.21 | apk | unverified | none yet; intended check: `alpine:3.21` |
 | anything else | detected | unverified | needs an explicit acknowledgement before launch |
 
-A container proves that package names resolve and that the runner's grammar,
-locking, verification and cancellation behave. It does **not** prove:
+When the matrix runs, a container will prove that package names resolve and that
+the runner's grammar, locking, verification and cancellation behave. It does
+**not** prove:
 
 * that a real host of the same distribution has the same package availability;
 * supervisor behaviour (`systemd --user`, `loginctl`, linger);
