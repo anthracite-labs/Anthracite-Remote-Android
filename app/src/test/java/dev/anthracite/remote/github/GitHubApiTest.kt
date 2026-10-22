@@ -118,7 +118,8 @@ class GitHubApiTest {
         val transport = FakeTransport {
             response(200, """{"merged":true,"message":"Pull Request successfully merged","sha":"abc123"}""")
         }
-        val outcome = (api(transport).mergePull(repo, 7, MergeMethod.SQUASH, "deadbeefcafe")
+        val reviewed = "deadbeefcafe".padEnd(40, '0')
+        val outcome = (api(transport).mergePull(repo, 7, MergeMethod.SQUASH, reviewed)
             as GitHubResult.Ok).value
 
         assertTrue(outcome.merged)
@@ -127,17 +128,17 @@ class GitHubApiTest {
         assertEquals("PUT", request.method)
         assertTrue(request.url.endsWith("/repos/anthracite-labs/Anthracite-Remote-Android/pulls/7/merge"))
         val body = String(request.body ?: ByteArray(0), Charsets.UTF_8)
-        assertTrue("body must pin the reviewed head: $body", body.contains("\"sha\":\"deadbeefcafe\""))
+        assertTrue("body must pin the reviewed head: $body", body.contains("\"sha\":\"$reviewed\""))
         assertTrue(body.contains("\"merge_method\":\"squash\""))
     }
 
     @Test
-    fun `a malformed expected SHA is dropped rather than sent`() {
-        val transport = FakeTransport { response(200, """{"merged":false,"message":"not ready"}""") }
-        api(transport).mergePull(repo, 7, MergeMethod.MERGE, "not a sha")
-        val body = String(transport.requests.single().body ?: ByteArray(0), Charsets.UTF_8)
-        assertFalse(body.contains("\"sha\""))
-        assertTrue(body.contains("\"merge_method\":\"merge\""))
+    fun `missing and malformed reviewed heads cannot submit a merge`() {
+        val transport = FakeTransport { error("merge endpoint must not be called") }
+        for (head in listOf(null, "", "not a sha", "deadbeefcafe", "a".repeat(41), "g".repeat(40))) {
+            assertTrue("head $head must be rejected", api(transport).mergePull(repo, 7, MergeMethod.MERGE, head) is GitHubResult.Invalid)
+        }
+        assertTrue(transport.requests.isEmpty())
     }
 
     @Test

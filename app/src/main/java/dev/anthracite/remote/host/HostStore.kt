@@ -7,6 +7,8 @@ import android.security.keystore.KeyProperties
 import dev.anthracite.remote.AuthMethod
 import dev.anthracite.remote.CredentialCrypto
 import dev.anthracite.remote.SavedSecrets
+import dev.anthracite.remote.sha256Fingerprint
+import dev.anthracite.remote.sshKeyType
 import java.io.File
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -112,7 +114,12 @@ internal class HostStore(
         require(profile.host.isNotBlank()) { "host is required" }
         require(profile.port in 1..65535) { "port is invalid" }
         require(profile.username.isNotBlank()) { "username is required" }
+        require(validHostTrust(profile)) { "host-key trust metadata is inconsistent" }
         val existing = list()
+        val previouslyPinned = existing.firstOrNull { it.id == profile.id }?.hostKey
+        if (previouslyPinned != null && profile.hostKey?.contentEquals(previouslyPinned) != true) {
+            throw HostStoreException("Saved host trust cannot be removed or replaced by editing this profile")
+        }
         if (existing.size >= MAX_HOSTS && existing.none { it.id == profile.id }) {
             throw HostStoreException("You can save at most $MAX_HOSTS hosts on this phone.")
         }
@@ -175,14 +182,28 @@ internal class HostStore(
         persist(existing.map { if (it.id == id) it.copy(lastUsedAtMillis = atMillis) else it })
     }
 
-    fun updateHostKey(id: String, hostKey: ByteArray, keyType: String, fingerprint: String) {
+    fun updateHostKey(
+        id: String, hostKey: ByteArray, keyType: String, fingerprint: String, expectedEndpoint: String? = null,
+    ): HostProfile {
         val existing = list()
-        if (existing.none { it.id == id }) return
-        persist(
-            existing.map {
-                if (it.id == id) it.copy(hostKey = hostKey, hostKeyType = keyType, fingerprint = fingerprint) else it
-            },
-        )
+        val prior = existing.singleOrNull { it.id == id }
+            ?: throw HostStoreException("The selected host no longer exists; its key was not saved")
+        if (expectedEndpoint != null && prior.endpoint != expectedEndpoint) {
+            throw HostStoreException("The selected host changed; its key was not saved")
+        }
+        if (prior.hostKey != null && !prior.hostKey.contentEquals(hostKey)) {
+            throw HostStoreException("The saved host key changed; refusing to replace trust silently")
+        }
+        val updated = prior.copy(hostKey = hostKey.copyOf(), hostKeyType = keyType, fingerprint = fingerprint)
+        require(validHostTrust(updated)) { "host-key trust metadata is inconsistent" }
+        persist(existing.map { if (it.id == id) updated else it })
+        val verified = find(id)
+        if (verified == null || verified.endpoint != prior.endpoint ||
+            verified.hostKey?.contentEquals(hostKey) != true || verified.hostKeyType != keyType ||
+            verified.fingerprint != fingerprint) {
+            throw HostStoreException("The approved host key could not be read back; connection was stopped")
+        }
+        return verified
     }
 
     fun newId(): String {
@@ -204,7 +225,9 @@ internal class HostStore(
         key: SecretKey,
     ): HostProfile? {
         if (preferences.boolean(KEY_LEGACY_IMPORTED, false)) return null
-        val existing = runCatching { list() }.getOrElse { emptyList() }
+        // An unreadable list is not an empty list. In particular, never replace
+        // corrupt saved profiles merely because a legacy profile is available.
+        val existing = list()
         var imported: HostProfile? = null
         if (existing.none { it.origin == HostOrigin.IMPORTED_LEGACY && it.endpoint == legacy.endpoint }) {
             val profile = legacy.copy(
@@ -244,6 +267,14 @@ internal class HostStore(
     }
 }
 
+/** A missing key has no trust metadata; a pinned key must describe its own bytes. */
+internal fun validHostTrust(profile: HostProfile): Boolean {
+    val key = profile.hostKey ?: return profile.hostKeyType.isEmpty() && profile.fingerprint.isEmpty()
+    return key.isNotEmpty() && key.size <= 16 * 1024 &&
+        sshKeyType(key) != "unknown" && sshKeyType(key) == profile.hostKeyType &&
+        sha256Fingerprint(key) == profile.fingerprint
+}
+
 /**
  * Line-oriented profile encoding.
  *
@@ -278,10 +309,10 @@ internal object ProfileCodec {
     }
 
     fun decode(encoded: String): List<HostProfile>? {
-        if (encoded.isBlank()) return emptyList()
+        if (encoded.isEmpty()) return emptyList()
         val hosts = mutableListOf<HostProfile>()
         for (record in encoded.split(RECORD_SEPARATOR)) {
-            if (record.isEmpty()) continue
+            if (record.isEmpty()) return null
             val fields = record.split(SEPARATOR)
             if (fields.size != 14 || fields[0] != VERSION) return null
             val port = fields[4].toIntOrNull() ?: return null
@@ -289,12 +320,14 @@ internal object ProfileCodec {
             val remotePort = fields[7].toIntOrNull() ?: return null
             val origin = runCatching { HostOrigin.valueOf(fields[11]) }.getOrNull() ?: return null
             val lastUsed = fields[12].toLongOrNull() ?: 0L
-            val hostKey = fields[13].takeIf { it.isNotEmpty() }?.let { encodedKey ->
-                runCatching { java.util.Base64.getDecoder().decode(encodedKey) }.getOrNull()
+            val hostKey = if (fields[13].isEmpty()) null else try {
+                java.util.Base64.getDecoder().decode(fields[13])
+            } catch (_: IllegalArgumentException) {
+                return null
             }
             if (!HostStore.ID_PATTERN.matches(fields[1])) return null
             if (port !in 1..65535 || remotePort !in 1..65535) return null
-            hosts += HostProfile(
+            val profile = HostProfile(
                 id = fields[1],
                 label = unescape(fields[2]) ?: return null,
                 host = unescape(fields[3]) ?: return null,
@@ -309,6 +342,8 @@ internal object ProfileCodec {
                 lastUsedAtMillis = lastUsed,
                 hostKey = hostKey,
             )
+            if (!validHostTrust(profile)) return null
+            hosts += profile
         }
         return hosts
     }

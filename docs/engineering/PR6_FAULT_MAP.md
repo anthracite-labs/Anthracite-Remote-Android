@@ -1,5 +1,9 @@
 # PR #6 fault map
 
+Historical register through head `c3982a3`. New findings and current validation
+status are in [PR7_REVIEW.md](PR7_REVIEW.md); the green exit gate below applies
+only to the previous head and does **not** certify the follow-up changes.
+
 Living register for the SSH-workspace PR. Every row is either backed by a CI run,
 a local reproduction, or a primary source; suspicion is labelled as such and is
 never promoted to fact without evidence.

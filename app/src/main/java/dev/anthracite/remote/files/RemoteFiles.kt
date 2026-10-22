@@ -289,11 +289,11 @@ internal class SftpBrowser(private val ssh: SshClient) {
     /**
      * Uploads to a unique temporary name in the destination directory and renames.
      *
-     * SFTP v3 has no exclusive-create, so "never overwrite" can only be a check
-     * followed by a second check immediately before the rename. That is stated
-     * rather than promised: the window is narrowed, not removed. A unique
-     * temporary name means two phones uploading to the same directory cannot
-     * overwrite each other's partial file.
+     * SFTP v3 defines exclusive open, but JSch's put(InputStream) API does not
+     * request it, and ordinary SFTP rename is not a portable no-replace operation.
+     * The two existence checks only narrow the race; another client may create
+     * the destination between the last check and rename. The unique temporary
+     * name isolates partial uploads, not concurrent writes to the final path.
      */
     fun upload(path: String, bytes: ByteArray, overwrite: Boolean) {
         require(RemotePath.isValid(path)) { "invalid remote path" }
@@ -325,11 +325,11 @@ internal class SftpBrowser(private val ssh: SshClient) {
         if (error.id == ChannelSftp.SSH_FX_NO_SUCH_FILE) false else throw error
     }
 
-    /** Hidden, collision-resistant, and short enough for a 255-byte name limit. */
+    /** Short ASCII stem: the server's 255 limit is in bytes, not UTF-16 chars. */
     private fun tempPath(parent: String, name: String): String {
         val suffix = UUID.randomUUID().toString().replace("-", "").take(16)
-        val budget = 255 - suffix.length - HIDDEN_PREFIX.length - TEMP_SUFFIX.length - 1
-        val stem = name.take(budget.coerceAtLeast(1))
+        val stem = name.filter { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' }
+            .take(32).ifEmpty { "upload" }
         return "$parent/$HIDDEN_PREFIX$stem.$suffix$TEMP_SUFFIX"
     }
 

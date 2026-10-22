@@ -2,6 +2,9 @@ package dev.anthracite.remote.host
 
 import dev.anthracite.remote.AuthMethod
 import dev.anthracite.remote.SavedSecrets
+import dev.anthracite.remote.sha256Fingerprint
+import dev.anthracite.remote.sshKeyType
+import java.nio.ByteBuffer
 import java.security.SecureRandom
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -67,13 +70,19 @@ private class FakeSecretStore : SecretStore {
 class HostStoreTest {
     private val key: SecretKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
 
+    private fun hostKey(seed: Byte = 1): ByteArray {
+        val type = "ssh-ed25519".toByteArray(Charsets.US_ASCII)
+        return ByteBuffer.allocate(4 + type.size + 4 + 32)
+            .putInt(type.size).put(type).putInt(32).put(ByteArray(32) { seed }).array()
+    }
+
     private fun profile(
         id: String = "0123456789abcdef",
         label: String = "Dev box",
         host: String = "example.internal",
         username: String = "ada",
         origin: HostOrigin = HostOrigin.CREATED,
-        hostKey: ByteArray? = byteArrayOf(1, 2, 3),
+        hostKey: ByteArray? = hostKey(),
     ) = HostProfile(
         id = id,
         label = label,
@@ -84,8 +93,8 @@ class HostStoreTest {
         remotePort = 4096,
         keyName = "",
         hostKey = hostKey,
-        hostKeyType = "ssh-ed25519",
-        fingerprint = "SHA256:abc",
+        hostKeyType = hostKey?.let(::sshKeyType).orEmpty(),
+        fingerprint = hostKey?.let(::sha256Fingerprint).orEmpty(),
         origin = origin,
         lastUsedAtMillis = 7,
     )
@@ -105,7 +114,7 @@ class HostStoreTest {
         assertNotNull(decoded)
         assertEquals(original, decoded)
         assertNull(decoded!![1].hostKey)
-        assertArrayEquals(byteArrayOf(1, 2, 3), decoded[0].hostKey)
+        assertArrayEquals(hostKey(), decoded[0].hostKey)
     }
 
     @Test
@@ -125,6 +134,83 @@ class HostStoreTest {
         preferences.values[HostStore.KEY_HOSTS] = "garbage"
         val (hostStore, _, _) = store(preferences = preferences)
         assertThrows(HostStoreException::class.java) { hostStore.list() }
+    }
+
+    @Test
+    fun `legacy import refuses corrupt hosts without changing data or import marker`() {
+        val (hostStore, preferences, secrets) = store()
+        val corrupt = "unreadable existing profiles"
+        preferences.values[HostStore.KEY_HOSTS] = corrupt
+        assertThrows(HostStoreException::class.java) {
+            hostStore.importLegacyIfNeeded(profile(), SavedSecrets("secret", null, null), key)
+        }
+        assertEquals(corrupt, preferences.values[HostStore.KEY_HOSTS])
+        assertFalse(preferences.boolean(HostStore.KEY_LEGACY_IMPORTED, false))
+        assertTrue(secrets.blobs.isEmpty())
+        // After an explicit recovery of the saved list, import is still possible.
+        preferences.values[HostStore.KEY_HOSTS] = ProfileCodec.encode(listOf(profile()))
+        hostStore.importLegacyIfNeeded(profile(), null, key)
+        assertEquals(2, hostStore.list().size)
+    }
+
+    @Test
+    fun `malformed or inconsistent trust never becomes first use or overwrites another host`() {
+        val (hostStore, preferences, secrets) = store()
+        val first = profile()
+        val second = profile(id = "fedcba9876543210", host = "other.example", hostKey = null)
+        hostStore.save(first, SavedSecrets("existing-secret", null, null), key)
+        hostStore.save(second, null, key)
+        val original = preferences.string(HostStore.KEY_HOSTS)!!
+        val records = original.split('\n').toMutableList()
+        val fields = records.first().split('\t').toMutableList()
+        for ((index, corrupt) in listOf(
+            13 to "not-base64%", 13 to java.util.Base64.getEncoder().encodeToString(byteArrayOf()),
+            9 to "ssh-rsa", 10 to "SHA256:wrong",
+        )) {
+            val modified = fields.toMutableList().also { it[index] = corrupt }
+            preferences.values[HostStore.KEY_HOSTS] = (listOf(modified.joinToString("\t")) + records.drop(1)).joinToString("\n")
+            assertThrows(HostStoreException::class.java) { hostStore.list() }
+            assertThrows(HostStoreException::class.java) { hostStore.save(second, null, key) }
+            assertEquals(modified.joinToString("\t"), preferences.string(HostStore.KEY_HOSTS)!!.substringBefore('\n'))
+            assertNotNull(secrets.blobs[first.id + ".bin"])
+        }
+        preferences.values[HostStore.KEY_HOSTS] = original
+        assertEquals("existing-secret", hostStore.secretsFor(first, key).password)
+        assertEquals(2, hostStore.list().size)
+        assertNull(ProfileCodec.decode(ProfileCodec.encode(listOf(second.copy(fingerprint = "SHA256:stale")))))
+        assertNull(ProfileCodec.decode("   "))
+    }
+
+    @Test
+    fun `failed host key commit never establishes trust and can be retried`() {
+        val (hostStore, preferences, _) = store()
+        val host = profile(hostKey = null)
+        hostStore.save(host, SavedSecrets("keep", null, null), key)
+        val approved = hostKey(3)
+        preferences.failNextCommit = true
+        assertThrows(HostStoreException::class.java) {
+            hostStore.updateHostKey(host.id, approved, sshKeyType(approved), sha256Fingerprint(approved), host.endpoint)
+        }
+        assertNull(hostStore.find(host.id)!!.hostKey)
+        assertEquals("keep", hostStore.secretsFor(host, key).password)
+        assertThrows(HostStoreException::class.java) {
+            hostStore.updateHostKey(host.id, approved, sshKeyType(approved), sha256Fingerprint(approved), "other@host:22")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            hostStore.updateHostKey(host.id, approved, "ssh-rsa", sha256Fingerprint(approved), host.endpoint)
+        }
+        assertNull(hostStore.find(host.id)!!.hostKey)
+        val saved = hostStore.updateHostKey(host.id, approved, sshKeyType(approved), sha256Fingerprint(approved), host.endpoint)
+        assertArrayEquals(approved, saved.hostKey)
+        assertThrows(HostStoreException::class.java) {
+            val replacement = hostKey(4)
+            hostStore.updateHostKey(host.id, replacement, sshKeyType(replacement), sha256Fingerprint(replacement))
+        }
+        assertArrayEquals(approved, hostStore.find(host.id)!!.hostKey)
+        assertThrows(HostStoreException::class.java) {
+            hostStore.save(saved.copy(hostKey = null, hostKeyType = "", fingerprint = ""), null, key)
+        }
+        assertArrayEquals(approved, hostStore.find(host.id)!!.hostKey)
     }
 
     @Test
@@ -206,13 +292,14 @@ class HostStoreTest {
     @Test
     fun `host key updates are exact and preserve everything else`() {
         val (hostStore, _, _) = store()
-        val host = profile()
+        val host = profile(hostKey = null)
         hostStore.save(host, null, key)
-        hostStore.updateHostKey(host.id, byteArrayOf(9, 9), "ssh-rsa", "SHA256:new")
+        val approved = hostKey(9)
+        hostStore.updateHostKey(host.id, approved, sshKeyType(approved), sha256Fingerprint(approved))
         val updated = hostStore.find(host.id)!!
-        assertArrayEquals(byteArrayOf(9, 9), updated.hostKey)
-        assertEquals("ssh-rsa", updated.hostKeyType)
-        assertEquals("SHA256:new", updated.fingerprint)
+        assertArrayEquals(approved, updated.hostKey)
+        assertEquals("ssh-ed25519", updated.hostKeyType)
+        assertEquals(sha256Fingerprint(approved), updated.fingerprint)
         assertEquals(host.label, updated.label)
     }
 

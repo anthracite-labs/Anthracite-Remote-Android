@@ -48,6 +48,10 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
     private var gridRows = 24
     private var pendingState: String? = null
     private var pendingDirectory: String? = null
+    private var destroyed = false
+    // Each observer captures this Activity, so release every tab's observer on
+    // destruction; TerminalTabs owns only sessions, never screen callbacks.
+    private val boundListeners = mutableMapOf<TerminalSession, TerminalSession.Listener>()
 
     private val activeSession: TerminalSession?
         get() = TerminalTabs.get(activeIndex)?.session
@@ -70,12 +74,28 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
         pendingDirectory = intent.getStringExtra(EXTRA_START_DIRECTORY)
             ?.takeIf { PosixShell.isQuotablePath(it) }
         buildSpecialKeys()
-        if (!Workspace.ssh.isConnected()) {
-            showNotice(getString(R.string.terminal_not_connected))
-            renderTabs()
-            return
+        TerminalTabs.all().forEach { bindSession(it.session) }
+        if (!Workspace.ssh.isConnected()) showNotice(getString(R.string.terminal_not_connected))
+        if (TerminalTabs.size() == 0) {
+            if (Workspace.ssh.isConnected()) newShellTab() else renderTabs()
+        } else {
+            val restored = savedInstanceState?.getInt(STATE_ACTIVE_TAB, 0) ?: 0
+            selectTab(restored.takeIf { it in 0 until TerminalTabs.size() } ?: 0)
         }
-        if (TerminalTabs.size() == 0) newShellTab() else selectTab(0)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt(STATE_ACTIVE_TAB, activeIndex.coerceAtLeast(0))
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        TerminalTabs.all().forEach { tab ->
+            if (tab.session !in boundListeners) bindSession(tab.session)
+        }
+        pendingState = activeSession?.lastCloseState?.let(::describeClosed)
+        scheduleRender()
     }
 
     override fun onResume() {
@@ -84,10 +104,26 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
         scheduleRender()
     }
 
+    override fun onStop() {
+        unbindSessions()
+        renderHandler.removeCallbacksAndMessages(null)
+        renderQueued = false
+        super.onStop()
+    }
+
     override fun onDestroy() {
+        destroyed = true
+        unbindSessions()
         renderHandler.removeCallbacksAndMessages(null)
         terminalView.listener = null
         super.onDestroy()
+    }
+
+    private fun unbindSessions() {
+        boundListeners.forEach { (session, observer) ->
+            if (session.listener === observer) session.listener = null
+        }
+        boundListeners.clear()
     }
 
     // ------------------------------------------------------------------ menu
@@ -153,8 +189,11 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     // One quoted `cd` for the initial directory only. The shell
                     // decides what to do with it; Anthracite does not parse the
                     // shell's response.
-                    session.write(("cd " + PosixShell.quote(directory) + "\n").toByteArray(Charsets.UTF_8))
-                    pendingDirectory = null
+                    if (session.write(("cd " + PosixShell.quote(directory) + "\n").toByteArray(Charsets.UTF_8))) {
+                        pendingDirectory = null
+                    } else {
+                        showNotice(getString(R.string.terminal_input_not_sent))
+                    }
                 }
             }.onFailure { showNotice(getString(R.string.terminal_open_failed, it.message ?: "")) }
         }
@@ -195,10 +234,14 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     if (created.exitCode != 0) {
                         throw IllegalStateException(created.text.ifBlank { "tmux could not create the session" })
                     }
-                    tmux.attach(name, Workspace.TERM, gridCols, gridRows) to name
+                    val identity = tmux.probe().sessions.singleOrNull { it.name == name }
+                        ?: throw IllegalStateException("Could not establish the tmux session identity")
+                    if (identity.id.isBlank()) throw IllegalStateException("tmux returned no session id")
+                    tmux.attach(identity.id, Workspace.TERM, gridCols, gridRows) to identity
                 }
             }
-            result.onSuccess { (pty, sessionName) ->
+            result.onSuccess { (pty, identity) ->
+                val sessionName = identity.name
                 val emulator = TerminalEmulator(gridCols, gridRows)
                 val session = TerminalSession(
                     kind = TerminalSession.Kind.TMUX,
@@ -206,6 +249,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     emulator = emulator,
                     pty = pty,
                     tmuxSession = sessionName,
+                    tmuxId = identity.id,
                 )
                 attachSession(session, getString(R.string.terminal_tab_session, sessionName))
             }.onFailure { showNotice(getString(R.string.terminal_session_failed, it.message ?: "")) }
@@ -250,7 +294,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
             val result = runCatching {
                 io {
                     TmuxManager(Workspace.ssh)
-                        .attach(target.name, Workspace.TERM, gridCols, gridRows)
+                        .attach(target.id, Workspace.TERM, gridCols, gridRows)
                 }
             }
             result.onSuccess { pty ->
@@ -261,6 +305,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                     emulator = emulator,
                     pty = pty,
                     tmuxSession = target.name,
+                    tmuxId = target.id,
                 )
                 attachSession(session, getString(R.string.terminal_tab_session, target.name))
             }.onFailure { showNotice(getString(R.string.terminal_session_failed, it.message ?: "")) }
@@ -268,49 +313,87 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
     }
 
     private fun attachSession(session: TerminalSession, label: String) {
-        session.listener = object : TerminalSession.Listener {
-            override fun onOutput() = scheduleRender()
+        TerminalTabs.add(session, label)
+        bindSession(session)
+        selectTab(TerminalTabs.indexOf(session))
+    }
 
-            override fun onClosed(state: TerminalSession.ClosedState) {
+    private fun bindSession(session: TerminalSession) {
+        val observer = object : TerminalSession.Listener {
+            // The reader may have captured an observer just before onDestroy.
+            // Checking again on the main thread keeps those queued callbacks from
+            // touching a destroyed screen or an observer replaced by a new one.
+            private fun dispatch(block: () -> Unit) {
                 runOnUiThread {
-                    if (activeSession === session) {
-                        val exited = when {
-                            state.exitSignal != null -> getString(R.string.terminal_exit_signal, state.exitSignal)
-                            state.exitStatus >= 0 -> getString(R.string.terminal_exit_status, state.exitStatus)
-                            else -> state.reason
-                        }
-                        pendingState = exited
-                        scheduleRender()
-                    }
-                    renderTabs()
+                    if (!destroyed && session.listener === this && TerminalTabs.indexOf(session) >= 0) block()
                 }
             }
 
-            override fun onBlockedClipboardWrite() {
-                runOnUiThread { showNotice(getString(R.string.terminal_clipboard_blocked)) }
+            override fun onOutput() = dispatch {
+                if (activeSession === session) scheduleRender()
             }
 
-            override fun onTitle(title: String) = runOnUiThread { updateStatus() }
+            override fun onClosed(state: TerminalSession.ClosedState) = dispatch {
+                if (activeSession === session) {
+                    pendingState = describeClosed(state)
+                    scheduleRender()
+                }
+                renderTabs()
+            }
 
-            override fun onHyperlink(uri: String) {
-                runOnUiThread { showNotice(getString(R.string.terminal_link_blocked, uri.take(120))) }
+            override fun onBlockedClipboardWrite() = dispatch {
+                showNotice(getString(R.string.terminal_clipboard_blocked))
+            }
+
+            override fun onTitle(title: String) = dispatch {
+                if (activeSession === session) updateStatus()
+            }
+
+            override fun onHyperlink(uri: String) = dispatch {
+                showNotice(getString(R.string.terminal_link_blocked, uri.take(120)))
             }
         }
-        val index = TerminalTabs.add(session, label)
-        selectTab(index)
+        boundListeners[session] = observer
+        session.listener = observer
+    }
+
+    private fun describeClosed(state: TerminalSession.ClosedState): String = when {
+        state.exitSignal != null -> getString(R.string.terminal_exit_signal, state.exitSignal)
+        state.exitStatus >= 0 -> getString(R.string.terminal_exit_status, state.exitStatus)
+        else -> state.reason
+    }
+
+    private fun removeSessionTab(session: TerminalSession, reason: String) {
+        val index = TerminalTabs.indexOf(session)
+        if (index < 0) return
+        val previouslySelected = activeSession
+        boundListeners.remove(session)?.let { observer ->
+            if (session.listener === observer) session.listener = null
+        }
+        session.close(reason)
+        TerminalTabs.remove(index)
+        activeIndex = -1
+        val next = previouslySelected?.let(TerminalTabs::indexOf) ?: -1
+        if (TerminalTabs.size() > 0) selectTab(next.takeIf { it >= 0 } ?: 0)
+        else {
+            renderTabs()
+            statusText.text = getString(R.string.terminal_no_tabs)
+        }
     }
 
     private fun selectTab(index: Int) {
         val tab = TerminalTabs.get(index) ?: return
         activeIndex = index
         scrollOffset = 0
-        pendingState = null
+        pendingState = tab.session.lastCloseState?.let(::describeClosed)
         terminalView.resetScroll()
         renderTabs()
         terminalView.requestFocus()
         scheduleRender()
         updateStatus()
-        TerminalTabs.get(index)?.session?.resize(gridCols, gridRows)
+        if (tab.session.lastCloseState == null && !tab.session.resize(gridCols, gridRows)) {
+            showNotice(getString(R.string.terminal_input_not_sent))
+        }
     }
 
     private fun closeActiveTab() {
@@ -326,15 +409,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                 },
             )
             .setPositiveButton(if (persistent) R.string.terminal_detach else R.string.close) { _, _ ->
-                val index = activeIndex
-                session.close(if (persistent) "Detached" else "Tab closed")
-                TerminalTabs.remove(index)
-                activeIndex = -1
-                if (TerminalTabs.size() > 0) selectTab(0) else renderTabs()
-                if (TerminalTabs.size() == 0) {
-                    showNotice(getString(R.string.terminal_no_tabs))
-                    statusText.text = getString(R.string.terminal_no_tabs)
-                }
+                removeSessionTab(session, if (persistent) "Detached" else "Tab closed")
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -348,10 +423,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
                 .setTitle(R.string.terminal_stop_session)
                 .setMessage(R.string.terminal_stop_ephemeral_detail)
                 .setPositiveButton(R.string.terminal_force_close) { _, _ ->
-                    session.close("Force closed by the user")
-                    TerminalTabs.remove(activeIndex)
-                    activeIndex = -1
-                    if (TerminalTabs.size() > 0) selectTab(0) else renderTabs()
+                    removeSessionTab(session, "Force closed by the user")
                 }
                 .setNegativeButton(R.string.cancel, null)
                 .show()
@@ -362,12 +434,12 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
             .setMessage(getString(R.string.terminal_stop_detail, name))
             .setPositiveButton(R.string.stop) { _, _ ->
                 lifecycleScope.launch {
-                    val stopped = runCatching { io { TmuxManager(Workspace.ssh).killAndVerify(name) } }
-                        .getOrDefault(false)
-                    if (stopped) {
-                        TerminalTabs.remove(activeIndex)
-                        activeIndex = -1
-                        if (TerminalTabs.size() > 0) selectTab(0) else renderTabs()
+                    val stopped = runCatching {
+                        val id = session.tmuxId ?: error("Missing selected tmux identity")
+                        io { TmuxManager(Workspace.ssh).killAndVerify(name, id) }
+                    }.getOrDefault(false)
+                    if (stopped && TerminalTabs.indexOf(session) >= 0) {
+                        removeSessionTab(session, "Host session stopped")
                         Toast.makeText(this@TerminalActivity, R.string.terminal_stopped, Toast.LENGTH_SHORT).show()
                     } else {
                         showNotice(getString(R.string.terminal_stop_unconfirmed, name))
@@ -496,12 +568,15 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
     override fun onGridChanged(cols: Int, rows: Int, widthPx: Int, heightPx: Int) {
         gridCols = cols
         gridRows = rows
-        activeSession?.resize(cols, rows, widthPx, heightPx)
+        if (activeSession?.resize(cols, rows, widthPx, heightPx) == false) {
+            showNotice(getString(R.string.terminal_input_not_sent))
+        }
         scheduleRender()
     }
 
     override fun onInput(bytes: ByteArray) {
-        activeSession?.write(bytes)
+        val session = activeSession ?: return
+        if (!session.write(bytes)) showNotice(getString(R.string.terminal_input_not_sent))
     }
 
     override fun onUserScroll(offset: Int) {
@@ -513,5 +588,6 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener {
         /** Optional absolute directory a new shell starts in. */
         const val EXTRA_START_DIRECTORY = "dev.anthracite.remote.extra.START_DIRECTORY"
         private const val RENDER_INTERVAL_MS = 16L
+        private const val STATE_ACTIVE_TAB = "selected_terminal_tab"
     }
 }

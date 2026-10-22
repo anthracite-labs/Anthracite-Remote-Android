@@ -497,12 +497,12 @@ internal class GitHubApi(
     }
 
     fun mergePull(repo: RepoRef, number: Int, method: MergeMethod, expectedHeadSha: String?): GitHubResult<MergeOutcome> {
-        val payload = buildMap {
-            put("merge_method", method.apiValue)
-            if (expectedHeadSha != null && expectedHeadSha.matches(Regex("[0-9a-f]{7,40}"))) {
-                put("sha", expectedHeadSha)
-            }
+        // GitHub's merge endpoint treats an omitted sha as "merge the current head".
+        // Never turn an unreadable reviewed head into an unpinned merge.
+        if (expectedHeadSha == null || !expectedHeadSha.matches(Regex("[0-9a-fA-F]{40}"))) {
+            return GitHubResult.Invalid("Reload the pull request before merging: reviewed head SHA is missing or invalid")
         }
+        val payload = mapOf("merge_method" to method.apiValue, "sha" to expectedHeadSha)
         return request("PUT", "/repos/$repo/pulls/${positive(number)}/merge", jsonBody(payload)) { json, _ ->
             val body = json.asObject() ?: return@request GitHubResult.Failed("Unexpected merge response")
             GitHubResult.Ok(

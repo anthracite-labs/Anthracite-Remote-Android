@@ -1,0 +1,122 @@
+# Follow-up review of PR #6 (stacked PR #7)
+
+Baseline: PR #6 head `c3982a3b9f837f5c20fbc3bf1b07bf17faed4b1b` (open, base `84bc457`, 16 commits; no newer upstream commit when inspected on 2026-10-22). Its reported 44 checks passed: [Android CI run 39844673817](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39844673817), [security 39844673681](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39844673681), [CodeQL 39844673535](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39844673535), [emulator smoke 39844673805](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39844673805). These predate all changes here; they are **not** evidence for this patch. The older fault register is [PR6_FAULT_MAP.md](PR6_FAULT_MAP.md); previously repaired compiler, token, Git and SFTP bugs are not reopened here.
+
+## Fault register
+
+The line numbers identify the baseline code (search by symbol if the patch shifts them). `4574d84` is the first implementing commit, not verification evidence. CI evidence for the repaired code is linked below; a passing JVM test does not prove live authorization or physical-device behavior.
+
+| ID / severity / status | Observable behavior and repro | Root cause / affected boundary | Correction, alternative and regression | Commit / run evidence |
+| --- | --- | --- | --- | --- |
+| R6-01 P0 **confirmed, repaired, JVM CI verified on 6126822; final documentation commit pending** | `github/GitHubApi.kt:503-515`: call `mergePull(repo,7,MERGE,null)` or `"not a sha"` with a recording transport: a PUT is sent without `sha`. A changed PR head could be merged instead of the reviewed head. | Optional/malformed SHA silently removed. GitHub's merge endpoint accepts an omitted SHA. | Refuse absent or non-40-hex head before transport; pin `sha`. Alternative: re-fetch and present fresh diff, but that is **not** a substitute for a reviewed SHA. `GitHubApiTest` now asserts zero requests for missing/malformed inputs and exact SHA for valid input. | `4574d84`; CI: Android run 39857589267. [GitHub REST merge endpoint](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request) documents optional `sha` and mismatch rejection. |
+| R6-02 P1 **confirmed, repaired, JVM CI verified on 6126822; final documentation commit pending** | `terminal/TmuxSessions.kt:145-159`: `hasSession` returns false on every nonzero result; a failed list/SSH call after kill could show “stopped”. A name can also be reused before a later kill. | Command status collapsed into absence; no host-issued identity captured on the tab. Affects lifecycle integrity, may stop a different session if names are reused. | Parse successful listings into PRESENT/ABSENT/UNKNOWN; only explicit tmux no-server/no-sessions exit 1 counts as absent. Capture tmux `$id`, attach and kill by ID, preflight and postflight match exact `(name,id)`; deny unclear observations. Alternative `has-session` stderr classification is less informative about identity. `TmuxParsingTest` covers transport/permission failure, malformed listing and name reuse. Host-side race after preflight is further mitigated by kill-by-id, not formally eliminated across hostile tmux server implementations. | `4574d84`, `e35fbe8`; CI: Android run 39857589267. [tmux man page](https://github.com/tmux/tmux/blob/master/tmux.1) documents session IDs and commands. |
+| R6-03 P1 **confirmed, repaired, JVM CI verified on 6126822; final documentation commit pending** | `terminal/TerminalActivity.kt:503-505` calls `TerminalSession.write`, which called blocking `pty.output.write/flush` at `TerminalSession.kt:95-111`. Provide an OutputStream whose `write` waits: the caller cannot return until released. UI keystrokes/paste freeze. | Synchronous network writes on UI thread. Screen responsiveness and ordered input at risk; queued input can also cross tab boundaries if writers are shared. | One per-session daemon FIFO, max 32 pending chunks of 64 KiB each; copy bytes, reject excess instead of blocking/dropping silently; clear queue on close and disconnect asynchronously. Alternative unbounded coroutine jobs loses order and bounds. `TerminalWriterTest` covers blocking stream, bounds, order, copy, close, error. UI/IME and forced socket shutdown still need device tests; a non-interruptible native stream can keep its daemon thread alive until transport releases it. | `4574d84`; CI: Android run 39857589267. Android guidance: [keep work off the main thread](https://developer.android.com/topic/performance/threads). |
+| R6-04 P0 **confirmed, repaired, JVM CI verified on 6126822; final documentation commit pending** | `host/HostStore.kt:207`: put `"garbage"` at `hosts_v1`, invoke `importLegacyIfNeeded`; `runCatching(list()).getOrElse(emptyList())` discards unreadability, `save` writes a new list. Existing profiles are lost. | Migration overrides fail-closed `list()` policy. Data-loss boundary. | Call `list()` directly, leave marker/secret/list unchanged on failure; show a persistent unreadable-state message and disable Add until recovery. Alternative backup of corrupt blob still risks overwriting it and is unnecessary. `HostStoreTest` tests failure and recovery. | `4574d84`, `858ef6c` (UI); CI: Android run 39857589267. |
+| R6-05 P1 **confirmed limitation, partially mitigated** | `files/RemoteFiles.kt:289-318`: upload to same destination concurrently with `overwrite=false`; two clients can both pass second `lstat` before either renames, and server rename semantics vary. | TOCTOU; ordinary SFTP rename is not a portable no-replace transaction. The *protocol* defines `SSH_FXF_EXCL` for opens, but JSch `put(InputStream)` does not use it and a later rename cannot guarantee no replacement. | Document no atomic no-overwrite guarantee; distinct temporary names still isolate partial uploads. `SftpBrowserTest` tests parallel uploads to distinct paths (not a portable same-path no-replace guarantee). A server-specific extension/atomic hardlink or a different API is needed for a strict guarantee; UI should not market this as atomic. | `4574d84`; CI: Android run 39857589267. [JSch ChannelSftp implementation](https://github.com/mwiede/jsch/blob/master/src/main/java/com/jcraft/jsch/ChannelSftp.java) shows flags and rename behavior. |
+| R6-06 P1 **confirmed, repaired, CI verified on 6126822; final documentation commit pending** | `.github/workflows/android-ci.yml:119-125`: force any Gradle compile task to fail; the step prints `gradle exit: 1` then exits zero, collector may report errors but compile job and overall gate pass. | `set -uo` with final `echo` swallowed exit code. | `set -euo pipefail` so reporter still runs via `if: always()` but job fails. Existing final gate checks every mandatory job and matrix uses `fail-fast: false`. An isolated injected Kotlin error made the mirrored failure gate red in run 39855309639; the actual permanent compile job and overall gate passed in run 39857589267. | `4574d84`; CI: Android run 39857589267. |
+| R6-09 P2 **confirmed by byte-length arithmetic, patched, CI verified on 6126822; final documentation commit pending** | `files/RemoteFiles.kt:328-334`: upload a legal 80-character Han filename (240 UTF-8 bytes). The old temporary name appended a 16-character suffix and extension to the entire stem because it budgeted UTF-16 characters, making the temp basename >255 bytes on ext4. | Server filename limits commonly count bytes, not characters; upload fails before rename, no data loss expected. Use a short ASCII stem and random suffix, keeping temporary basename well below 255 bytes. `SftpBrowserTest` covers Unicode filename against MINA's virtual filesystem; live ext4 validation still needed. | `e35fbe8`; CI: Android run 39857589267. |
+| R6-07 P2 **confirmed by synchronous code path, repaired, CI verified on 6126822; final documentation commit pending** | `terminal/TerminalSession.kt:113-117`: `onGridChanged`/`selectTab` called `pty.resize` on UI thread; a delayed PTY resize can freeze input/rotation. | A network operation executed synchronously from the view callback. Queue resize on the same bounded per-tab writer as bytes, preserving ordering; report a full queue instead of silently dropping resize. `TerminalWriterTest` has a blocked resize and ordered resize/input sequence. | `6e8f763`; CI: Android run 39857589267. |
+| R6-10 P2 **confirmed intermittent, repaired, JVM CI verified on 6126822; final documentation commit pending** | `terminal/TerminalWriter.kt:26-34`: `TerminalWriterTest.write failure closes the queue and reports it` failed 1/5 tests on [Android run 39856897862](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39856897862), while the earlier PR run 39855597289 passed. `enqueue` could accept a write, then return false because the worker failed and flipped `closed` before a second check. | Return value conflated queue admission with asynchronous transport completion; a fast failure made UI claim the same input was rejected after accepting it. Return the result of admission, signal asynchronous failure via `onFailure`. `TerminalWriterTest` repeats the fast failure 20 times; closed queue still refuses subsequent input. No assertion or security rule was weakened. | `6126822`; 27/27 JUnit shards and overall gate passed in [run 39857589267](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39857589267). |
+| R6-08 P1 **external validation blocked** | No JDK/SDK in workspace; no physical device, real Linux host, Docker/Podman daemon or Kubernetes cluster accessible here. | Parser/unit/emulator smoke cannot prove live operational compatibility or device UX. | Isolated actual daemon/host tests with linked image digests, scoped clusters and host snapshots; do not upgrade distribution tiers meanwhile. | No new run or hardware evidence. |
+
+## Latest repaired-code Actions evidence (`6126822fae5db0433a0a4ab0974d9c270932120b`)
+
+| Workflow | Run / conclusion | Executed and limitations |
+| --- | --- | --- |
+| Android CI — parallel | [39857589267](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39857589267) **success** | 35/35 jobs, 27/27 JUnit shards actually executed, compile/resources, Android lint, APK, shell/host runner, real Git and overall verification all success; `TerminalWriterTest` including 20 fast-failure repetitions passed. Still not physical-device or real-host validation. |
+| Android device security smoke | [39857589233](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39857589233) **success** | Emulator API 35 smoke, not a physical device. |
+| Security checks | [39857589154](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39857589154) **success** | Four of four jobs succeeded, including PR-only dependency review (not skipped), ShellCheck and workflow validation. |
+| CodeQL security analysis | [39857589156](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39857589156) **success** | Java/Kotlin and Actions analyses. |
+
+The immediately preceding cleaned-commit Android run [39856897862](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39856897862) **failed** in `TerminalWriterTest` and its overall gate; no other job failed. Checks API annotations identify the assertion. Commit `6126822` repairs that race without disabling a test. This failed run remains in history. A final documentation-only commit will require another four-workflow PR-event run; report its run IDs separately.
+
+## Actual Actions evidence (combined PR-event commit `e7b321be8206e90f5c571f844df951f4c20992d4`)
+
+| Workflow | Run / conclusion | Executed and limitations |
+| --- | --- | --- |
+| Android CI — parallel | [39855597289](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39855597289) **success** | 35/35 jobs success: compile/resources, lint, APK, 27/27 JUnit shards including `GitHubApiTest`, `TmuxParsingTest`, `TerminalWriterTest`, `HostStoreTest`, `SftpBrowserTest`, `SshSessionTest`, shell/provisioning and real Git. Overall verification success. Does not prove hardware IME or real remote services. |
+| Android device security smoke | [39855597281](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39855597281) **success** | Android emulator API 35 smoke; not a physical-device test. |
+| Security checks | [39855597337](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39855597337) **success** | ShellCheck, workflow actionlint/zizmor, **dependency review executed** (not skipped), security verification. |
+| CodeQL security analysis | [39855597367](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39855597367) **success** | Java/Kotlin and Actions analyses; not a complete penetration test. |
+| Temporary compiler failure gate control | [39855309639](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39855309639) **failure as intended** | Disposable runner injected a Kotlin unresolved symbol; expected diagnostic assertion succeeded and complete compiler log was uploaded as artifact `compiler-negative-control-39855309639`; copied compile-failure gate turned job red. This workflow was removed at `e7b321b`, and its injected source was never committed. The sandbox cannot fetch redirected Actions logs/artifact bytes; GitHub job-step conclusions and artifact metadata were inspected through the API. |
+
+GitHub Actions API reports every mandatory job in the four permanent PR runs as successful, with zero unexpectedly skipped jobs. The passing run tested PR #7's combined diff against `main` (including PR #6), not a merge into the PR #6 branch. The final documentation-only commit also needs all four permanent workflows before recommending integration.
+
+## Disposable Linux discovery evidence
+
+[GitHub Actions run 39859014222](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39859014222) on `5099e4e` completed **six of six** independent Docker matrix jobs successfully: Debian 12, Ubuntu 24.04, Fedora 42, Arch Linux, openSUSE Tumbleweed and Alpine 3.21. Each job executed the shipped read-only probe as UID 65534 with no network, no root/capabilities, no writable filesystem, bounded CPU/memory/PIDs, and asserted the observed `os_id`, package-manager executable, `probe_version=1`, and one `done=1`. Each artifact contains a probe transcript and inspected image digest. This validates only container discovery; it does **not** validate package installation, real Linux hosts, SSH or lifecycle persistence. The temporary workflow was removed after the run. See [support matrix](../support-matrix.md). Docker/Podman management against live daemons and Kubernetes against a test cluster remain untested; no support tier for provisioning was upgraded.
+
+## Investigation and validation boundaries
+
+* Before editing, enumerated all 16 PR commits against `main` and inspected the aggregate diff and relevant implementation/tests, the 44 latest check conclusions, workflows, old fault register, ADR and support matrix. A line-by-line review of all 84 changed files remains outstanding. Checks are independent (shell/real Git/static/compile/lint/APK/27+ JUnit shards); `--continue` is already used by compiler diagnostics. Permanent CI now propagates compiler failure. An isolated negative-control workflow was created for run 39855309639, then removed in commit `e7b321b`. The branch-specific push triggers are removed in the final cleanup commit; no production secrets were used.
+* Local: `ci/static_checks.py` and `ci/unused-check.py` zero findings; `git-commands-test.sh` 24/24; `install-opencode-test.sh` complete pass; host runner 31/31 under **both** dash and bash; `git diff --check` clean. This does **not** execute the JVM suite, lint, APK, emulator or CodeQL.
+* On follow-up `e35fbe8`, [dependency submission run 39851959151](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39851959151) passed and the SonarCloud check reported success; neither runs the Android/JVM, security or device gates. The repaired code passed the complete permanent PR-event suite at `6126822`; a final documentation-only commit still needs validation.
+* Actions dispatch returned `403 Resource not accessible by integration` with required `actions=write`; this installation lacks that permission. The GitHub App push event did trigger branch-scoped runs, and a PR event after temporarily targeting `main` exercised dependency review on the combined diff. Restore the stacked base after final PR-event runs; integration into PR #6 still needs reviewed authorization. The remote also reported 13 vulnerabilities on the default branch on push; this is not a new dependency audit and requires a separate dependency review.
+* SFTP upload does not claim atomic no-replace. Linux support rows remain unverified. Docker/Podman/Kubernetes screen covers **existing resource control**, not creation, deployment, rollout or application packaging.
+* Emulator unit tests cover ANSI/VT subsets, Unicode width/UTF-8, alt screen, OSC 52 rejection, paste encoding, keyboard modifiers, tabs; they do **not** prove `vim`/`htop`/agent TUIs, hardware keyboard/IME, accessibility narration of screen cells, touch performance or hostile-output exhaustion on a physical device.
+
+## Security control mapping (design mapping, not certification)
+
+| Boundary | Implementation / gap | Relevant guidance |
+| --- | --- | --- |
+| SSH host trust | `SshClient`/`HostKeyGate` pinned keys and first-use approval; no live changed-key hardware exercise | OWASP MASVS-NETWORK, ASVS V9 |
+| Credentials & migration | `HostStore` Keystore sealing, corruption fails closed; R6-04 correction, no backup/restore device test | OWASP MASVS-STORAGE, ASVS V6 |
+| API authorization | merge pins reviewed head; mock HTTP tests only, GitHub permission scopes and real protected branch untested | OWASP MASVS-AUTH, ASVS V4 |
+| Untrusted terminal/SFTP | OSC clipboard blocked, paste sanitised, input memory bounded; server rename race remains | OWASP MASVS-PLATFORM, ASVS V5 |
+| Build/verification | pinned Actions, least-privilege read permissions, separate gates; fix swallowed compiler status | NIST SSDF PW.7, RV.1/RV.2 |
+
+## Roadmap delta and next bounded stages
+
+| Requirement | Actual state and remaining work |
+| --- | --- |
+| Native Android/iOS | Android client with unsigned debug build in previous CI; **no iOS code**. iOS platform client and signing/test-device plan needed. |
+| Existing Linux over SSH; discovery/bootstrap | Android supports host-key-verified SSH, read-only probe and one-click/custom provision plan; distro rows unverified without matrix + real host. |
+| Agent-agnostic arbitrary CLI terminal; tmux/tabs | PTY, VT, keyboard, per-tab SSH channels and tmux implemented; this review fixes writer/identity. Hardware IME, accessibility and interactive CLI compatibility require validation. No agent-specific replacement UI. |
+| Remote files, Git, GitHub | SFTP operations with limits, host Git and permission-aware GitHub mock transport; concurrent same-path upload race, live OAuth/review/merge authorization remain. |
+| Native/Docker/Podman/Kubernetes deployment | Lists/controls existing resources; does **not** perform full deploy creation/rollout. Live daemon/cluster validation absent. |
+| Lifecycle, security, CI, release | Explicit detach vs stop, runner locks, Android CI; no real logout/reboot persistence evidence, signing credentials or production release. |
+
+Next independent stage after CI repair gate: deterministic deployment parser/command integration against disposable real daemons, then isolated distribution matrix; do not infer a distro support tier from fixture-only tests. Need credentials/hardware/cluster for live API, iOS signing, IME and Kubernetes authorization tests. Avoid merging #6/#7 until those boundaries and the failing/absent CI runs are resolved or explicitly accepted by reviewers.
+
+## Corrective review of PR #7 (follow-up to `dbf6ba9`)
+
+The three findings below were confirmed on that head. The implementing commit and
+new GitHub Actions runs are recorded in the PR description and final engineering
+report; prior green runs do not verify these changes.
+
+| ID / severity | Reproduction and root cause | Correction and regression evidence boundary |
+| --- | --- | --- |
+| R7-01 P1 | `TerminalActivity.attachSession` stored an Activity-capturing listener on a session retained by `TerminalTabs`; `onDestroy` neither detached it nor rebound existing tabs. Navigating away/recreating the Activity retained the old screen and lost rendering callbacks. Closing a tab from an asynchronous confirmation could use a changed `activeIndex`. | Detach all Activity observers at stop/destroy; rebind every retained tab at start/recreation; recheck observer ownership on main-thread dispatch; restore the selected tab and closed state; remove tabs by captured session identity. `TerminalLifecycleTest` uses two retained fake PTYs through ActivityScenario recreation, navigation, output during absence, exit during absence, stale callback and repeated visits. Fake tmux channel stays open; real logout persistence is not inferred. |
+| R7-02 P1 | `ProfileCodec.decode` mapped invalid nonempty Base64 to null; `Workspace.connectWorkspace` ignored approval persistence failure and retried with an unpersisted pin. `updateHostKey` previously returned silently for a vanished ID. | Reject malformed and inconsistent key/type/fingerprint records and preserve the original list; do not downgrade an existing pin. Require selected endpoint, committed update and readback before retry, otherwise disconnect and report error. `HostStoreTest` covers corrupted trust with unrelated saved credentials, failed commit, endpoint mismatch, wrong metadata, pin replacement and successful recovery. Existing `SshSessionTest` verifies first-use requires approval before authentication and changed keys are refused. Live Android Keystore recovery remains untested. |
+| R7-03 P2 | `TmuxManager.probe` interpreted broadly matched stderr as no sessions, and version command failures as "not installed". Unexpected SSH/tmux failures could appear as an empty list. | Explicit missing-binary marker, strict tmux no-server/no-sessions predicate and exception for failed/malformed enumeration. Keep exact `(name,id)` kill verification and PTY attachment by ID. `TmuxParsingTest` covers missing tool, empty server, permission/SSH failures, malformed rows, identity reuse and verified absence. No live tmux host test is claimed. |
+
+Security boundaries: host-key verification still uses strict pinned-byte matching;
+credentials remain in Keystore-backed storage; terminal UI rebinding never ends a
+tmux host session. These design controls relate to OWASP MASVS-NETWORK/STORAGE,
+ASVS V9/V6 and NIST SSDF PW.7/RV.1; they are not certification claims.
+
+
+## Corrective follow-up — first tmux session on a clean account
+
+**New source finding:** A host with tmux installed but no tmux socket directory can return
+`error connecting to /tmp/tmux-1000/default (No such file or directory)`
+when `list-sessions` runs. The previous strict `tmuxNoSessions` classifier accepted
+`no sessions` and `no server running on ...` but not this standard first-use case,
+causing `TmuxManager.probe()` to throw before the user could create their first
+managed session. Upstream tmux documentation/discussions demonstrate this message.
+
+**Fix:** `tmuxMissingSocket` recognizes exactly exit 1, empty stdout and the
+single-line expected Unix socket error only for **discovery**. A matching result
+means no sessions are accessible through the selected socket. Because deletion
+of a socket can strand a running server, stop verification remains **UNKNOWN**
+for that same error; it must not be used to claim a managed process stopped.
+Unexpected exit statuses, permission errors, connection refusals and multiline
+messages continue to fail closed.
+
+**Regression test:** `TmuxParsingTest` covers first-use empty listing,
+the same error remaining unknown for stop verification, and hostile/nonmatching
+errors that must stay errors.
+
+**Validation status:** Code and test committed to PR #7 after the previous
+`6e1e215` review; Kotlin regex syntax was checked independently. Full
+GitHub Actions results for the new revision are required before integration.

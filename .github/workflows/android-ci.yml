@@ -116,13 +116,12 @@ jobs:
         id: compile
         continue-on-error: true
         run: |
-          set -uo pipefail
+          set -euo pipefail
           mkdir -p ci-diagnostics
           ./gradlew --continue --console=plain \
             :app:compileDebugKotlin :app:compileDebugUnitTestKotlin \
             :app:processDebugResources :app:mergeDebugResources \
             > ci-diagnostics/compile.log 2>&1
-          echo "gradle exit: $?"
       - name: Collect distinct errors
         if: always()
         run: bash ci/collect-build-errors.sh ci-diagnostics/compile.log ci-diagnostics
@@ -232,6 +231,7 @@ jobs:
           - test_class: TmuxParsingTest
           - test_class: TerminalEmulatorTest
           - test_class: TerminalKeysTest
+          - test_class: TerminalWriterTest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up JDK 17

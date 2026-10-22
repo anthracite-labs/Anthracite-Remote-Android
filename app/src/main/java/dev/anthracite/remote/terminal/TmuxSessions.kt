@@ -38,7 +38,9 @@ internal data class TmuxListResult(
  * requirement behind it.
  */
 internal object TmuxCommands {
-    const val VERSION = "command -v tmux >/dev/null 2>&1 && tmux -V"
+    const val VERSION =
+        "if command -v tmux >/dev/null 2>&1; then tmux -V; " +
+            "else printf 'ANTHRACITE_TMUX_NOT_INSTALLED\\n'; exit 127; fi"
 
     const val LIST =
         "tmux list-sessions -F '#{session_name}\t#{session_id}\t#{session_created}\t#{session_attached}\t#{session_windows}'"
@@ -60,9 +62,20 @@ internal object TmuxCommands {
 
     fun attachCommand(name: String): String = "exec tmux attach-session -t ${quoteName(name)}"
 
+    fun attachId(id: String): String = "exec tmux attach-session -t ${quoteId(id)}"
+
     fun detachClients(name: String): String = "tmux detach-client -s ${quoteName(name)}"
 
     fun killSession(name: String): String = "tmux kill-session -t ${quoteName(name)}"
+
+    // tmux's host-issued session id stays unique when a name is reused. Never
+    // kill a new session which acquired the old name after the user's selection.
+    fun killSessionId(id: String): String = "tmux kill-session -t ${quoteId(id)}"
+
+    private fun quoteId(id: String): String {
+        require(id.matches(Regex("\\$[0-9]+"))) { "invalid tmux session id" }
+        return PosixShell.quote(id)
+    }
 
     /**
      * tmux reads `:` as a session/window separator and `.` as a window/pane
@@ -90,7 +103,9 @@ internal fun parseTmuxSessions(stdout: String): Pair<List<TmuxSession>, Int> {
         val created = fields[2].toLongOrNull()
         val attached = fields[3].toIntOrNull()
         val windows = fields[4].toIntOrNull()
-        if (created == null || attached == null || windows == null || fields[0].isBlank()) {
+        if (created == null || created < 0 || attached == null || attached < 0 ||
+            windows == null || windows < 0 || fields[0].isBlank() ||
+            !fields[1].matches(Regex("\\$[0-9]+"))) {
             unparsed++
             continue
         }
@@ -113,6 +128,67 @@ internal fun parseTmuxVersion(stdout: String): String? {
     return version.takeIf { candidate -> candidate.any { it.isDigit() } }
 }
 
+private const val TMUX_MISSING = "ANTHRACITE_TMUX_NOT_INSTALLED"
+
+/** Only a dedicated missing-binary result can mean tmux is not installed. */
+internal fun tmuxVersion(result: ExecResult): String? {
+    if (result.exitCode == 127 && result.stdout.trim() == TMUX_MISSING && result.stderr.isBlank()) return null
+    if (result.exitCode != 0 || result.stderr.isNotBlank()) {
+        throw IllegalStateException("tmux version could not be checked")
+    }
+    return parseTmuxVersion(result.stdout) ?: throw IllegalStateException("tmux returned an unreadable version")
+}
+
+/** Only tmux's known empty-server errors are evidence of absence. */
+internal fun tmuxNoSessions(result: ExecResult): Boolean =
+    result.exitCode == 1 && result.stdout.isBlank() &&
+        (result.stderr.trim() == "no sessions" ||
+            Regex("no server running on /[A-Za-z0-9_./-]+").matches(result.stderr.trim()))
+
+/**
+ * On a never-used account, tmux may have no socket directory yet and reports
+ * "error connecting to /tmp/tmux-UID/default (No such file or directory)".
+ * This means no sessions are accessible through that socket for discovery.
+ * It does NOT prove an older process stopped: the socket itself may have
+ * disappeared while its server was still running.
+ */
+internal fun tmuxMissingSocket(result: ExecResult): Boolean =
+    result.exitCode == 1 && result.stdout.isBlank() &&
+        Regex("error connecting to /[^\\r\\n()]+ \\(No such file or directory\\)").matches(result.stderr.trim())
+
+/** A failed enumeration is never silently turned into an empty list. */
+internal fun tmuxListing(version: String, listed: ExecResult): TmuxListResult {
+    if (listed.exitCode != 0) {
+        if (tmuxNoSessions(listed) || tmuxMissingSocket(listed)) {
+            return TmuxListResult(true, version, emptyList(), 0)
+        }
+        throw IllegalStateException("tmux session discovery failed; the session state is unknown")
+    }
+    val (sessions, unparsed) = parseTmuxSessions(listed.stdout)
+    if (unparsed != 0 || listed.stderr.isNotBlank()) {
+        throw IllegalStateException("tmux returned an unreadable session list; the session state is unknown")
+    }
+    return TmuxListResult(true, version, sessions, 0)
+}
+
+/** Verification is distinct from a failed SSH command or unparseable host output. */
+internal enum class TmuxPresence { PRESENT, ABSENT, UNKNOWN }
+
+internal fun tmuxPresence(result: ExecResult, name: String, id: String): TmuxPresence {
+    if (result.exitCode != 0) {
+        // tmux reports this when its server has no sessions at all. An arbitrary
+        // nonzero exit (including permission or transport failure) is unknown.
+        return if (tmuxNoSessions(result)) TmuxPresence.ABSENT else TmuxPresence.UNKNOWN
+    }
+    val (sessions, unparsed) = parseTmuxSessions(result.stdout)
+    if (unparsed != 0 || result.stderr.isNotBlank()) return TmuxPresence.UNKNOWN
+    if (sessions.any { it.name == name && it.id == id }) return TmuxPresence.PRESENT
+    // A replacement under the same name is not evidence that the selected
+    // session ended as intended; tell the user verification was inconclusive.
+    if (sessions.any { it.name == name || it.id == id }) return TmuxPresence.UNKNOWN
+    return TmuxPresence.ABSENT
+}
+
 /**
  * Host-side session operations over the existing SSH connection.
  *
@@ -122,38 +198,35 @@ internal fun parseTmuxVersion(stdout: String): String? {
  */
 internal class TmuxManager(private val ssh: SshClient) {
     fun probe(timeoutMs: Long = TIMEOUT_MS): TmuxListResult {
-        val version = ssh.exec(TmuxCommands.VERSION, timeoutMs = timeoutMs)
-        if (version.exitCode != 0) {
-            return TmuxListResult(false, null, emptyList(), 0)
-        }
-        val parsedVersion = parseTmuxVersion(version.stdout)
-        val listed = ssh.exec(TmuxCommands.LIST, timeoutMs = timeoutMs)
-        if (listed.exitCode != 0) {
-            // `list-sessions` exits non-zero when a server runs with no sessions.
-            val absent = listed.text.contains("no server running", ignoreCase = true) ||
-                listed.text.contains("no sessions", ignoreCase = true)
-            if (absent) return TmuxListResult(true, parsedVersion, emptyList(), 0)
-            throw IllegalStateException("tmux could not list sessions: ${listed.text.take(200)}")
-        }
-        val (sessions, unparsed) = parseTmuxSessions(listed.stdout)
-        return TmuxListResult(true, parsedVersion, sessions, unparsed)
+        val parsedVersion = tmuxVersion(ssh.exec(TmuxCommands.VERSION, timeoutMs = timeoutMs))
+            ?: return TmuxListResult(false, null, emptyList(), 0)
+        return tmuxListing(parsedVersion, ssh.exec(TmuxCommands.LIST, timeoutMs = timeoutMs))
     }
 
     fun create(name: String, workingDirectory: String?): ExecResult =
         ssh.exec(TmuxCommands.createDetached(name, workingDirectory), timeoutMs = TIMEOUT_MS)
 
-    fun hasSession(name: String): Boolean =
-        ssh.exec(TmuxCommands.hasSession(name), timeoutMs = TIMEOUT_MS).exitCode == 0
+    /** A successful listing establishes identity; an error can never mean absent. */
+    fun sessionState(name: String, id: String): TmuxPresence =
+        tmuxPresence(ssh.exec(TmuxCommands.LIST, timeoutMs = TIMEOUT_MS), name, id)
 
     /**
-     * Requests a graceful end of the session and then observes the host.
-     * Returns true only when the session is verified gone.
+     * Fail closed unless the exact selected host-issued id still belongs to the
+     * selected name. Kill by id, not by a name which another client may reuse.
      */
-    fun killAndVerify(name: String, attempts: Int = 3): Boolean {
-        ssh.exec(TmuxCommands.killSession(name), timeoutMs = TIMEOUT_MS)
+    fun killAndVerify(name: String, id: String, attempts: Int = 3): Boolean {
+        require(attempts > 0)
+        TmuxCommands.quoteName(name)
+        TmuxCommands.killSessionId(id)
+        if (sessionState(name, id) != TmuxPresence.PRESENT) return false
+        val killed = ssh.exec(TmuxCommands.killSessionId(id), timeoutMs = TIMEOUT_MS)
+        if (killed.exitCode != 0) return false
         repeat(attempts) { attempt ->
-            if (!hasSession(name)) return true
-            if (attempt < attempts - 1) Thread.sleep(250)
+            when (sessionState(name, id)) {
+                TmuxPresence.ABSENT -> return true
+                TmuxPresence.UNKNOWN -> return false
+                TmuxPresence.PRESENT -> if (attempt < attempts - 1) Thread.sleep(250)
+            }
         }
         return false
     }
@@ -163,14 +236,14 @@ internal class TmuxManager(private val ssh: SshClient) {
 
     /** Opens the interactive attachment. The returned PTY is owned by the terminal tab. */
     fun attach(
-        name: String,
+        id: String,
         term: String,
         cols: Int,
         rows: Int,
         widthPx: Int = 0,
         heightPx: Int = 0,
     ): dev.anthracite.remote.SshPty =
-        ssh.openPtyCommand(TmuxCommands.attachCommand(name), term, cols, rows, widthPx, heightPx)
+        ssh.openPtyCommand(TmuxCommands.attachId(id), term, cols, rows, widthPx, heightPx)
 
     private companion object {
         const val TIMEOUT_MS = 15_000L
