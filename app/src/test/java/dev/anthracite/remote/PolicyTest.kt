@@ -35,7 +35,26 @@ class PolicyTest {
         assertEquals(WebNavigation.BLOCK, classifyNavigation("intent://scan/#Intent;end", 4096))
         assertEquals(WebNavigation.EXTERNAL, classifyNavigation("https://opencode.ai/docs", 4096))
         assertEquals(WebNavigation.EXTERNAL, classifyNavigation("http://example.com/", 4096))
+        assertEquals(WebNavigation.BLOCK, classifyNavigation("http://127.0.0.1:4096/redirect", 1))
+        assertEquals(WebNavigation.BLOCK, classifyNavigation("http://evil@127.0.0.1:4096/", 4096))
         assertEquals(LOOPBACK, "127.0.0.1")
+    }
+
+    @Test
+    fun `basic auth is released only for the forwarded origin`() {
+        assertTrue(authReleaseAllowed("http://127.0.0.1:4096/", null, "127.0.0.1", 4096))
+        assertTrue(authReleaseAllowed("about:blank", "http://127.0.0.1:4096/session", "localhost", 4096))
+        assertFalse(authReleaseAllowed("http://127.0.0.1:1/", "http://127.0.0.1:4096/", "127.0.0.1", 4096))
+        assertFalse(authReleaseAllowed("http://127.0.0.1:4096/", null, "evil.example", 4096))
+        assertFalse(authReleaseAllowed("https://evil.example/", "http://127.0.0.1:4096/", "127.0.0.1", 4096))
+        assertFalse(authReleaseAllowed(null, null, "127.0.0.1", 4096))
+        assertEquals(
+            tunnelIdentity("host.example", 22, "user", 4096),
+            tunnelIdentity(" host.example ", 22, "user", 4096),
+        )
+        assertFalse(
+            tunnelIdentity("host.example", 22, "user", 4096) == tunnelIdentity("other.example", 22, "user", 4096),
+        )
     }
 
     @Test

@@ -18,10 +18,13 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebViewDatabase
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -36,11 +39,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -52,6 +61,10 @@ class MainActivity : ComponentActivity() {
     private val log = StringBuilder()
     private var job: Job? = null
     private var wantConnected = false
+    private val reconnectGate = ReconnectGate()
+    private var autoReconnectJob: Job? = null
+    private val tunnelLock = Mutex()
+    private var acceptedIdentity: String? = null
     private var pendingKey: ByteArray? = null
     private var webView: WebView? = null
     private var loadedUrl: String? = null
@@ -110,7 +123,7 @@ class MainActivity : ComponentActivity() {
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            if (wantConnected && !ssh.isConnected()) runOnUiThread { reconnect() }
+            runOnUiThread { scheduleReconnect() }
         }
 
         override fun onLost(network: Network) {
@@ -120,6 +133,7 @@ class MainActivity : ComponentActivity() {
                 ssh.disconnect()
                 localPort = -1
                 append("Network lost. The tunnel will reconnect when the network returns.")
+                scheduleReconnect()
             }
         }
     }
@@ -178,7 +192,7 @@ class MainActivity : ComponentActivity() {
             getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
         }
         webView?.onResume()
-        if (wantConnected && !ssh.isConnected()) reconnect()
+        if (wantConnected && !ssh.isConnected()) scheduleReconnect()
     }
 
     override fun onStop() {
@@ -288,27 +302,62 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun reconnect() {
-        launchJob { reconnectNow() }
+        launchJob { reconnectFromUser() }
     }
 
-    private suspend fun reconnectNow() {
-        val remote = tunneledRemotePort
-        ssh.disconnect()
-        destroyWebView()
-        if (!ensureSsh()) return
-        openTunnel(remote)
+    private suspend fun reconnectFromUser() {
+        reconnectGate.userConnected()
+        wantConnected = true
+        val token = reconnectGate.networkChanged() ?: return
+        autoReconnectJob?.cancel()
+        reconnectSerialized(token)
+    }
+
+    private fun scheduleReconnect() {
+        val token = reconnectGate.networkChanged() ?: return
+        autoReconnectJob?.cancel()
+        autoReconnectJob = lifecycleScope.launch {
+            delay(RECONNECT_SETTLE_MS)
+            if (!reconnectGate.stillCurrent(token) || !wantConnected) return@launch
+            if (!defaultNetworkUp()) return@launch
+            if (job?.isActive == true) return@launch
+            if (ssh.isConnected() && localPort > 0) return@launch
+            reconnectSerialized(token)
+        }
+    }
+
+    private suspend fun reconnectSerialized(token: Int) {
+        tunnelLock.withLock {
+            if (!reconnectGate.stillCurrent(token) || !wantConnected) return
+            val remote = tunneledRemotePort
+            withContext(Dispatchers.IO) { ssh.disconnect() }
+            destroyWebView()
+            localPort = -1
+            if (!reconnectGate.stillCurrent(token)) return
+            if (!ensureSsh()) return
+            if (!reconnectGate.stillCurrent(token)) {
+                ssh.disconnect()
+                return
+            }
+            openTunnel(remote)
+        }
+    }
+
+    private fun defaultNetworkUp(): Boolean {
+        val manager = getSystemService(ConnectivityManager::class.java)
+        return manager.activeNetwork != null
     }
 
     private fun disconnect() {
         job?.cancel()
+        autoReconnectJob?.cancel()
+        reconnectGate.userDisconnected()
         wantConnected = false
         ssh.disconnect()
         localPort = -1
         destroyWebView()
-        webPassword?.fill('\u0000')
-        webPassword = null
-        usedSavedWebPassword = false
-        CookieManager.getInstance().removeAllCookies(null)
+        clearWebCredentials()
+        acceptedIdentity = null
         append("Disconnected")
         showManage()
     }
@@ -342,12 +391,12 @@ class MainActivity : ComponentActivity() {
             is ConnectOutcome.UnknownHostKey -> approveHostKey(outcome)
             is ConnectOutcome.ChangedHostKey -> refuseChangedKey(outcome)
             is ConnectOutcome.AuthFailed -> {
-                wantConnected = false
+                stopWantingConnection()
                 append("SSH authentication failed. Check the username, password, or private key.")
                 false
             }
             is ConnectOutcome.Failed -> {
-                wantConnected = false
+                stopWantingConnection()
                 append("SSH failed: ${outcome.message}")
                 false
             }
@@ -371,7 +420,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun refuseChangedKey(outcome: ConnectOutcome.ChangedHostKey): Boolean {
-        wantConnected = false
+        stopWantingConnection()
         val approved = ask(
             getString(R.string.host_key_changed_title),
             "Connection refused. The server key changed.\n\nSaved: ${outcome.savedFingerprint}\nPresented: ${outcome.keyType} ${outcome.fingerprint}\n\nApprove the new fingerprint only after checking it out of band.",
@@ -387,11 +436,20 @@ class MainActivity : ComponentActivity() {
         return ensureSsh()
     }
 
+    private fun stopWantingConnection() {
+        wantConnected = false
+        reconnectGate.userDisconnected()
+        autoReconnectJob?.cancel()
+    }
+
     private suspend fun openTunnel(remotePort: Int) {
+        syncTunnelIdentity(remotePort)
         val assigned = withContext(Dispatchers.IO) { ssh.forward(remotePort) }
         localPort = assigned
         tunneledRemotePort = remotePort
         val code = withContext(Dispatchers.IO) { awaitHttp(assigned) }
+        ensureActive()
+        reconnectGate.userConnected()
         wantConnected = true
         append("Tunnel 127.0.0.1:$assigned -> 127.0.0.1:$remotePort HTTP $code")
         when (code) {
@@ -438,6 +496,8 @@ class MainActivity : ComponentActivity() {
         job = lifecycleScope.launch {
             try {
                 block()
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 append(error.message ?: "Failed")
             }
@@ -584,15 +644,28 @@ class MainActivity : ComponentActivity() {
                 return when (classifyNavigation(target, localPort)) {
                     WebNavigation.LOAD -> false
                     WebNavigation.EXTERNAL -> {
-                        runCatching { startActivity(Intent(Intent.ACTION_VIEW, request.url).addCategory(Intent.CATEGORY_BROWSABLE)) }
+                        openExternal(request.url)
                         true
                     }
                     WebNavigation.BLOCK -> true
                 }
             }
 
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                val target = request.url?.toString() ?: return forbiddenResponse()
+                if (classifyNavigation(target, localPort) == WebNavigation.LOAD) return null
+                if (request.isForMainFrame && classifyNavigation(target, localPort) == WebNavigation.EXTERNAL) {
+                    view.post { openExternal(request.url) }
+                }
+                return forbiddenResponse()
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame && wantConnected && !ssh.isConnected()) scheduleReconnect()
+            }
+
             override fun onReceivedHttpAuthRequest(view: WebView, handler: HttpAuthHandler, host: String, realm: String) {
-                if (host != LOOPBACK && host != "localhost") {
+                if (!authReleaseAllowed(view.url, loadedUrl, host, localPort)) {
                     handler.cancel()
                     return
                 }
@@ -841,6 +914,38 @@ class MainActivity : ComponentActivity() {
             dialog.show()
         }
 
+    private fun syncTunnelIdentity(remotePort: Int) {
+        val saved = store.load()
+        val next = tunnelIdentity(saved.host, saved.sshPort, saved.username, remotePort)
+        if (acceptedIdentity != null && acceptedIdentity != next) clearWebCredentials()
+        acceptedIdentity = next
+    }
+
+    private fun clearWebCredentials() {
+        webPassword?.fill('\u0000')
+        webPassword = null
+        usedSavedWebPassword = false
+        CookieManager.getInstance().removeAllCookies(null)
+        @Suppress("DEPRECATION")
+        runCatching { WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword() }
+    }
+
+    private var lastExternalUrl: String? = null
+    private var lastExternalAt = 0L
+
+    private fun openExternal(uri: Uri?) {
+        if (uri == null) return
+        val value = uri.toString()
+        val now = SystemClock.elapsedRealtime()
+        if (value == lastExternalUrl && now - lastExternalAt < 1_000) return
+        lastExternalUrl = value
+        lastExternalAt = now
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)) }
+    }
+
+    private fun forbiddenResponse(): WebResourceResponse =
+        WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+
     private fun destroyWebView() {
         webView?.let {
             findViewById<FrameLayout>(R.id.web_container).removeView(it)
@@ -858,6 +963,7 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val MANAGED_PORT = 4096
+        const val RECONNECT_SETTLE_MS = 400L
         const val MAX_KEY = 256 * 1024
         val SCRIPT_COMMANDS = setOf("preflight", "install", "status", "restart", "update", "uninstall")
         const val MKTEMP =

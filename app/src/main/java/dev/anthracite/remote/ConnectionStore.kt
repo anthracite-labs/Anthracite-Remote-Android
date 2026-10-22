@@ -4,12 +4,9 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import java.io.ByteArrayOutputStream
 import java.security.KeyStore
-import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 internal enum class AuthMethod { PASSWORD, KEY }
 
@@ -84,14 +81,13 @@ internal class ConnectionStore(context: Context) {
     }
 
     fun saveSecrets(secrets: SavedSecrets) {
-        val file = secretFile()
-        file.writeBytes(encrypt(encode(secrets)))
+        secretFile().writeBytes(CredentialCrypto.seal(secrets, key()))
     }
 
     fun secrets(): SavedSecrets {
         val file = secretFile()
         if (!file.isFile) return SavedSecrets(null, null, null)
-        return decode(decrypt(file.readBytes()))
+        return CredentialCrypto.open(file.readBytes(), key())
     }
 
     fun forget() {
@@ -100,43 +96,6 @@ internal class ConnectionStore(context: Context) {
     }
 
     private fun secretFile() = java.io.File(app.noBackupFilesDir, SECRET_FILE)
-
-    private fun encode(secrets: SavedSecrets): ByteArray {
-        val out = ByteArrayOutputStream()
-        writeField(out, secrets.password?.toByteArray(Charsets.UTF_8) ?: ByteArray(0))
-        writeField(out, secrets.privateKey ?: ByteArray(0))
-        writeField(out, secrets.passphrase?.toByteArray(Charsets.UTF_8) ?: ByteArray(0))
-        return out.toByteArray()
-    }
-
-    private fun decode(plain: ByteArray): SavedSecrets {
-        var offset = 0
-        fun read(): ByteArray {
-            if (offset + 4 > plain.size) error("secret blob truncated")
-            val size = ((plain[offset].toInt() and 0xff) shl 24) or
-                ((plain[offset + 1].toInt() and 0xff) shl 16) or
-                ((plain[offset + 2].toInt() and 0xff) shl 8) or
-                (plain[offset + 3].toInt() and 0xff)
-            offset += 4
-            if (size < 0 || size > MAX_FIELD || offset + size > plain.size) error("secret field is invalid")
-            val bytes = plain.copyOfRange(offset, offset + size)
-            offset += size
-            return bytes
-        }
-        val password = read().takeIf { it.isNotEmpty() }?.toString(Charsets.UTF_8)
-        val key = read().takeIf { it.isNotEmpty() }
-        val passphrase = read().takeIf { it.isNotEmpty() }?.toString(Charsets.UTF_8)
-        return SavedSecrets(password, key, passphrase)
-    }
-
-    private fun writeField(out: ByteArrayOutputStream, bytes: ByteArray) {
-        val size = bytes.size
-        out.write(size ushr 24)
-        out.write(size ushr 16)
-        out.write(size ushr 8)
-        out.write(size)
-        out.write(bytes)
-    }
 
     private fun key(): SecretKey {
         val store = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -153,35 +112,11 @@ internal class ConnectionStore(context: Context) {
         return generator.generateKey()
     }
 
-    private fun encrypt(plain: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        cipher.updateAAD(AAD)
-        val iv = cipher.iv
-        val body = cipher.doFinal(plain)
-        return byteArrayOf(iv.size.toByte()) + iv + body
-    }
-
-    private fun decrypt(blob: ByteArray): ByteArray {
-        if (blob.size < 13) error("secret blob is too short")
-        val ivLength = blob[0].toInt() and 0xff
-        if (ivLength !in 12..16 || blob.size < 1 + ivLength + 16) error("secret blob iv is invalid")
-        val iv = blob.copyOfRange(1, 1 + ivLength)
-        val body = blob.copyOfRange(1 + ivLength, blob.size)
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-        cipher.updateAAD(AAD)
-        return cipher.doFinal(body)
-    }
-
     private companion object {
         const val PREFS = "connection"
         const val SECRET_FILE = "ssh-secrets.bin"
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val KEY_ALIAS = "anthracite_remote_ssh"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        val AAD = "anthracite-remote-ssh-v1".toByteArray()
-        const val MAX_FIELD = 256 * 1024
         const val KEY_HOST = "host"
         const val KEY_SSH_PORT = "ssh_port"
         const val KEY_USER = "username"

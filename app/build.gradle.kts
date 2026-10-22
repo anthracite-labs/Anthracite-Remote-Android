@@ -27,15 +27,23 @@ android {
 
     packaging {
         resources {
+            // Signature files are not license texts. Dropping them avoids broken
+            // APK resource merges. License and notice files are merged so the
+            // upstream wording stays in the APK, and assets/THIRD-PARTY-NOTICES.md
+            // carries the consolidated text.
             excludes += setOf(
-                "META-INF/DEPENDENCIES",
-                "META-INF/LICENSE",
-                "META-INF/LICENSE.txt",
-                "META-INF/NOTICE",
-                "META-INF/NOTICE.txt",
                 "META-INF/*.SF",
                 "META-INF/*.DSA",
                 "META-INF/*.RSA",
+            )
+            merges += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/LICENSE.md",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/NOTICE.md",
             )
         }
     }
@@ -57,4 +65,6 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.apache.sshd:sshd-core:2.20.0")
+    testImplementation("org.slf4j:slf4j-nop:2.0.16")
 }

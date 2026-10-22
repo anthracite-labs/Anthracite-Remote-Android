@@ -11,14 +11,20 @@ pass() { printf 'ok: %s\n' "$*"; }
 # shellcheck disable=SC1090
 source "$ASSET"
 
-is_ubuntu_2404 /etc/os-release && fail "this environment must not look like Ubuntu 24.04 to the real preflight"
+# Operating-system checks use fixtures only. The runner's own /etc/os-release is never consulted.
 os=$(mktemp)
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$os"
 is_ubuntu_2404 "$os" || fail "ubuntu 24.04 os-release rejected"
+printf 'ID=ubuntu\nVERSION_ID=24.04\n' >"$os"
+is_ubuntu_2404 "$os" || fail "unquoted ubuntu 24.04 os-release rejected"
+printf 'ID=ubuntu\nVERSION_ID="22.04"\n' >"$os"
+is_ubuntu_2404 "$os" && fail "ubuntu 22.04 accepted"
+printf 'ID=ubuntu\nVERSION_ID="24.10"\n' >"$os"
+is_ubuntu_2404 "$os" && fail "ubuntu 24.10 accepted"
 printf 'ID=debian\nVERSION_ID="12"\n' >"$os"
 is_ubuntu_2404 "$os" && fail "debian accepted"
 rm -f "$os"
-pass "os-release check"
+pass "os-release fixtures"
 
 arch_pin x86_64 >/dev/null || fail "x86_64 pin"
 arch_pin aarch64 >/dev/null || fail "arm pin"
@@ -163,6 +169,11 @@ esac
 EOF
 cat >"$fake/ss" <<'EOF'
 #!/bin/bash
+# A per-test listener file overrides the default. An empty file means nothing is listening.
+if [ -n "${SS_LISTEN_FILE:-}" ] && [ -f "$SS_LISTEN_FILE" ]; then
+  cat "$SS_LISTEN_FILE"
+  exit 0
+fi
 if [ -f "${SYSTEMCTL_STATE:-}" ] && [ "$(cat "$SYSTEMCTL_STATE")" = "active" ]; then
   printf '%s\n' "LISTEN 0 128 127.0.0.1:4096"
 fi
@@ -196,6 +207,7 @@ run() {
     CURL_LOG="$home/curl.log" \
     SYSTEMCTL_LOG="$home/systemctl.log" \
     SYSTEMCTL_STATE="$home/systemctl.state" \
+    SS_LISTEN_FILE="$home/ss.listen" \
     FAKE_ARCHIVE="$work/good.tar.gz" \
     FAKE_ARCHIVE_NEW="$work/new.tar.gz" \
     FAKE_HTTP_CODE="${FAKE_HTTP_CODE:-401}" \
@@ -203,19 +215,39 @@ run() {
     HTTP_COUNT_FILE="${HTTP_COUNT_FILE:-}" \
     CURL_FAIL="${CURL_FAIL:-0}" \
     CURL_GARBAGE="${CURL_GARBAGE:-0}" \
-    bash -c 'source "$1"; osfile=$2; os_release_path() { printf "%s" "$osfile"; }; shift 2; main "$@"' \
+    READY_TRIES_OVERRIDE="${READY_TRIES_OVERRIDE:-}" \
+    bash -c 'source "$1"; osfile=$2; os_release_path() { printf "%s" "$osfile"; }; if [ -n "${READY_TRIES_OVERRIDE:-}" ]; then READY_TRIES=$READY_TRIES_OVERRIDE; fi; shift 2; main "$@"' \
       bash "$work/install.sh" "$osfile" "$@" \
       >"$home/out" 2>"$home/err"
 }
 
-# Real entry point on this host must reject Debian before touching a download.
+# Fixture preflight never reads the runner's os-release and never calls the real systemctl.
+saved_os=$(cat "$osfile")
+printf 'ID=debian\nVERSION_ID="12"\n' >"$osfile"
+home=$work/home-os-debian
 set +e
-bash "$ASSET" preflight >"$work/host-preflight.out" 2>"$work/host-preflight.err"
-host_code=$?
+run "$home" preflight
+code=$?
 set -e
-[ "$host_code" -ne 0 ] || fail "preflight succeeded on a non-Ubuntu host"
-grep -q "Ubuntu 24.04 is required" "$work/host-preflight.err" || fail "preflight error did not name Ubuntu 24.04"
-pass "host preflight rejects this machine"
+[ "$code" -eq 2 ] || fail "debian fixture preflight exit $code, expected 2; err=$(cat "$home/err")"
+grep -q "Ubuntu 24.04 is required" "$home/err" || fail "debian fixture error did not name Ubuntu 24.04"
+[ ! -s "$home/curl.log" ] || fail "debian preflight contacted the network"
+printf '%s\n' "$saved_os" >"$osfile"
+
+printf 'ID=ubuntu\nVERSION_ID="22.04"\n' >"$osfile"
+home=$work/home-os-2204
+set +e
+run "$home" preflight
+code=$?
+set -e
+[ "$code" -eq 2 ] || fail "ubuntu 22.04 fixture preflight exit $code"
+grep -q "Ubuntu 24.04 is required" "$home/err" || fail "22.04 fixture was accepted"
+printf '%s\n' "$saved_os" >"$osfile"
+
+home=$work/home-os-2404
+run "$home" preflight
+grep -q "Ubuntu 24.04" "$home/out" || fail "24.04 fixture was not accepted: $(cat "$home/out" "$home/err")"
+pass "os fixtures do not depend on the runner"
 
 home=$work/home-corrupt
 mkdir -p "$home"
@@ -397,5 +429,83 @@ set -e
 [ "$code" -ne 0 ] || fail "path traversal archive extracted"
 [ ! -e "$work/opencode" ] || fail "traversal wrote outside the destination"
 pass "path traversal archive rejected"
+
+# Unmanaged unit and an unmanaged listener must be left untouched.
+home=$work/home-unmanaged-unit
+mkdir -p "$home/.config/systemd/user" "$home/projects/demo"
+printf '%s\n' 'not-ours' >"$home/.config/systemd/user/anthracite-opencode.service"
+printf '%s\n' 'keep-project' >"$home/projects/demo/README"
+set +e
+run "$home" preflight
+code=$?
+set -e
+[ "$code" -eq 5 ] || fail "unmanaged unit preflight exit $code; err=$(cat "$home/err")"
+grep -q "unmanaged unit" "$home/err" || fail "unmanaged unit was not named"
+grep -q "not-ours" "$home/.config/systemd/user/anthracite-opencode.service" || fail "unmanaged unit was rewritten"
+[ -f "$home/projects/demo/README" ] || fail "project removed during unmanaged-unit preflight"
+[ ! -s "$home/curl.log" ] || fail "unmanaged-unit preflight downloaded a release"
+pass "unmanaged unit is not overwritten"
+
+home=$work/home-unmanaged-port
+mkdir -p "$home/projects/demo"
+printf '%s\n' 'keep-project' >"$home/projects/demo/README"
+printf '%s\n' 'LISTEN 0 128 127.0.0.1:4096' >"$home/ss.listen"
+set +e
+run "$home" preflight
+code=$?
+set -e
+[ "$code" -eq 5 ] || fail "unmanaged port preflight exit $code; err=$(cat "$home/err")"
+grep -q "unmanaged process" "$home/err" || fail "unmanaged listener was not refused"
+[ -f "$home/projects/demo/README" ] || fail "project removed during unmanaged-port preflight"
+[ ! -e "$home/.config/systemd/user/anthracite-opencode.service" ] || fail "unmanaged port created a unit"
+pass "unmanaged listener is not taken over"
+
+home=$work/home-open-auth
+mkdir -p "$home/projects/demo" "$home/.config/opencode"
+printf '%s\n' 'keep-project' >"$home/projects/demo/README"
+printf '%s\n' '{"provider":"kept"}' >"$home/.config/opencode/config.json"
+set +e
+printf '%s\n' 'CorrectHorse1' | FAKE_HTTP_CODE=200 run "$home" install
+code=$?
+set -e
+[ "$code" -eq 4 ] || fail "unauthenticated HTTP 200 install exit $code; out=$(cat "$home/out") err=$(cat "$home/err")"
+grep -q "HTTP 200" "$home/err" || fail "HTTP 200 was not rejected"
+grep -q "not authenticated" "$home/err" || fail "HTTP 200 rejection did not say the browser is unauthenticated"
+grep -q "installed v1.19.3" "$home/out" && fail "HTTP 200 was reported as a successful install"
+[ -f "$home/projects/demo/README" ] || fail "project removed when authentication was not enforced"
+[ -f "$home/.config/opencode/config.json" ] || fail "provider config removed when authentication was not enforced"
+pass "password-protected install rejects HTTP 200"
+
+home=$work/home-not-ready
+mkdir -p "$home/projects/demo"
+printf '%s\n' 'keep-project' >"$home/projects/demo/README"
+set +e
+printf '%s\n' 'CorrectHorse1' | FAKE_HTTP_CODE=500 READY_TRIES_OVERRIDE=2 run "$home" install
+code=$?
+set -e
+[ "$code" -eq 4 ] || fail "failed readiness exit $code; out=$(cat "$home/out") err=$(cat "$home/err")"
+grep -q "did not become ready" "$home/err" || fail "failed readiness was not reported"
+[ -f "$home/projects/demo/README" ] || fail "project removed after failed readiness"
+pass "failed readiness does not destroy user data"
+
+home=$work/home-wildcard
+install_home "$home"
+printf '%s\n' 'LISTEN 0 128 0.0.0.0:4096' >"$home/ss.listen"
+set +e
+run "$home" status
+code=$?
+set -e
+[ "$code" -ne 0 ] || fail "wildcard bind was accepted as the managed service"
+grep -q "127.0.0.1" "$home/err" || fail "wildcard bind error did not name loopback"
+[ -f "$home/.config/systemd/user/anthracite-opencode.service" ] || fail "status removed the managed unit"
+grep -q "$MARKER" "$home/.config/systemd/user/anthracite-opencode.service" || fail "status rewrote the managed unit"
+pass "non-loopback listener is not the managed service"
+
+root=$(cd "$(dirname "$0")/../../../.." && pwd)
+cmp "$root/THIRD-PARTY-NOTICES.md" "$root/app/src/main/assets/THIRD-PARTY-NOTICES.md" \
+  || fail "APK notice asset does not match THIRD-PARTY-NOTICES.md"
+cmp "$root/LICENSE" "$root/app/src/main/assets/LICENSE" \
+  || fail "APK license asset does not match LICENSE"
+pass "license notices match the APK assets"
 
 printf '%s\n' 'all script checks passed'

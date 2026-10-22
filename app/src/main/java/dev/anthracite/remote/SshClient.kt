@@ -50,7 +50,6 @@ internal class SshClient {
     fun localForwardPort(): Int = localPort
 
     fun connect(target: SshTarget, approvedKey: ByteArray?): ConnectOutcome {
-        installCryptoProvider()
         disconnect()
         val gate = HostKeyGate(approvedKey)
         val jsch = JSch()

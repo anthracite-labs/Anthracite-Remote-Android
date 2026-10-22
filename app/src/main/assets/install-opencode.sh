@@ -220,6 +220,32 @@ port_in_use() {
   (echo >/dev/tcp/127.0.0.1/"$PORT") >/dev/null 2>&1
 }
 
+# Prints the local address of the first listener on PORT, or nothing.
+listener_address() {
+  command -v ss >/dev/null 2>&1 || return 1
+  ss -H -ltn "sport = :${PORT}" 2>/dev/null | awk 'NR==1 {print $4}'
+}
+
+loopback_listener() {
+  local addr
+  addr=$(listener_address) || return 1
+  case "$addr" in
+    127.0.0.1:${PORT}|\[::1\]:${PORT}) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# A listener that is not our loopback address must not be treated as the managed service.
+foreign_listener() {
+  local addr
+  addr=$(listener_address) || return 1
+  [ -n "$addr" ] || return 1
+  case "$addr" in
+    127.0.0.1:${PORT}|\[::1\]:${PORT}) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 service_active() {
   systemctl --user is-active --quiet anthracite-opencode.service
 }
@@ -332,18 +358,28 @@ verify_binary() {
 wait_ready() {
   local i code=""
   step ready
+  unit_is_ours || {
+    say "error: readiness check refused because the user unit is not the managed service" >&2
+    return 1
+  }
   for ((i = 1; i <= READY_TRIES; i++)); do
-    code=$(http_code "http://127.0.0.1:${PORT}/")
-    case "$code" in
-      401)
-        ok "supervised service requires authentication (HTTP 401). A browser session is not authenticated."
-        return 0
-        ;;
-      200)
-        ok "supervised service responded HTTP 200. Authentication was not enforced. A browser session is not authenticated."
-        return 0
-        ;;
-    esac
+    if foreign_listener; then
+      say "error: port ${PORT} is not bound to 127.0.0.1. Refusing to treat that listener as the managed service." >&2
+      return 1
+    fi
+    if service_active && loopback_listener; then
+      code=$(http_code "http://127.0.0.1:${PORT}/")
+      case "$code" in
+        401)
+          ok "managed service is active on 127.0.0.1:${PORT} and requires authentication (HTTP 401). A browser session is not authenticated."
+          return 0
+          ;;
+        200)
+          say "error: managed service answered HTTP 200 without authentication. Refusing to treat that as ready. A browser session is not authenticated." >&2
+          return 1
+          ;;
+      esac
+    fi
     sleep 1
   done
   return 1
@@ -395,7 +431,8 @@ preflight_checks() {
     die 2 "curl or wget is required"
   fi
   command -v systemctl >/dev/null 2>&1 || die 2 "systemd is required"
-  ok "tar, sha256sum, downloader, and systemctl are present"
+  command -v ss >/dev/null 2>&1 || die 2 "ss is required to verify the loopback bind"
+  ok "tar, sha256sum, downloader, systemctl, and ss are present"
   step preflight-disk
   free_kb=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
   [ "${free_kb:-0}" -ge "$MIN_FREE_KB" ] || die 2 "need at least $((MIN_FREE_KB / 1024)) MiB free under HOME"
@@ -518,18 +555,21 @@ cmd_install() {
 }
 
 cmd_status() {
-  local root version code active=inactive
+  local root version code active=inactive addr=""
   root=$(root_dir)
-  if unit_is_ours && service_active; then
+  unit_is_ours || die 5 "refusing to report status for a unit this installer does not own"
+  if service_active; then
     active=active
-  elif unit_is_ours; then
+  else
     active=$(systemctl --user is-active anthracite-opencode.service 2>/dev/null || true)
   fi
   version=$(installed_version 2>/dev/null || true)
   say "step: status"
   say "version: ${version:-none}"
   say "service: ${active:-unknown}"
-  if port_in_use; then
+  addr=$(listener_address || true)
+  [ -n "$addr" ] && say "bind: ${addr}"
+  if loopback_listener; then
     code=$(http_code "http://127.0.0.1:${PORT}/")
     say "http: ${code}"
   else
@@ -537,12 +577,14 @@ cmd_status() {
     say "http: not-listening"
   fi
   linger_note
+  [ "$active" = "active" ] || die 4 "managed service is not active"
+  loopback_listener || die 4 "managed service is not bound to 127.0.0.1:${PORT}"
   case "$code" in
     401)
       ok "service is up and requires authentication. A browser session is not authenticated."
       ;;
     200)
-      ok "service is up. Authentication was not enforced. A browser session is not authenticated."
+      die 4 "managed service answered HTTP 200 without authentication. A browser session is not authenticated."
       ;;
     *)
       die 4 "managed OpenCode is not ready (service ${active:-unknown}, http ${code})"

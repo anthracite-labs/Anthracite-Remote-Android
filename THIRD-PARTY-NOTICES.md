@@ -18,9 +18,11 @@ Picker and WebView behavior was adapted from [anthracite-labs/OpenCode-Android](
 | kotlinx-coroutines-android | 1.11.0 | Apache-2.0 |
 | Kotlin standard library, pulled by the Android Gradle plugin | AGP 9.4.1 default | Apache-2.0 |
 
-JUnit 4.13.2 is a test dependency and is not shipped in the APK.
+JUnit 4.13.2, Apache MINA SSHD 2.20.0, and slf4j-nop 2.0.16 are test-only dependencies. They are not shipped in the APK. OpenCode CLI binaries and native toolchains are not packaged either.
 
-JSch's Android build reports Java 8 and drops multi-release classes, so Ed25519 and X25519 run through JSch's Bouncy Castle implementations. That is why `bcprov-jdk18on` is a direct dependency. ConnectBot's SSH library is not included.
+JSch's Android build reports Java 8 and drops multi-release classes, so Ed25519 and X25519 run through JSch's Bouncy Castle lightweight classes (`org.bouncycastle.crypto`). That is why `bcprov-jdk18on` is a direct dependency. The app does not register Bouncy Castle as a JCE provider and does not move it ahead of Android's providers. Android Keystore AES-GCM uses `AndroidKeyStoreBCWorkaround` or `AndroidOpenSSL` when those providers exist. ConnectBot's SSH library is not included.
+
+`assets/THIRD-PARTY-NOTICES.md` and `assets/LICENSE` are copies of the repository notices so the APK carries them. Jar signature files are excluded from the APK because they are not license texts. License and notice resources from dependencies are merged rather than discarded.
 
 ## JSch
 

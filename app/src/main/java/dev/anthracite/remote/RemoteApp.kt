@@ -1,17 +1,12 @@
 package dev.anthracite.remote
 
 import android.app.Application
-import org.bouncycastle.jce.provider.BouncyCastleProvider
-import java.security.Security
 
-class RemoteApp : Application() {
-    override fun onCreate() {
-        super.onCreate()
-        installCryptoProvider()
-    }
-}
-
-internal fun installCryptoProvider() {
-    Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
-    Security.insertProviderAt(BouncyCastleProvider(), 1)
-}
+/**
+ * Does not install or reorder JCE providers. Android Keystore AES-GCM keys are
+ * not exportable, and a Bouncy Castle provider at priority 1 makes
+ * Cipher.getInstance pick an implementation that cannot use them. JSch loads
+ * org.bouncycastle.crypto classes directly for the algorithms Android's Java 8
+ * view cannot provide.
+ */
+class RemoteApp : Application()

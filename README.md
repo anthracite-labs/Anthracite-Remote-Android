@@ -32,7 +32,7 @@ x86_64_sha256=<64 hex of opencode-linux-x64-baseline.tar.gz>
 aarch64_sha256=<64 hex of opencode-linux-arm64.tar.gz>
 ```
 
-The initial install is pinned to OpenCode v1.19.3. A failed update restores the previous managed version.
+The initial install is pinned to OpenCode v1.19.3. A failed update restores the previous managed version. A managed install that answers HTTP 200 without authentication is rejected. HTTP 401 means the service is up and the browser is not signed in yet.
 
 ## Build
 
