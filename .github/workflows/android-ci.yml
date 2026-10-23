@@ -34,6 +34,7 @@ jobs:
           set -euo pipefail
           for script in app/src/main/assets/host/anthracite-provision-run.sh \
                         app/src/main/assets/host/anthracite-provision-status.sh \
+                        app/src/main/assets/host/anthracite-provision-cancel.sh \
                         app/src/main/assets/host/anthracite-probe.sh; do
             bash -n "$script"
             dash -n "$script"
@@ -55,6 +56,16 @@ jobs:
             echo "== runner under $interpreter"
             SHELL_UNDER_TEST="$interpreter" bash app/src/test/host/provision-run-test.sh
           done 2>&1 | tee ci-diagnostics/host-kit-tests.log
+      - name: Cancellation identity suite
+        id: host_cancel
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ci-diagnostics
+          for interpreter in dash bash; do
+            echo "== cancel under $interpreter"
+            SHELL_UNDER_TEST="$interpreter" bash app/src/test/host/provision-cancel-test.sh
+          done 2>&1 | tee ci-diagnostics/host-cancel-tests.log
       - name: Probe is read-only and self-describing
         id: host_probe
         continue-on-error: true
@@ -82,12 +93,14 @@ jobs:
           HOST_SYNTAX_RESULT: ${{ steps.host_syntax.outcome }}
           REGRESSION_RESULT: ${{ steps.regressions.outcome }}
           HOST_REGRESSION_RESULT: ${{ steps.host_regressions.outcome }}
+          HOST_CANCEL_RESULT: ${{ steps.host_cancel.outcome }}
           HOST_PROBE_RESULT: ${{ steps.host_probe.outcome }}
         run: |
           test "$SYNTAX_RESULT" = success
           test "$HOST_SYNTAX_RESULT" = success
           test "$REGRESSION_RESULT" = success
           test "$HOST_REGRESSION_RESULT" = success
+          test "$HOST_CANCEL_RESULT" = success
           test "$HOST_PROBE_RESULT" = success
 
   # One place that reports the whole compiler/resource error inventory of a run.
@@ -403,6 +416,7 @@ jobs:
           stat -c '%s %n' "$apk" | tee ci-diagnostics/apk-size.txt
           unzip -Z1 "$apk" > ci-diagnostics/apk-entries.txt
           grep -Fxq 'assets/install-opencode.sh' ci-diagnostics/apk-entries.txt
+          grep -Fxq 'assets/host/anthracite-provision-cancel.sh' ci-diagnostics/apk-entries.txt
           grep -Fxq 'assets/THIRD-PARTY-NOTICES.md' ci-diagnostics/apk-entries.txt
           grep -Fxq 'assets/LICENSE' ci-diagnostics/apk-entries.txt
           if grep -E '(^|/)(libopencode[^/]*|opencode-linux[^/]*)$|^jni/' ci-diagnostics/apk-entries.txt; then

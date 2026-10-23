@@ -232,40 +232,147 @@ internal object ProvisionCatalog {
 }
 
 /**
- * Verified support tiers. A tier is only raised with evidence: a container run
- * proves package names and manager behaviour, not supervisor or logout
- * behaviour, which needs a real host or VM.
+ * Independent capabilities. Proving one of these never promotes another: a
+ * successful read-only probe says nothing about package installation, and a
+ * successful install says nothing about a supervisor, a logout or a reboot.
  */
+internal enum class ProvisionCapability(val label: String) {
+    SSH_PTY("SSH and interactive terminal"),
+    OS_DISCOVERY("Read-only discovery"),
+    PLAN_GENERATION("Package plan generation"),
+    PACKAGE_INSTALL("Package installation"),
+    PACKAGE_VERIFY("Post-install verification"),
+    CANCELLATION("Cancellation and stop handling"),
+    CLEANUP("Cleanup after a job"),
+    SESSION_DURABILITY("Detached session durability"),
+    REBOOT_DURABILITY("Survives a host reboot"),
+    CONTAINER_RUNTIME("Container runtime control"),
+    KUBERNETES("Kubernetes access"),
+}
+
+/**
+ * Evidence for one *exact* image, VM or host.
+ *
+ * A capability is only listed here after it was exercised end to end, and the
+ * record names the image digest (or host identity), the date and the GitHub
+ * Actions run. Recording a distribution name alone is not evidence: the same
+ * name can resolve to a different image tomorrow.
+ */
+internal data class DistributionEvidence(
+    val osId: String,
+    val osVersion: String,
+    val arch: String,
+    val image: String,
+    val imageDigest: String,
+    val testedAt: String,
+    val runUrl: String,
+    val capabilities: Set<ProvisionCapability>,
+) {
+    val installTested: Boolean
+        get() = ProvisionCapability.PACKAGE_INSTALL in capabilities &&
+            ProvisionCapability.PACKAGE_VERIFY in capabilities
+}
+
+/**
+ * What can honestly be claimed for *this* host, and why.
+ *
+ * [tier] is a statement about the connected machine, not about an image with a
+ * similar name. A container that matches a tested image can only ever reach
+ * [SupportTier.TESTED_IN_IMAGE]; that still requires the user's acknowledgement
+ * before a package mutation, because the host's own supervisor, logout and
+ * reboot behaviour were never exercised.
+ */
+internal data class CapabilityAssessment(
+    val tier: SupportTier,
+    val capabilities: Set<ProvisionCapability>,
+    val evidence: DistributionEvidence?,
+    val detail: String,
+)
+
+/** Verified support tiers. Only [VERIFIED_HOST] skips the acknowledgement. */
 internal enum class SupportTier(val label: String) {
-    VERIFIED_HOST("Verified on a real host"),
-    VERIFIED_CONTAINER("Verified in a container (supervisor/logout untested)"),
+    /** This exact host completed install, verify, cancel and cleanup. */
+    VERIFIED_HOST("Verified on this host"),
+
+    /**
+     * A container image of the same distribution, release and architecture
+     * completed install and verify. Supervisor/logout/reboot remain untested.
+     */
+    TESTED_IN_IMAGE("Installation tested in a container image, not on this host"),
+
     UNVERIFIED("Not verified for this distribution"),
 }
 
 internal object ProvisioningSupport {
     /**
-     * Evidence for each entry lives in `docs/support-matrix.md` with the CI run or
-     * host that produced it. Adding an entry without a run is not allowed.
+     * Populated only from a real matrix run. Empty is the truthful default:
+     * read-only discovery does not prove that a package can be installed.
      */
-    private val verifiedContainers: Set<String> = setOf(
-        "debian:12",
-        "ubuntu:24.04",
-        "alpine:3.21",
-        "fedora:42",
-        "archlinux:latest",
-        "opensuse/tumbleweed:latest",
-    )
+    val evidence: List<DistributionEvidence> = emptyList()
 
-    fun tierFor(facts: HostFacts): SupportTier {
-        if (facts.packageManager == null) return SupportTier.UNVERIFIED
-        val key = "${facts.osId}:${facts.osVersionId}"
-        if (key in verifiedContainers && !facts.containerized) {
-            // A container image name is not proof for a real host of the same name.
-            return SupportTier.UNVERIFIED
+    /** Evidence keyed to a specific machine (VM or host), never to a distro name. */
+    val hostEvidence: Map<String, Set<ProvisionCapability>> = emptyMap()
+
+    fun assessmentFor(
+        facts: HostFacts,
+        records: List<DistributionEvidence> = evidence,
+        hosts: Map<String, Set<ProvisionCapability>> = hostEvidence,
+    ): CapabilityAssessment {
+        if (facts.packageManager == null) {
+            return CapabilityAssessment(
+                SupportTier.UNVERIFIED,
+                emptySet(),
+                null,
+                "No supported native package manager was detected on this host.",
+            )
         }
-        if (key in verifiedContainers) return SupportTier.VERIFIED_CONTAINER
-        return SupportTier.UNVERIFIED
+        // Only a host identity that was itself tested may skip the acknowledgement.
+        val hostCapabilities = hosts[facts.machineIdentity].orEmpty()
+        if (ProvisionCapability.PACKAGE_INSTALL in hostCapabilities &&
+            ProvisionCapability.PACKAGE_VERIFY in hostCapabilities
+        ) {
+            return CapabilityAssessment(
+                SupportTier.VERIFIED_HOST,
+                hostCapabilities,
+                null,
+                "Guided provisioning was verified on this host.",
+            )
+        }
+        val match = records.firstOrNull { record ->
+            record.osId == facts.osId &&
+                record.osVersion == facts.osVersionId &&
+                record.arch == facts.architecture &&
+                record.installTested
+        } ?: return CapabilityAssessment(
+            SupportTier.UNVERIFIED,
+            emptySet(),
+            null,
+            "No package-installation evidence exists for ${facts.displayName} " +
+                "${facts.architecture}: discovery alone does not certify provisioning.",
+        )
+        val provenance = "${match.image} (digest ${match.imageDigest.take(19)}…), " +
+            "tested ${match.testedAt}, ${match.runUrl}"
+        return if (facts.containerized) {
+            CapabilityAssessment(
+                SupportTier.TESTED_IN_IMAGE,
+                match.capabilities,
+                match,
+                "Package installation was tested in $provenance. The container image, not this " +
+                    "host's supervisor, logout or reboot behaviour, is what that run covered.",
+            )
+        } else {
+            CapabilityAssessment(
+                SupportTier.UNVERIFIED,
+                match.capabilities,
+                match,
+                "Package names were tested in $provenance, not on this host. A real host of the " +
+                    "same distribution still has its own package availability, supervisor, logout " +
+                    "and reboot behaviour.",
+            )
+        }
     }
+
+    fun tierFor(facts: HostFacts): SupportTier = assessmentFor(facts).tier
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +413,8 @@ internal data class ProvisionPlan(
     val estimatedDownloadBytes: Long?,
     val warnings: List<String>,
     val stepsDigest: String,
+    val supportDetail: String,
+    val testedCapabilities: Set<ProvisionCapability>,
 ) {
     val installActions: List<PlanAction.Install> get() = actions.filterIsInstance<PlanAction.Install>()
 
@@ -332,7 +441,12 @@ internal object ProvisionPlanner {
     const val PACKAGES_PER_STEP = 16
     const val MIN_DISK_KB = 200 * 1024L
 
-    fun plan(facts: HostFacts, request: BootstrapRequest): ProvisionPlan {
+    fun plan(
+        facts: HostFacts,
+        request: BootstrapRequest,
+        evidence: List<DistributionEvidence> = ProvisioningSupport.evidence,
+        hostEvidence: Map<String, Set<ProvisionCapability>> = ProvisioningSupport.hostEvidence,
+    ): ProvisionPlan {
         val manager = facts.packageManager
         val requested = request.toolIds.distinct().take(MAX_TOOLS)
         val actions = mutableListOf<PlanAction>()
@@ -381,10 +495,10 @@ internal object ProvisionPlanner {
             PlanStep(index + 1, chunk, toolIds)
         }
 
-        val tier = ProvisioningSupport.tierFor(facts)
-        if (tier == SupportTier.UNVERIFIED) {
-            warnings += "Guided provisioning is not verified for ${facts.displayName} ${facts.architecture}. " +
-                "Use the terminal to install software, or continue only if you accept the risk."
+        val assessment = ProvisioningSupport.assessmentFor(facts, evidence, hostEvidence)
+        val tier = assessment.tier
+        if (tier != SupportTier.VERIFIED_HOST) {
+            warnings += assessment.detail
         }
         if (facts.containerized) {
             warnings += "The host appears to be a container. Package changes affect that container only."
@@ -409,6 +523,8 @@ internal object ProvisionPlanner {
             estimatedDownloadBytes = null,
             warnings = warnings,
             stepsDigest = digest,
+            supportDetail = assessment.detail,
+            testedCapabilities = assessment.capabilities,
         )
     }
 
@@ -447,11 +563,17 @@ internal object ProvisionPlanner {
                 false,
             )
         }
-        return if (plan.supportTier == SupportTier.UNVERIFIED && !plan.request.acknowledgeUnverified) {
+        // Only a run that this exact host completed may skip the acknowledgement.
+        // Image evidence never does: a container test proves package names, not
+        // the supervisor, logout or reboot behaviour of the connected machine.
+        return if (plan.supportTier != SupportTier.VERIFIED_HOST && !plan.request.acknowledgeUnverified) {
+            val why = plan.supportDetail.ifBlank {
+                "This distribution is not in the verified matrix; read-only discovery does not certify " +
+                    "package installation."
+            }
             PlanVerdict(
                 PlanDecision.ALLOWED_UNVERIFIED,
-                "This distribution is not in the verified matrix. Review the exact commands, then confirm " +
-                    "that you accept running them at your own risk.",
+                "$why Review the exact commands, then confirm that you accept running them at your own risk.",
                 true,
             )
         } else {
@@ -517,6 +639,8 @@ internal data class JobStatus(
     val exitCode: Int,
     val processAlive: Boolean,
     val startTicksMatch: Boolean?,
+    /** `null` when the host did not report; never guessed from a PID alone. */
+    val identityVerified: Boolean?,
     val pid: String?,
     val logTail: String,
     val logBytes: Long,
@@ -528,6 +652,7 @@ internal data class JobStatus(
 internal object ProvisionJobs {
     const val RUNNER_FILE = "anthracite-provision-run.sh"
     const val STATUS_FILE = "anthracite-provision-status.sh"
+    const val CANCEL_FILE = "anthracite-provision-cancel.sh"
     const val JOB_ROOT = ".anthracite/jobs"
     const val LOG_TAIL_LIMIT = 3000
 
@@ -563,18 +688,27 @@ internal object ProvisionJobs {
 
     fun statusCommand(jobId: String): String = "sh -s \"\$HOME/${jobDirectory(jobId)}\""
 
-    fun cancelCommand(pid: String): String {
-        require(pid.matches(Regex("[0-9]{1,10}"))) { "pid is invalid" }
-        return "kill -TERM $pid"
-    }
+    /**
+     * Runs the reviewed compare-and-signal script on the host.
+     *
+     * The phone never selects a PID and never sends a signal itself: the host kit
+     * re-verifies the recorded process identity immediately before signalling and
+     * refuses when it cannot prove ownership.
+     */
+    fun cancelScriptCommand(jobId: String): String = "sh -s \"\$HOME/${jobDirectory(jobId)}\""
 
-    fun parseStatus(stdout: String): JobStatus {
+    private fun fields(stdout: String): Map<String, String> {
         val values = LinkedHashMap<String, String>()
         for (line in stdout.lineSequence()) {
             val separator = line.indexOf('=')
             if (separator <= 0) continue
             values[line.substring(0, separator).trim()] = line.substring(separator + 1).trim()
         }
+        return values
+    }
+
+    fun parseStatus(stdout: String): JobStatus {
+        val values = fields(stdout)
         val state = when (values["status"]?.uppercase()) {
             "PLANNED" -> JobState.PLANNED
             "APPROVED" -> JobState.APPROVED
@@ -593,14 +727,20 @@ internal object ProvisionJobs {
             "no" -> false
             else -> null
         }
+        val identityVerified = when (values["identity"]) {
+            "verified" -> true
+            "unverified" -> false
+            else -> null
+        }
         val logTail = decodeLogTail(values["log_tail_b64"].orEmpty())
         val pid = values["pid"]?.takeIf { it.matches(Regex("[0-9]{1,10}")) }
         return JobStatus(
-            state = reconcile(state, alive, ticksMatch),
+            state = reconcile(state, alive, ticksMatch, identityVerified),
             step = values["step"].orEmpty(),
             exitCode = values["exit_code"]?.toIntOrNull() ?: -1,
             processAlive = alive,
             startTicksMatch = ticksMatch,
+            identityVerified = identityVerified,
             pid = pid,
             logTail = logTail.first,
             logBytes = values["log_bytes"]?.toLongOrNull() ?: 0L,
@@ -614,10 +754,49 @@ internal object ProvisionJobs {
      * The host is authoritative. A recorded RUNNING state with no matching
      * process is an interruption, never a success and never a silent restart.
      */
-    fun reconcile(recorded: JobState, alive: Boolean, ticksMatch: Boolean?): JobState = when {
+    fun reconcile(
+        recorded: JobState,
+        alive: Boolean,
+        ticksMatch: Boolean?,
+        identityVerified: Boolean? = null,
+    ): JobState = when {
         recorded == JobState.RUNNING && !alive -> JobState.INTERRUPTED
         recorded == JobState.RUNNING && ticksMatch == false -> JobState.INTERRUPTED
+        // A live PID whose command line is not this job is not our job. The state
+        // is unknown, not running and not successful.
+        recorded == JobState.RUNNING && identityVerified == false -> JobState.UNKNOWN
         else -> recorded
+    }
+
+    /**
+     * Parses the host-side compare-and-signal result. A signal that was merely
+     * requested is never reported as a completed stop.
+     */
+    fun parseCancel(stdout: String): CancelResult {
+        val values = fields(stdout)
+        val outcome = when (values["cancel_result"]) {
+            "refused_invalid_job" -> CancelOutcome.REFUSED_INVALID_JOB
+            "refused_unknown_identity" -> CancelOutcome.REFUSED_UNKNOWN_IDENTITY
+            "refused_not_owner" -> CancelOutcome.REFUSED_NOT_OWNER
+            "already_finished" -> CancelOutcome.ALREADY_FINISHED
+            "signal_sent" -> CancelOutcome.SIGNAL_SENT
+            "still_running" -> CancelOutcome.STILL_RUNNING
+            "confirmed_stopped" -> CancelOutcome.CONFIRMED_STOPPED
+            "signal_failed" -> CancelOutcome.SIGNAL_FAILED
+            else -> CancelOutcome.UNKNOWN
+        }
+        return CancelResult(
+            outcome = outcome,
+            reason = values["reason"],
+            state = values["state"],
+            pid = values["pid"]?.takeIf { it.matches(Regex("[0-9]{1,10}")) },
+            processAlive = when (values["process_alive"]) {
+                "yes" -> true
+                "no" -> false
+                else -> null
+            },
+            verification = values["verification"]?.takeIf { it != "none" },
+        )
     }
 
     private fun decodeLogTail(encoded: String): Pair<String, Boolean> {
@@ -627,6 +806,43 @@ internal object ProvisionJobs {
         val text = String(bytes.copyOfRange(bytes.size - minOf(bytes.size, LOG_TAIL_LIMIT), bytes.size), Charsets.UTF_8)
         return text to truncated
     }
+}
+
+/**
+ * What the host reported after a compare-and-signal request.
+ *
+ * [SIGNAL_SENT] and [STILL_RUNNING] mean "the verified runner was asked to stop
+ * and is still alive". Only [CONFIRMED_STOPPED] and [ALREADY_FINISHED] mean the
+ * process is gone; a successful `kill` syscall is never treated as termination.
+ */
+internal enum class CancelOutcome {
+    REFUSED_INVALID_JOB,
+    REFUSED_UNKNOWN_IDENTITY,
+    REFUSED_NOT_OWNER,
+    ALREADY_FINISHED,
+    SIGNAL_SENT,
+    STILL_RUNNING,
+    CONFIRMED_STOPPED,
+    SIGNAL_FAILED,
+    UNKNOWN;
+
+    val signalWasSent: Boolean
+        get() = this == SIGNAL_SENT || this == STILL_RUNNING
+
+    val stopped: Boolean
+        get() = this == CONFIRMED_STOPPED || this == ALREADY_FINISHED
+}
+
+internal data class CancelResult(
+    val outcome: CancelOutcome,
+    val reason: String?,
+    val state: String?,
+    val pid: String?,
+    val processAlive: Boolean?,
+    /** Non-null only when the host proved pid, start time, owner and cmdline. */
+    val verification: String?,
+) {
+    val identityProven: Boolean get() = verification != null
 }
 
 /**
@@ -687,14 +903,15 @@ internal class ProvisionClient(private val ssh: SshClient) {
     }
 
     /**
-     * Requests cancellation only for a process whose recorded start time still
-     * matches. A reused PID is never signalled.
+     * Asks the host to stop a job. The identity check, the decision and the
+     * signal all happen on the host in one reviewed script, so a reused PID or a
+     * missing start time can never be signalled by a stale phone observation.
      */
-    fun cancel(jobId: String, statusScript: String): Boolean {
-        val status = status(jobId, statusScript)
-        val pid = status.pid ?: return false
-        if (!status.processAlive || status.startTicksMatch == false) return false
-        val result = ssh.exec(ProvisionJobs.cancelCommand(pid))
-        return result.exitCode == 0
+    fun cancel(jobId: String, cancelScript: String): CancelResult {
+        val result = ssh.exec(
+            ProvisionJobs.cancelScriptCommand(jobId),
+            stdin = cancelScript.toByteArray(Charsets.UTF_8),
+        )
+        return ProvisionJobs.parseCancel(result.stdout)
     }
 }

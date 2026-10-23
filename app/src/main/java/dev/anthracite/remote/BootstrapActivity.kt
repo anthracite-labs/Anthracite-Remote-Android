@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
 import dev.anthracite.remote.host.BootstrapRequest
+import dev.anthracite.remote.host.CancelOutcome
 import dev.anthracite.remote.host.HostFacts
 import dev.anthracite.remote.host.HostProfile
 import dev.anthracite.remote.host.HostProbe
@@ -459,17 +460,24 @@ class BootstrapActivity : AppCompatActivity() {
                 val result = runCatching {
                     io {
                         ProvisionClient(Workspace.ssh)
-                            .cancel(id, Workspace.script(this@BootstrapActivity, ProvisionJobs.STATUS_FILE))
+                            .cancel(id, Workspace.script(this@BootstrapActivity, ProvisionJobs.CANCEL_FILE))
                     }
                 }
-                result.onSuccess { cancelled ->
-                    showStatus(
-                        if (cancelled) {
-                            getString(R.string.bootstrap_cancel_sent)
-                        } else {
+                result.onSuccess { outcome ->
+                    val message = when (outcome.outcome) {
+                        CancelOutcome.SIGNAL_SENT -> getString(R.string.bootstrap_cancel_sent)
+                        CancelOutcome.STILL_RUNNING -> getString(R.string.bootstrap_cancel_still_running)
+                        CancelOutcome.CONFIRMED_STOPPED -> getString(R.string.bootstrap_cancel_stopped)
+                        CancelOutcome.ALREADY_FINISHED -> getString(R.string.bootstrap_cancel_finished)
+                        CancelOutcome.REFUSED_UNKNOWN_IDENTITY ->
+                            getString(R.string.bootstrap_cancel_identity_unproven)
+                        CancelOutcome.REFUSED_INVALID_JOB, CancelOutcome.REFUSED_NOT_OWNER ->
+                            getString(R.string.bootstrap_cancel_refused)
+                        CancelOutcome.SIGNAL_FAILED, CancelOutcome.UNKNOWN ->
                             getString(R.string.bootstrap_cancel_unconfirmed)
-                        },
-                    )
+                    }
+                    val reason = outcome.reason?.let { " (" + LogRedactor.redact(it) + ")" }.orEmpty()
+                    showStatus(message + reason)
                 }.onFailure { showStatus(it.message ?: getString(R.string.bootstrap_cancel_unconfirmed)) }
             }
         }

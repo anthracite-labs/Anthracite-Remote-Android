@@ -27,6 +27,8 @@ emit kernel "$(uname -s 2>/dev/null)"
 emit arch "$(uname -m 2>/dev/null)"
 emit kernel_release "$(uname -r 2>/dev/null)"
 
+# A stable host identifier, used only to key tested evidence to this machine.
+emit machine_id "$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null)"
 emit uid "$(id -u 2>/dev/null)"
 emit user "$(id -un 2>/dev/null)"
 emit group "$(id -gn 2>/dev/null)"

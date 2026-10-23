@@ -356,6 +356,11 @@
     <string name="bootstrap_cancel_detail">Ask the host to stop job %1$s? The runner stops at the next command boundary; the package manager is never killed mid-transaction.</string>
     <string name="bootstrap_cancel_confirm">Request stop</string>
     <string name="bootstrap_cancel_sent">A stop request was sent. The host\'s state is re-read next.</string>
+    <string name="bootstrap_cancel_still_running">The verified job process accepted the stop request and is still running. It stops at the next command boundary, so a package transaction is never interrupted.</string>
+    <string name="bootstrap_cancel_stopped">The host confirmed that the job process is gone.</string>
+    <string name="bootstrap_cancel_finished">The job had already finished; nothing was signalled.</string>
+    <string name="bootstrap_cancel_identity_unproven">No signal was sent: the host could not prove that the recorded process still belongs to this job.</string>
+    <string name="bootstrap_cancel_refused">No signal was sent: the host refused the job record.</string>
     <string name="bootstrap_cancel_unconfirmed">The stop request could not be confirmed. Check the job state before retrying.</string>
     <string name="job_planned">planned</string>
     <string name="job_approved">approved</string>

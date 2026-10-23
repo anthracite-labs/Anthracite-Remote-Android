@@ -92,7 +92,7 @@ EOF
 make_job() {
     # $1 home, $2 manager, $3 admin, $4 steps contents
     local home=$1 manager=$2 admin=$3 steps=$4
-    local job="$home/job"
+    local job="$home/0123456789abcdef"
     mkdir -p "$job"
     printf '%s' "$steps" >"$job/steps"
     local hash
@@ -267,6 +267,146 @@ check "cancel releases the lock" "no" "$([[ -d "$home/.anthracite/locks/provisio
 home=$(new_home missing)
 check "missing job dir is unknown" "UNKNOWN" "$(job_status "$home" "$home/none")"
 
+# --------------------------------------------------------- plan integrity gate
+# A plan that cannot be proven must never reach a package mutation. Every case
+# below asserts both the failure *and* that the fake package manager never ran.
+
+no_mutation() { # $1 home
+    [ -s "$1/apt.log" ] && echo mutated || echo untouched
+}
+
+home=$(new_home blank_hash)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+sed -i 's/^plan_hash=.*/plan_hash=/' "$job/plan"
+rc=$(run_job "$home" "$job")
+check "a blank plan hash is refused" "FAILED" "$(job_status "$home" "$job")"
+check "a blank plan hash mutates nothing" "untouched" "$(no_mutation "$home")"
+check_contains "blank hash reason" "plan_hash" "$(cat "$job/result")"
+
+home=$(new_home short_hash)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+sed -i 's/^plan_hash=.*/plan_hash=abc/' "$job/plan"
+rc=$(run_job "$home" "$job")
+check "a malformed plan hash is refused" "FAILED" "$(job_status "$home" "$job")"
+check "a malformed plan hash mutates nothing" "untouched" "$(no_mutation "$home")"
+
+home=$(new_home missing_hash)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+sed -i '/^plan_hash=/d' "$job/plan"
+rc=$(run_job "$home" "$job")
+check "a missing plan hash is refused" "FAILED" "$(job_status "$home" "$job")"
+check "a missing plan hash mutates nothing" "untouched" "$(no_mutation "$home")"
+
+home=$(new_home symlink_steps)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+cp "$job/steps" "$home/steps.real"
+rm "$job/steps"
+ln -s "$home/steps.real" "$job/steps"
+rc=$(run_job "$home" "$job")
+check "a symlinked steps file is refused" "FAILED" "$(job_status "$home" "$job")"
+check "a symlinked steps file mutates nothing" "untouched" "$(no_mutation "$home")"
+
+home=$(new_home symlink_plan)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+cp "$job/plan" "$home/plan.real"
+rm "$job/plan"
+ln -s "$home/plan.real" "$job/plan"
+rc=$(run_job "$home" "$job")
+check "a symlinked plan file is refused" "FAILED" "$(job_status "$home" "$job")"
+check "a symlinked plan file mutates nothing" "untouched" "$(no_mutation "$home")"
+
+home=$(new_home unterminated)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+printf '2\tinstall\ttmux' >>"$job/steps"
+sed -i "s|^plan_hash=.*|plan_hash=$(sha256sum "$job/steps" | awk '{print $1}')|" "$job/plan"
+rc=$(run_job "$home" "$job")
+check "an unterminated steps file is refused" "FAILED" "$(job_status "$home" "$job")"
+check "an unterminated steps file mutates nothing" "untouched" "$(no_mutation "$home")"
+
+home=$(new_home manager_mismatch)
+job=$(make_job "$home" dnf 0 "1	install	git
+")
+# A dnf plan on an apt host: the manager and the distribution disagree.
+cat >"$home/fakebin/dnf" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$FAKE_LOG"
+exit 0
+EOF
+cat >"$home/fakebin/rpm" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$home/fakebin/dnf" "$home/fakebin/rpm"
+rc=$(run_job "$home" "$job")
+check "a manager/OS mismatch is refused" "FAILED" "$(job_status "$home" "$job")"
+check "a manager/OS mismatch mutates nothing" "untouched" "$(no_mutation "$home")"
+check_contains "manager mismatch reason" "mismatch" "$(cat "$job/result")"
+
+# A PATH with the tools the runner needs but deliberately without any SHA-256
+# implementation. The gate must refuse instead of executing the steps.
+minbin() { # $1 home
+    local dir="$1/minbin"
+    mkdir -p "$dir"
+    # The interpreter under test must be reachable inside the restricted PATH,
+    # otherwise the job would fail for the wrong reason.
+    for tool in sh "$SHELL_UNDER_TEST" date sed mv cat mkdir rm awk wc grep tr head tail ls id uname sleep chmod ln basename dirname kill; do
+        target=$(command -v "$tool" 2>/dev/null) || continue
+        ln -sf "$target" "$dir/$tool"
+    done
+    echo "$dir"
+}
+
+run_job_min() { # $1 home, $2 job, $3 minbin
+    local home=$1 job=$2 min=$3
+    (
+        export HOME="$home"
+        export PATH="$min"
+        export FAKE_LOG="$home/apt.log"
+        export FAKE_INSTALLED="$home/installed"
+        "$SHELL_UNDER_TEST" "$RUNNER" "$job" >/dev/null 2>&1
+        echo $?
+    )
+}
+
+home=$(new_home no_checksum)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+min=$(minbin "$home")
+cp "$home/fakebin/apt-get" "$min/apt-get"
+cp "$home/fakebin/dpkg-query" "$min/dpkg-query"
+rc=$(run_job_min "$home" "$job" "$min")
+check "an unavailable checksum tool is refused" "FAILED" "$(job_status "$home" "$job")"
+check "an unavailable checksum tool mutates nothing" "untouched" "$(no_mutation "$home")"
+check_contains "checksum refusal reason" "no_checksum_tool" "$(cat "$job/result")"
+
+# The reviewed alternative (shasum -a 256) is accepted, and the plan still runs.
+home=$(new_home shasum_only)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+min=$(minbin "$home")
+cp "$home/fakebin/apt-get" "$min/apt-get"
+cp "$home/fakebin/dpkg-query" "$min/dpkg-query"
+python=$(command -v python3)
+cat >"$min/shasum" <<EOF
+#!$python
+import hashlib, sys
+args = sys.argv[1:]
+if args[:2] == ["-a", "256"]:
+    args = args[2:]
+path = args[0]
+print(hashlib.sha256(open(path, "rb").read()).hexdigest() + "  " + path)
+EOF
+chmod +x "$min/shasum"
+rc=$(run_job_min "$home" "$job" "$min")
+check "the shasum alternative verifies the plan" "SUCCEEDED" "$(job_status "$home" "$job")"
+check_contains "the alternative is recorded" "plan_hash_verified=shasum" "$(cat "$job/result")"
+
 home=$(new_home process_identity)
 job=$(make_job "$home" apt 0 "1	install	git
 ")
@@ -285,7 +425,22 @@ job=$(make_job "$home" apt 0 "1	install	git
     grep -q 'start_ticks_match=yes' "$home/status.txt" || echo 'start_ticks_match=no' >"$home/status.txt.bad"
 )
 check "process start ticks match" "absent" "$([[ -e "$home/status.txt.bad" ]] && echo present || echo absent)"
+check_contains "executing job identity" "identity=verified" "$(cat "$home/status.txt")"
 check_contains "status exposes a bounded log" "log_bytes=" "$(cat "$home/status.txt")"
+
+# A PID that belongs to some other process must never be reported as the job.
+home=$(new_home identity_reuse)
+job=$(make_job "$home" apt 0 "1	install	git
+")
+sleep 300 >/dev/null 2>&1 &
+canary_pid=$!
+echo "$canary_pid" >"$job/pid"
+echo "1" >"$job/start_ticks"
+printf 'status=RUNNING\n' >"$job/state"
+reused_status=$(HOME="$home" "$SHELL_UNDER_TEST" "$STATUS" "$job" 2>/dev/null)
+kill "$canary_pid" 2>/dev/null
+check_contains "a reused pid has unverified identity" "identity=unverified" "$reused_status"
+check_contains "a reused pid reports mismatched ticks" "start_ticks_match=no" "$reused_status"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

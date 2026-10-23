@@ -33,25 +33,53 @@ else
     emit reason=no_state
 fi
 
-PID=$(cat "$JOB/pid" 2>/dev/null || echo "")
-RECORDED_TICKS=$(cat "$JOB/start_ticks" 2>/dev/null || echo "")
+# Symlinked state files are ignored: a link could point at another job's record.
+owned_read() {
+    [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    cat "$1" 2>/dev/null
+}
+
+PID=$(owned_read "$JOB/pid" || echo "")
+PID=$(printf '%s' "$PID" | tr -d '[:space:]')
+case "$PID" in ''|*[!0-9]*) PID="" ;; esac
+RECORDED_TICKS=$(owned_read "$JOB/start_ticks" || echo "")
+RECORDED_TICKS=$(printf '%s' "$RECORDED_TICKS" | tr -d '[:space:]')
 emit pid "${PID:-none}"
+
+process_gone() {
+    pid=$1
+    [ -e "/proc/$pid" ] || return 0
+    line=$(cat "/proc/$pid/stat" 2>/dev/null) || return 0
+    rest=${line##*) }
+    state=$(printf '%s\n' "$rest" | awk '{print $1}')
+    [ "$state" = Z ] && return 0
+    return 1
+}
 
 PROCESS_ALIVE=no
 TICKS_MATCH=unknown
-if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+IDENTITY=absent
+if [ -n "$PID" ] && ! process_gone "$PID"; then
     PROCESS_ALIVE=yes
-    if [ -r "/proc/$PID/stat" ]; then
+    IDENTITY=unverified
+    PROC_UID=$(awk '/^Uid:/{print $2; exit}' "/proc/$PID/status" 2>/dev/null)
+    if [ -n "$PROC_UID" ] && [ "$PROC_UID" = "$(id -u)" ] && [ -r "/proc/$PID/stat" ]; then
         line=$(cat "/proc/$PID/stat" 2>/dev/null || echo "")
         rest=${line##*) }
         ACTUAL_TICKS=$(printf '%s\n' "$rest" | awk '{print $20}')
-        if [ -n "$RECORDED_TICKS" ] && [ "$RECORDED_TICKS" != "unknown" ]; then
-            if [ "$ACTUAL_TICKS" = "$RECORDED_TICKS" ]; then TICKS_MATCH=yes; else TICKS_MATCH=no; fi
-        fi
+        CMDLINE=$(tr '\0' ' ' <"/proc/$PID/cmdline" 2>/dev/null || echo "")
+        case "$RECORDED_TICKS" in
+            ''|*[!0-9]*) : ;;
+            *) if [ "$ACTUAL_TICKS" = "$RECORDED_TICKS" ]; then TICKS_MATCH=yes; else TICKS_MATCH=no; fi ;;
+        esac
+        case "$CMDLINE" in
+            *anthracite-provision-run.sh*"$(basename "$JOB")"*) IDENTITY=verified ;;
+        esac
     fi
 fi
 emit process_alive "$PROCESS_ALIVE"
 emit start_ticks_match "$TICKS_MATCH"
+emit identity "$IDENTITY"
 
 RESULT="$JOB/result"
 if [ -r "$RESULT" ]; then
