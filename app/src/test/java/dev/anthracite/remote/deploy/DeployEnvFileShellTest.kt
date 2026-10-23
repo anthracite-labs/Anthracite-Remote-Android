@@ -47,6 +47,15 @@ class DeployEnvFileShellTest {
 
     private fun home(name: String = "home"): File = temp.newFolder(name)
 
+    /** Runs a setup tool and fails loudly if it did not succeed. */
+    private fun tool(vararg arguments: String) {
+        val process = ProcessBuilder(*arguments).start()
+        process.inputStream.close()
+        process.errorStream.close()
+        assertTrue("${arguments.joinToString(" ")} did not finish", process.waitFor(30, TimeUnit.SECONDS))
+        assertEquals("${arguments.joinToString(" ")} failed", 0, process.exitValue())
+    }
+
     /** The exact path the generated command writes to, with `$HOME` resolved. */
     private fun targetPath(plan: DeployPlan.Container, home: File): File =
         File(home, ".anthracite/deploy/${plan.name}-${plan.envToken}.env")
@@ -71,7 +80,11 @@ class DeployEnvFileShellTest {
             .redirectError(err)
             .apply { environment()["HOME"] = home.absolutePath }
             .start()
-        process.outputStream.use { stream -> if (stdin != null) stream.write(stdin) }
+        process.outputStream.use { stream ->
+            // A refusal exits before it reads anything, so the write can hit a
+            // closed pipe. That is expected here, not a failure of the test.
+            runCatching { if (stdin != null) stream.write(stdin) }
+        }
         // Every command here is bounded; a hung shell is a test failure, never a wait.
         assertTrue("the shell did not finish", process.waitFor(60, TimeUnit.SECONDS))
         return Outcome(process.exitValue(), err.readText())
@@ -112,9 +125,7 @@ class DeployEnvFileShellTest {
                 val home = home("mode-${shell.name}-$mode")
                 val plan = plan()
                 val dir = deployDir(home).apply { mkdirs() }
-                File("/bin/chmod").let { chmod ->
-                    ProcessBuilder(chmod.path, mode, dir.path).start().waitFor()
-                }
+                tool("/bin/chmod", mode, dir.path)
                 val outcome = run(shell, plan.envFileCommand(), home, plan.envFileBytes())
 
                 assertEquals("${shell.path} $mode", DeployPlans.EXIT_INSECURE_PATH, outcome.exit)
@@ -130,7 +141,7 @@ class DeployEnvFileShellTest {
             val home = home("symlink-${shell.name}")
             val elsewhere = temp.newFolder("elsewhere-${shell.name}")
             File(home, ".anthracite").mkdirs()
-            ProcessBuilder("/bin/ln", "-s", elsewhere.path, deployDir(home).path).start().waitFor()
+            tool("/bin/ln", "-s", elsewhere.path, deployDir(home).path)
             val plan = plan()
 
             val outcome = run(shell, plan.envFileCommand(), home, plan.envFileBytes())
@@ -147,7 +158,7 @@ class DeployEnvFileShellTest {
             val home = home("existing-${shell.name}")
             val plan = plan()
             deployDir(home).apply { mkdirs() }
-            File("/bin/chmod").let { ProcessBuilder(it.path, "700", deployDir(home).path).start().waitFor() }
+            tool("/bin/chmod", "700", deployDir(home).path)
             val file = targetPath(plan, home).apply { writeText("OLD=1\n") }
 
             val outcome = run(shell, plan.envFileCommand(), home, plan.envFileBytes())
@@ -163,9 +174,9 @@ class DeployEnvFileShellTest {
             val home = home("links-${shell.name}")
             val plan = plan()
             deployDir(home).apply { mkdirs() }
-            File("/bin/chmod").let { ProcessBuilder(it.path, "700", deployDir(home).path).start().waitFor() }
+            tool("/bin/chmod", "700", deployDir(home).path)
             val victim = File(home, "victim.txt").apply { writeText("SECRET-VICTIM\n") }
-            ProcessBuilder("/bin/ln", "-s", victim.path, targetPath(plan, home).path).start().waitFor()
+            tool("/bin/ln", "-s", victim.path, targetPath(plan, home).path)
 
             val outcome = run(shell, plan.envFileCommand(), home, plan.envFileBytes())
 
@@ -183,7 +194,7 @@ class DeployEnvFileShellTest {
             val home = home("partial-${shell.name}")
             val plan = plan()
             deployDir(home).apply { mkdirs() }
-            File("/bin/chmod").let { ProcessBuilder(it.path, "700", deployDir(home).path).start().waitFor() }
+            tool("/bin/chmod", "700", deployDir(home).path)
 
             val outcome = run(shell, plan.envFileCommand(), home, payload, prefix = "ulimit -f 1; ")
 
@@ -206,7 +217,7 @@ class DeployEnvFileShellTest {
         val home = home("owner")
         val plan = plan()
         deployDir(home).apply { mkdirs() }
-        ProcessBuilder("/bin/chown", "65534", deployDir(home).path).start().waitFor()
+        tool("/bin/chown", "65534", deployDir(home).path)
 
         val outcome = run(shells.first(), plan.envFileCommand(), home, plan.envFileBytes())
         assertEquals(DeployPlans.EXIT_INSECURE_PATH, outcome.exit)
@@ -220,7 +231,7 @@ class DeployEnvFileShellTest {
         val shell = shells.first()
         val home = home("concurrent")
         deployDir(home).apply { mkdirs() }
-        File("/bin/chmod").let { ProcessBuilder(it.path, "700", deployDir(home).path).start().waitFor() }
+        tool("/bin/chmod", "700", deployDir(home).path)
         val first = plan("anthracite-aaaa1111")
         val second = plan("anthracite-bbbb2222")
         val start = CountDownLatch(1)
