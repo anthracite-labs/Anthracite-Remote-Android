@@ -418,10 +418,13 @@ public actor SFTPClient {
         failAll(failure)
     }
 
+    /// A packet body is `byte type` followed by `uint32 id` — not a 32-bit type.
+    /// Reading four bytes here consumed three bytes of the id, so the version reply
+    /// never matched and no request could ever be answered.
     private func dispatch(_ packet: Data) {
         var reader = SFTPReader(packet)
-        guard let first = try? reader.readUInt32() else { return }
-        if UInt8(first & 0xff) == SFTP.packetVersion {
+        guard let type = try? reader.readByte() else { return }
+        if type == SFTP.packetVersion {
             take(Self.handshakeId)?.resume(returning: packet)
             return
         }
@@ -498,7 +501,7 @@ public actor SFTPClient {
         build(&writer)
         let packet = try await roundTrip(id: id, framed: writer.framed(), timeout: requestTimeout)
         var reader = SFTPReader(packet)
-        let replyType = UInt8((try reader.readUInt32()) & 0xff)
+        let replyType = try reader.readByte()
         _ = try reader.readUInt32()
         return (replyType, reader)
     }

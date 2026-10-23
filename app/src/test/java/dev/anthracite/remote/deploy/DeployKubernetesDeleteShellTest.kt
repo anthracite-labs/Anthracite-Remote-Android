@@ -60,8 +60,9 @@ class DeployKubernetesDeleteShellTest {
         val process = ProcessBuilder("/bin/sh", "-c", command)
             .apply { environment()["PATH"] = "${bin.path}:" + environment()["PATH"] }
             .redirectErrorStream(true)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .start()
+        // Drain before waiting, so the command can never block on a full pipe.
+        process.inputStream.bufferedReader().readText()
         assertTrue("kubectl was never reached in time", process.waitFor(60, TimeUnit.SECONDS))
         return process.exitValue()
     }
