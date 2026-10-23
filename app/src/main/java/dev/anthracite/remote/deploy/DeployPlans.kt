@@ -393,7 +393,7 @@ internal sealed class DeployPlan {
                 "is ever touched.",
         )
 
-        override fun commands(): List<String> = listOf(applyCommand(), rolloutCommand())
+        override fun commands(): List<String> = listOf(createCommand(), rolloutCommand())
 
         /** Exactly one document, generated from the validated fields above. */
         fun manifest(): String = buildString {

@@ -182,7 +182,8 @@ class DeployPlanTest {
     @Test
     fun `a reviewed workload plan names one context, namespace and resource`() {
         val plan = workload()
-        assertTrue(plan.applyCommand().startsWith("kubectl --context prod-cluster --namespace demo"))
+        assertTrue(plan.createCommand().startsWith("kubectl --context prod-cluster --namespace demo"))
+        assertEquals(listOf(plan.createCommand(), plan.rolloutCommand()), plan.commands())
         assertTrue(plan.createCommand().endsWith("create -f -"))
         assertTrue(plan.deleteCommand().endsWith("delete deployment/anthracite-1a2b3c4d --ignore-not-found --wait=false"))
         assertTrue(plan.rollbackCommand().contains("rollout undo deployment/anthracite-1a2b3c4d"))

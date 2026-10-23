@@ -588,7 +588,7 @@ public actor SFTPClient {
             }
             offset = end
         }
-        let closed: (UInt8, ByteBuffer)?
+        let closed: (UInt8, SFTPReader)?
         do {
             closed = try await call(SFTP.packetClose) { writer in writer.write(string: handle) }
         } catch {
