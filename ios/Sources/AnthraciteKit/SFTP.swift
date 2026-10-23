@@ -384,7 +384,9 @@ public actor SFTPClient {
             timeout: handshakeTimeout
         )
         var reader = SFTPReader(reply)
-        guard (try reader.readUInt32()) & 0xff == UInt32(SFTP.packetVersion) else {
+        // One byte of type, then the version: the same layout as every other
+        // packet, and the reason the handshake could never complete.
+        guard try reader.readByte() == SFTP.packetVersion else {
             throw SFTPError.protocolViolation("expected VERSION")
         }
         let version = try reader.readUInt32()
