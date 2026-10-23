@@ -298,7 +298,7 @@ public final class GitHubClient {
 
     /// The same request, keeping the response so `Link` headers can be read.
     ///
-    /// A continuation URL is absolute and is used as it is; `nextPage` has already
+    /// A continuation URL is absolute and is used as it is; `continuation(from:)` has already
     /// established that it is https on `api.github.com`. Appending it to the base
     /// URL instead would have produced a path that no longer identifies the page.
     private func requestWithResponse(
@@ -376,10 +376,20 @@ public final class GitHubClient {
     /// How many pages one listing may walk before it is reported as incomplete.
     static let maximumPages = 10
 
-    /// One page of a listing, and the URL of the next one if the server offered it.
+    /// What the server said about the page after this one.
+    private enum Continuation {
+        /// The listing ends here.
+        case end
+        /// A validated continuation URL.
+        case next(URL)
+        /// The server offered a continuation this client will not follow.
+        case refused(String)
+    }
+
+    /// One page of a listing and what follows it.
     private struct Page {
         let items: [[String: Any]]
-        let next: URL?
+        let continuation: Continuation
     }
 
     /// Walks pages until the listing ends, [limit] items have arrived, or the page
@@ -397,6 +407,7 @@ public final class GitHubClient {
     ) async throws -> [[String: Any]] {
         var items: [[String: Any]] = []
         var seen = Set<String>()
+        var visited = Set<URL>()
         var url: URL?
         var pages = 0
         while true {
@@ -407,18 +418,34 @@ public final class GitHubClient {
                 if seen.insert(identifier).inserted { items.append(item) }
                 if items.count >= limit { return items }
             }
-            guard let next = page.next else { return items }
-            guard pages < Self.maximumPages else {
-                throw GitHubError.incompleteCollection(
-                    "This list has more than \(Self.maximumPages) pages; it was not shown rather than shown incomplete."
-                )
+            switch page.continuation {
+            case .end:
+                return items
+            case .refused(let detail):
+                // The server says there is more, and this client will not follow
+                // where it points. Returning what arrived would present a prefix as
+                // the whole list.
+                throw GitHubError.incompleteCollection(detail)
+            case .next(let next):
+                guard pages < Self.maximumPages else {
+                    throw GitHubError.incompleteCollection(
+                        "This list has more than \(Self.maximumPages) pages; it was not shown rather than shown incomplete."
+                    )
+                }
+                // A server that keeps pointing at a page already read is a loop, not
+                // a listing. Stop instead of walking it until the page limit.
+                guard visited.insert(next).inserted else {
+                    throw GitHubError.incompleteCollection(
+                        "The server pointed back at a page that was already read, so the list was not shown in full."
+                    )
+                }
+                url = next
             }
-            url = next
         }
     }
 
     /// Fetches one page: the first page of [path], or an absolute continuation URL
-    /// that `nextPage` already validated.
+    /// that `continuation(from:)` already validated.
     private func fetchPage(path: String, url: URL?, key: String?) async throws -> Page {
         let (data, response) = try await requestWithResponse(path: path, absoluteURL: url)
         let parsed = try JSONSerialization.jsonObject(with: data)
@@ -431,7 +458,7 @@ public final class GitHubClient {
             guard let listed = parsed as? [[String: Any]] else { throw GitHubError.malformedResponse }
             items = listed
         }
-        return Page(items: items, next: Self.nextPage(from: response))
+        return Page(items: items, continuation: Self.continuation(from: response))
     }
 
     /// The `rel="next"` URL from a `Link` header, if it is safe to follow.
@@ -440,16 +467,17 @@ public final class GitHubClient {
     /// with no user-info and no port override: following anything else would send
     /// the token to another host. A malformed or foreign link ends the listing
     /// instead of being trusted.
-    static func nextPage(from response: HTTPURLResponse) -> URL? {
-        guard let header = response.value(forHTTPHeaderField: "Link") else { return nil }
+    private static func continuation(from response: HTTPURLResponse) -> Continuation {
+        guard let header = response.value(forHTTPHeaderField: "Link") else { return .end }
         for part in header.split(separator: ",") {
             let sections = part.split(separator: ";")
-            guard let first = sections.first else { continue }
-            let target = first.trimmingCharacters(in: .whitespaces)
-            guard target.hasPrefix("<"), target.hasSuffix(">") else { continue }
             guard sections.dropFirst().contains(where: {
                 $0.trimmingCharacters(in: .whitespaces) == "rel=\"next\""
             }) else { continue }
+            let target = (sections.first ?? "").trimmingCharacters(in: .whitespaces)
+            guard target.hasPrefix("<"), target.hasSuffix(">") else {
+                return .refused("The server offered a continuation that could not be read, so the list was not shown in full.")
+            }
             let raw = String(target.dropFirst().dropLast())
             guard let url = URL(string: raw),
                   url.scheme == "https",
@@ -458,9 +486,11 @@ public final class GitHubClient {
                   url.password == nil,
                   url.port == nil,
                   url.path.hasPrefix("/")
-            else { return nil }
-            return url
+            else {
+                return .refused("The server offered a continuation outside this API, which was not followed; the list was not shown in full.")
+            }
+            return .next(url)
         }
-        return nil
+        return .end
     }
 }

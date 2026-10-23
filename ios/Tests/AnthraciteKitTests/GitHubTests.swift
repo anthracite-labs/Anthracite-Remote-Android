@@ -242,21 +242,54 @@ extension GitHubTests {
         XCTAssertEqual(requests.count, 2)
     }
 
-    func testAForeignOrMalformedLinkIsNotFollowed() async throws {
+    func testAForeignOrMalformedContinuationIsRefusedNotReturnedAsComplete() async throws {
+        // The server says there is another page. Every one of these points
+        // somewhere this client must not send the token; the listing is therefore
+        // reported as incomplete rather than handed back as if it were whole.
         for link in [
             "<https://evil.example.com/repos/x/y/issues?page=2>; rel=\"next\"",
             "<http://api.github.com/repos/x/y/issues?page=2>; rel=\"next\"",
             "<https://api.github.com@evil.example.com/x?page=2>; rel=\"next\"",
             "<https://api.github.com:8443/x?page=2>; rel=\"next\"",
-            "not a link at all",
-            "<https://api.github.com/x?page=2>; rel=\"last\"",
+            "not a link at all; rel=\"next\"",
         ] {
             requests = []
             respondByPage([1: (issueJSON([1]), ["Link": link])])
-            let issues = try await client.listIssues(repository, limit: 100)
-            XCTAssertEqual(issues.map(\.number), [1], "followed \(link)")
+            do {
+                _ = try await client.listIssues(repository, limit: 100)
+                XCTFail("a listing was returned as complete for \(link)")
+            } catch {
+                guard case GitHubError.incompleteCollection = error else {
+                    return XCTFail("unexpected error for \(link): \(error)")
+                }
+            }
             XCTAssertEqual(requests.count, 1, "followed \(link)")
         }
+
+        // A link for another relation is not a continuation: the listing ends.
+        requests = []
+        respondByPage([1: (issueJSON([1]), ["Link": "<https://api.github.com/x?page=2>; rel=\"last\""])])
+        let issues = try await client.listIssues(repository, limit: 100)
+        XCTAssertEqual(issues.map(\.number), [1])
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testAServerThatPointsBackAtAPageIsStoppedAndReported() async throws {
+        // Every page claims the next one is page 1, which has already been read.
+        StubURLProtocol.handler = { [weak self] request in
+            self?.requests.append(request)
+            return (200, ["Link": "<https://api.github.com/repos/a/b/issues?page=1>; rel=\"next\""], Data("[{\"number\":1}]".utf8))
+        }
+        do {
+            _ = try await client.listIssues(repository, limit: 100)
+            XCTFail("a loop was returned as a complete listing")
+        } catch {
+            guard case GitHubError.incompleteCollection = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+        }
+        // The loop is recognised after the second request, not after ten.
+        XCTAssertLessThanOrEqual(requests.count, 2)
     }
 
     func testDuplicateEntriesAcrossPagesAreReturnedOnce() async throws {
