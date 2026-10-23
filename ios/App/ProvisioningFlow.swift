@@ -138,7 +138,7 @@ final class ProvisioningViewModel: ObservableObject {
 
             let launch = "cd \(directory) && ( setsid sh ./anthracite-provision-run.sh \(directory) </dev/null >/dev/null 2>&1 & ) && echo launched"
             let started = try await model.exec(launch)
-            guard started.succeeded else {
+            if !started.succeeded {
                 // Fall back once, and only once: `setsid` is not universal.
                 let nohup = "cd \(directory) && ( nohup sh ./anthracite-provision-run.sh \(directory) </dev/null >/dev/null 2>&1 & ) && echo launched"
                 let retry = try await model.exec(nohup)
