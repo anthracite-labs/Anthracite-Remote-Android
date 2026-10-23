@@ -58,10 +58,31 @@ The `.xcresult` bundle was uploaded as an artifact.
 
 ## Reproducing
 
+The dependency graph is committed, so a build does not take whatever versions are
+newest on the day it runs:
+
+* `ios/Package.resolved` pins swift-nio 2.104.0, swift-nio-ssh 0.15.0,
+  swift-crypto 4.5.2, swift-asn1 1.7.3, swift-atomics 1.3.1, swift-system 1.8.1
+  and swift-collections 1.6.0. `ci/ios-build.sh` resolves with
+  `--only-use-versions-from-resolved-file` and fails if that file would change.
+* XcodeGen 2.46.0 is fetched from its GitHub release and verified against
+  SHA-256 `4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806`.
+
 ```sh
-brew install xcodegen
-sh ci/ios-build.sh          # swift test + simulator build + UI tests
+# XcodeGen, pinned and verified (same steps as CI)
+curl -fsSL -o /tmp/xcodegen.zip \
+  https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  /tmp/xcodegen.zip" | shasum -a 256 -c -
+unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+export PATH="$(dirname "$(find /tmp/xcodegen -type f -name xcodegen | head -n 1)"):$PATH"
+
+sh ci/ios-build.sh          # resolve, swift test, simulator build, UI tests
 ```
+
+The job prints and uploads its build evidence: the Swift, Xcode and XcodeGen
+versions, the simulator it chose (name, runtime, id) and the resolved package
+graph. The same line is emitted as an annotation, so it can be read back from the
+API when a run's log is not retrievable.
 
 The app target bundles the reviewed host scripts from
 `app/src/main/assets/host`, so the Android and iOS clients cannot drift apart on

@@ -116,6 +116,9 @@ except Exception as error:
 '
 } >/tmp/ios-build-evidence.txt 2>&1
 cat /tmp/ios-build-evidence.txt
+# Annotations are retrievable from the API when a run's log is not, so the
+# toolchain is recorded there too rather than only in the summary and artifact.
+echo "::notice title=ios-toolchain::swift=$SWIFT_VERSION | xcode=$XCODE_VERSION | xcodegen=$XCODEGEN_VERSION | simulator=$SIMULATOR_NAME ($SIMULATOR_RUNTIME)"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
         echo "### iOS build evidence"
