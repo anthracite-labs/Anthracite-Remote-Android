@@ -15,7 +15,7 @@ public struct RemoteEntry: Equatable, Sendable {
     public let permissions: UInt32
 }
 
-public enum SFTPError: Error, Equatable {
+public enum SFTPError: Error, Equatable, Sendable {
     case notConnected
     case protocolViolation(String)
     case server(code: UInt32, message: String)
@@ -238,32 +238,34 @@ final class SFTPChannelCollector: ChannelInboundHandler, @unchecked Sendable {
     }
 }
 
-public actor SFTPClient {
-    public static let maxTransferBytes = 8 * 1024 * 1024
-    public static let maxEntries = 5000
-    private static let chunkSize = 32768
+/// The byte transport the client speaks over: an SSH channel in the app, an
+/// in-memory peer in the tests.
+///
+/// This is the client's only seam, and it earns its place: the states that decide
+/// whether this client hangs cannot be produced on demand by a real `sftp-server`.
+/// A server that never greets, one that greets late, one that announces a version
+/// this client does not speak, and one that hangs up mid-handshake are all
+/// reachable through this protocol, and none of them is reachable reliably over a
+/// socket.
+protocol SFTPTransport: Sendable {
+    /// The framed packets the peer sent, in order.
+    var packets: AsyncThrowingStream<Data, Error> { get }
+    func write(_ data: Data) async throws
+    func close() async
+}
 
+final class ChannelSFTPTransport: SFTPTransport, @unchecked Sendable {
     private let channel: Channel
     private let collector: SFTPChannelCollector
-    private var nextRequestId: UInt32 = 1
-    private var pending: [UInt32: CheckedContinuation<Data, Error>] = [:]
-    private var queuedFrames: [UInt32: Data] = [:]
-    private var readTask: Task<Void, Never>?
-    private var handshakeComplete = false
-
-    /// A request that never gets a reply must fail, not hang the UI forever.
-    static let requestTimeout: Duration = .seconds(30)
 
     init(channel: Channel, collector: SFTPChannelCollector) {
         self.channel = channel
         self.collector = collector
     }
 
-    deinit { readTask?.cancel() }
+    var packets: AsyncThrowingStream<Data, Error> { collector.packets }
 
-    // MARK: Transport
-
-    private func write(_ data: Data) async throws {
+    func write(_ data: Data) async throws {
         var buffer = channel.allocator.buffer(capacity: data.count)
         buffer.writeBytes(data)
         try await channel.writeAndFlush(
@@ -271,28 +273,113 @@ public actor SFTPClient {
         ).get()
     }
 
+    func close() async {
+        try? await channel.close().get()
+    }
+}
+
+public actor SFTPClient {
+    public static let maxTransferBytes = 8 * 1024 * 1024
+    public static let maxEntries = 5000
+    private static let chunkSize = 32768
+
+    /// Request id reserved for the version exchange. Real requests start at 1.
+    private static let handshakeId: UInt32 = 0
+
+    /// A request that never gets a reply must fail, not hang the UI forever.
+    static let requestTimeout: Duration = .seconds(30)
+
+    /// The version exchange is bounded for the same reason. A server that never
+    /// greets is indistinguishable from one that is merely slow, and waiting
+    /// forever hides both from the user.
+    static let handshakeTimeout: Duration = .seconds(20)
+
+    private let transport: any SFTPTransport
+    private let requestTimeout: Duration
+    private let handshakeTimeout: Duration
+    private var nextRequestId: UInt32 = 1
+    private var pending: [UInt32: CheckedContinuation<Data, Error>] = [:]
+    private var timers: [UInt32: Task<Void, Never>] = [:]
+    private var readTask: Task<Void, Never>?
+    private var state = State.idle
+
+    private enum State {
+        case idle
+        /// One handshake in progress, shared by every caller that arrives while it
+        /// runs. Without this, a second caller sent a second INIT and overwrote the
+        /// first caller's continuation, which then never resumed: the first caller
+        /// waited forever on a reply that had already been delivered to somebody
+        /// else.
+        case starting(Task<Void, Error>)
+        case open
+        /// The connection can no longer be trusted: either the handshake failed or
+        /// the stream ended. Every later call fails with this error instead of
+        /// retrying on a byte stream that is out of step with the peer.
+        case failed(SFTPError)
+    }
+
+    init(
+        transport: any SFTPTransport,
+        requestTimeout: Duration = SFTPClient.requestTimeout,
+        handshakeTimeout: Duration = SFTPClient.handshakeTimeout
+    ) {
+        self.transport = transport
+        self.requestTimeout = requestTimeout
+        self.handshakeTimeout = handshakeTimeout
+    }
+
+    deinit {
+        readTask?.cancel()
+        for timer in timers.values { timer.cancel() }
+        // A caller still waiting on this client must learn that it is gone rather
+        // than wait for a timeout that no longer has an owner.
+        for continuation in pending.values {
+            continuation.resume(throwing: SFTPError.notConnected)
+        }
+    }
+
+    // MARK: Transport
+
+    /// The version exchange, run once no matter how many callers arrive at the
+    /// same moment.
     private func start() async throws {
-        guard !handshakeComplete else { return }
-        if readTask == nil {
-            let stream = collector.packets
-            readTask = Task { [weak self] in
-                do {
-                    for try await packet in stream { await self?.dispatch(packet) }
-                } catch {
-                    await self?.failAll(error)
-                }
-                await self?.failAll(SFTPError.notConnected)
+        switch state {
+        case .open:
+            return
+        case .failed(let error):
+            throw error
+        case .starting(let task):
+            // The same task every caller waits on, so only one INIT is ever sent.
+            return try await task.value
+        case .idle:
+            let task = Task { try await self.performHandshake() }
+            state = .starting(task)
+            do {
+                try await task.value
+                // Only now, and only if the connection did not die while the
+                // handshake ran: resurrecting a dead channel here would make every
+                // later request wait out its full timeout.
+                if case .starting = state { state = .open }
+            } catch {
+                let failure = error as? SFTPError ?? .notConnected
+                state = .failed(failure)
+                failAll(failure)
+                await transport.close()
+                throw error
             }
         }
+    }
+
+    private func performHandshake() async throws {
+        startPump()
         var writer = SFTPWriter()
         writer.write(byte: SFTP.packetInit)
         writer.write(uint32: UInt32(SFTP.version))
-        let reply = try await withCheckedThrowingContinuation { continuation in
-            pending[0] = continuation
-            Task { [weak self] in
-                do { try await self?.write(writer.framed()) } catch { await self?.fail(0, error) }
-            }
-        }
+        let reply = try await roundTrip(
+            id: Self.handshakeId,
+            framed: writer.framed(),
+            timeout: handshakeTimeout
+        )
         var reader = SFTPReader(reply)
         guard (try reader.readUInt32()) & 0xff == UInt32(SFTP.packetVersion) else {
             throw SFTPError.protocolViolation("expected VERSION")
@@ -301,36 +388,106 @@ public actor SFTPClient {
         guard version == UInt32(SFTP.version) else {
             throw SFTPError.protocolViolation("the host speaks SFTP version \(version); this client needs 3")
         }
-        handshakeComplete = true
+    }
+
+    private func startPump() {
+        guard readTask == nil else { return }
+        // Read before the first write, so a reply that arrives immediately is
+        // already being collected.
+        let stream = transport.packets
+        readTask = Task { [weak self] in
+            do {
+                for try await packet in stream { await self?.dispatch(packet) }
+            } catch {
+                await self?.connectionLost(error)
+                return
+            }
+            await self?.connectionLost(SFTPError.notConnected)
+        }
+    }
+
+    /// The packet stream ended or failed: nothing can answer any more, so every
+    /// waiting caller is released now rather than at its timeout.
+    private func connectionLost(_ error: Error) {
+        let failure = error as? SFTPError ?? .notConnected
+        if case .failed = state {
+            // Already terminal: keep the first cause.
+        } else {
+            state = .failed(failure)
+        }
+        failAll(failure)
     }
 
     private func dispatch(_ packet: Data) {
         var reader = SFTPReader(packet)
         guard let first = try? reader.readUInt32() else { return }
         if UInt8(first & 0xff) == SFTP.packetVersion {
-            pending.removeValue(forKey: 0)?.resume(returning: packet)
+            take(Self.handshakeId)?.resume(returning: packet)
             return
         }
         guard let id = try? reader.readUInt32() else { return }
-        pending.removeValue(forKey: id)?.resume(returning: packet)
+        // A reply for a request that already timed out or was cancelled finds no
+        // entry and is dropped. The stream stays framed, so the reply after it
+        // still matches its own request.
+        take(id)?.resume(returning: packet)
+    }
+
+    /// Removes a request's bookkeeping and hands back its continuation, so exactly
+    /// one of "reply arrived", "timed out", "cancelled" and "connection lost" can
+    /// complete it. Every path goes through here; a continuation is never resumed
+    /// twice and never left behind.
+    private func take(_ id: UInt32) -> CheckedContinuation<Data, Error>? {
+        timers.removeValue(forKey: id)?.cancel()
+        return pending.removeValue(forKey: id)
+    }
+
+    private func expire(_ id: UInt32) {
+        take(id)?.resume(throwing: SFTPError.timedOut)
     }
 
     private func fail(_ id: UInt32, _ error: Error) {
-        pending.removeValue(forKey: id)?.resume(throwing: error)
+        take(id)?.resume(throwing: error)
+    }
+
+    private func abandon(_ id: UInt32) {
+        take(id)?.resume(throwing: CancellationError())
     }
 
     private func failAll(_ error: Error) {
-        let continuations = pending
-        pending.removeAll()
-        for continuation in continuations.values { continuation.resume(throwing: error) }
+        let waiting = pending
+        for id in waiting.keys { _ = take(id) }
+        for continuation in waiting.values { continuation.resume(throwing: error) }
+    }
+
+    /// One request/response round trip: registered, sent, and bounded.
+    ///
+    /// The entry is registered *before* the frame is written, so a reply that
+    /// arrives on the next tick cannot find its id missing. A write that fails
+    /// resumes the same entry. Cancellation resumes it too, which is what lets the
+    /// caller return instead of staying suspended until the timeout.
+    private func roundTrip(id: UInt32, framed: Data, timeout: Duration) async throws -> Data {
+        let transport = self.transport
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                pending[id] = continuation
+                timers[id] = Task { [weak self] in
+                    // A cancelled timer has no work left: the waiter was resolved
+                    // by the cancellation handler or by a reply.
+                    do { try await Task.sleep(for: timeout) } catch { return }
+                    await self?.expire(id)
+                }
+                Task { [weak self] in
+                    do { try await transport.write(framed) } catch { await self?.fail(id, error) }
+                }
+            }
+        } onCancel: {
+            Task { [weak self] in await self?.abandon(id) }
+        }
     }
 
     /// One request/response round trip. Every operation below is built from this,
     /// so request ids can never collide. The reply type is returned unexamined:
     /// EOF is a normal reply for reads, and only the caller knows that.
-    ///
-    /// The wait is bounded: a silent or wedged server fails this request with
-    /// `timedOut` and drops its pending entry, so nothing is left suspended.
     private func call(_ type: UInt8, _ build: (inout SFTPWriter) -> Void) async throws -> (UInt8, SFTPReader) {
         try await start()
         let id = nextRequestId
@@ -339,45 +496,11 @@ public actor SFTPClient {
         writer.write(byte: type)
         writer.write(uint32: id)
         build(&writer)
-        queuedFrames[id] = writer.framed()
-        let packet = try await withThrowingTaskGroup(of: Data.self) { group in
-            group.addTask { try await self.awaitReply(id) }
-            group.addTask {
-                try await Task.sleep(for: SFTPClient.requestTimeout)
-                await self.expire(id)
-                throw SFTPError.timedOut
-            }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else { throw SFTPError.notConnected }
-            return first
-        }
+        let packet = try await roundTrip(id: id, framed: writer.framed(), timeout: requestTimeout)
         var reader = SFTPReader(packet)
         let replyType = UInt8((try reader.readUInt32()) & 0xff)
         _ = try reader.readUInt32()
         return (replyType, reader)
-    }
-
-    private func awaitReply(_ id: UInt32) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            Task { [weak self] in
-                guard let self else { return }
-                do {
-                    try await self.sendPending(id)
-                } catch {
-                    await self.fail(id, error)
-                }
-            }
-        }
-    }
-
-    private func expire(_ id: UInt32) {
-        pending.removeValue(forKey: id)?.resume(throwing: SFTPError.timedOut)
-    }
-
-    private func sendPending(_ id: UInt32) async throws {
-        guard let framed = queuedFrames.removeValue(forKey: id) else { return }
-        try await write(framed)
     }
 
     /// Reads a STATUS reply. Throws unless it is `SSH_FX_OK`.
@@ -661,7 +784,11 @@ public actor SFTPClient {
     }
 
     public func close() async {
+        // Release every caller first: a request in flight would otherwise wait out
+        // its timeout on a connection that is being torn down.
+        failAll(SFTPError.notConnected)
+        state = .failed(.notConnected)
         readTask?.cancel()
-        try? await channel.close().get()
+        await transport.close()
     }
 }

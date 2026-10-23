@@ -574,7 +574,9 @@ public final class SSHConnection {
             try? await channel.close().get()
             throw SSHError.channelFailed("the host has no sftp subsystem")
         }
-        return SFTPClient(channel: channel, collector: collector)
+        return SFTPClient(
+            transport: ChannelSFTPTransport(channel: channel, collector: collector)
+        )
     }
 }
 

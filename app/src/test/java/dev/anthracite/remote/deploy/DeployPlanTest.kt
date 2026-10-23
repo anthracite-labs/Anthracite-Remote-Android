@@ -105,7 +105,10 @@ class DeployPlanTest {
         assertEquals("TOKEN=$secret\n", String(plan.envFileBytes()))
         // The file is created with a private umask and removed by path only.
         assertTrue(plan.envFileCommand().startsWith("umask 077; d=\"\$HOME/.anthracite/deploy\""))
-        assertTrue(plan.envFileCommand().contains("set -C; cat > \"\$f\""))
+        // Exclusive create, and the command that creates the file is the one that
+        // removes a half-written one: a refusal never leaves a partial secret.
+        assertTrue(plan.envFileCommand().contains("set -C; if ! cat > \"\$f\""))
+        assertTrue(plan.envFileCommand().contains("then rm -f \"\$f\""))
         assertTrue(plan.envFileRemoveCommand().startsWith("rm -f \""))
         assertFalse(plan.envFileRemoveCommand().contains(secret))
     }
