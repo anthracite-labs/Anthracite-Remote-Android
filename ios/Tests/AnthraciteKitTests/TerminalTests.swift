@@ -112,7 +112,10 @@ final class TerminalTests: XCTestCase {
     func testUnknownAndOverlongSequencesAreConsumed() {
         let terminal = screen()
         terminal.feed(Data("\u{1B}[999999999;99999999;1mX".utf8))
-        terminal.feed(Data("\u{1B}]0;".utf8 + Data(repeating: 0x41, count: 5000) + Data("\u{07}".utf8)))
+        var overlong = Data("\u{1B}]0;".utf8)
+        overlong.append(Data(repeating: 0x41, count: 5000))
+        overlong.append(Data("\u{07}".utf8))
+        terminal.feed(overlong)
         terminal.feed(Data("Y".utf8))
         XCTAssertTrue(terminal.text(row: 0).hasSuffix("Y"))
     }
