@@ -227,78 +227,67 @@ no_mutation() { # $1 home
     [ -s "$1/apt.log" ] && echo mutated || echo untouched
 }
 
-home=$(new_home blank_hash)
-job=$(make_job "$home" apt 0 "1	install	git
+# One refused-gate case: a fresh home and job, a deliberate defect, then the two
+# assertions every case must make — refused *and* nothing installed.
+case_home=""
+case_job=""
+gate_case() { # $1 tag, $2 manager (default apt)
+    case_home=$(new_home "$1")
+    case_job=$(make_job "$case_home" "${2:-apt}" 0 "1\tinstall\tgit
 ")
-sed -i 's/^plan_hash=.*/plan_hash=/' "$job/plan"
-rc=$(run_job "$home" "$job")
-check "a blank plan hash is refused" "FAILED" "$(job_status "$home" "$job")"
-check "a blank plan hash mutates nothing" "untouched" "$(no_mutation "$home")"
-check_contains "blank hash reason" "plan_hash" "$(cat "$job/result")"
+}
 
-home=$(new_home short_hash)
-job=$(make_job "$home" apt 0 "1	install	git
-")
-sed -i 's/^plan_hash=.*/plan_hash=abc/' "$job/plan"
-rc=$(run_job "$home" "$job")
-check "a malformed plan hash is refused" "FAILED" "$(job_status "$home" "$job")"
-check "a malformed plan hash mutates nothing" "untouched" "$(no_mutation "$home")"
+gate_refused() { # $1 label, $2 optional reason substring
+    run_job "$case_home" "$case_job" >/dev/null
+    check "$1 is refused" "FAILED" "$(job_status "$case_home" "$case_job")"
+    check "$1 mutates nothing" "untouched" "$(no_mutation "$case_home")"
+    if [ -n "${2:-}" ]; then
+        check_contains "$1 reason" "$2" "$(cat "$case_job/result")"
+    fi
+}
 
-home=$(new_home missing_hash)
-job=$(make_job "$home" apt 0 "1	install	git
-")
-sed -i '/^plan_hash=/d' "$job/plan"
-rc=$(run_job "$home" "$job")
-check "a missing plan hash is refused" "FAILED" "$(job_status "$home" "$job")"
-check "a missing plan hash mutates nothing" "untouched" "$(no_mutation "$home")"
+gate_case blank_hash
+sed -i 's/^plan_hash=.*/plan_hash=/' "$case_job/plan"
+gate_refused "a blank plan hash" "plan_hash"
 
-home=$(new_home symlink_steps)
-job=$(make_job "$home" apt 0 "1	install	git
-")
-cp "$job/steps" "$home/steps.real"
-rm "$job/steps"
-ln -s "$home/steps.real" "$job/steps"
-rc=$(run_job "$home" "$job")
-check "a symlinked steps file is refused" "FAILED" "$(job_status "$home" "$job")"
-check "a symlinked steps file mutates nothing" "untouched" "$(no_mutation "$home")"
+gate_case short_hash
+sed -i 's/^plan_hash=.*/plan_hash=abc/' "$case_job/plan"
+gate_refused "a malformed plan hash"
 
-home=$(new_home symlink_plan)
-job=$(make_job "$home" apt 0 "1	install	git
-")
-cp "$job/plan" "$home/plan.real"
-rm "$job/plan"
-ln -s "$home/plan.real" "$job/plan"
-rc=$(run_job "$home" "$job")
-check "a symlinked plan file is refused" "FAILED" "$(job_status "$home" "$job")"
-check "a symlinked plan file mutates nothing" "untouched" "$(no_mutation "$home")"
+gate_case missing_hash
+sed -i '/^plan_hash=/d' "$case_job/plan"
+gate_refused "a missing plan hash"
 
-home=$(new_home unterminated)
-job=$(make_job "$home" apt 0 "1	install	git
-")
-printf '2\tinstall\ttmux' >>"$job/steps"
-sed -i "s|^plan_hash=.*|plan_hash=$(sha256sum "$job/steps" | awk '{print $1}')|" "$job/plan"
-rc=$(run_job "$home" "$job")
-check "an unterminated steps file is refused" "FAILED" "$(job_status "$home" "$job")"
-check "an unterminated steps file mutates nothing" "untouched" "$(no_mutation "$home")"
+gate_case symlink_steps
+cp "$case_job/steps" "$case_home/steps.real"
+rm "$case_job/steps"
+ln -s "$case_home/steps.real" "$case_job/steps"
+gate_refused "a symlinked steps file"
 
-home=$(new_home manager_mismatch)
-job=$(make_job "$home" dnf 0 "1	install	git
-")
+gate_case symlink_plan
+cp "$case_job/plan" "$case_home/plan.real"
+rm "$case_job/plan"
+ln -s "$case_home/plan.real" "$case_job/plan"
+gate_refused "a symlinked plan file"
+
+gate_case unterminated
+printf '2\tinstall\ttmux' >>"$case_job/steps"
+sed -i "s|^plan_hash=.*|plan_hash=$(sha256sum "$case_job/steps" | cut -d' ' -f1)|" "$case_job/plan"
+gate_refused "an unterminated steps file"
+
 # A dnf plan on an apt host: the manager and the distribution disagree.
-cat >"$home/fakebin/dnf" <<'EOF'
+gate_case manager_mismatch dnf
+cat >"$case_home/fakebin/dnf" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_LOG"
 exit 0
 EOF
-cat >"$home/fakebin/rpm" <<'EOF'
+cat >"$case_home/fakebin/rpm" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
-chmod +x "$home/fakebin/dnf" "$home/fakebin/rpm"
-rc=$(run_job "$home" "$job")
-check "a manager/OS mismatch is refused" "FAILED" "$(job_status "$home" "$job")"
-check "a manager/OS mismatch mutates nothing" "untouched" "$(no_mutation "$home")"
-check_contains "manager mismatch reason" "mismatch" "$(cat "$job/result")"
+chmod +x "$case_home/fakebin/dnf" "$case_home/fakebin/rpm"
+gate_refused "a manager/OS mismatch" "mismatch"
 
 # A PATH with the tools the runner needs but deliberately without any SHA-256
 # implementation. The gate must refuse instead of executing the steps.
