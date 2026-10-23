@@ -492,7 +492,10 @@ final class SFTPClientStateTests: XCTestCase {
 
         XCTAssertEqual(String(decoding: first, as: UTF8.self), "first")
         XCTAssertEqual(String(decoding: second, as: UTF8.self), "second")
-        XCTAssertEqual(Set(fixture.peer.requestIds).count, fixture.peer.requestIds.count)
+        // One snapshot: the deferred CLOSE requests arrive after the transfers
+        // return, so two evaluations of the same property can differ.
+        let ids = fixture.peer.requestIds
+        XCTAssertEqual(Set(ids).count, ids.count, "the client reused a request id")
     }
 
     func testALateReplyAfterATimeoutDoesNotCorruptTheNextRequest() async throws {
