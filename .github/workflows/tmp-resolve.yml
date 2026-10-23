@@ -2,6 +2,9 @@ name: TEMP resolve package graph
 
 # Temporary: produces the toolchain's own Package.resolved so it can be committed.
 # Deleted once the file is in the repository. Not part of the permanent CI.
+#
+# Artifact download is not available to this session, so the file is posted as a
+# pull-request comment and read from the API instead.
 
 on:
   push:
@@ -10,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   resolve:
@@ -20,16 +24,18 @@ jobs:
         with:
           persist-credentials: false
       - name: Resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           swift --version
           cd ios
           swift package resolve
           test -s Package.resolved
-          cat Package.resolved
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: package-resolved
-          path: ios/Package.resolved
-          if-no-files-found: error
-          retention-days: 3
+          {
+            echo '<!-- package-resolved -->'
+            echo '```json'
+            cat Package.resolved
+            echo '```'
+          } > /tmp/body.md
+          gh pr comment 8 --repo "$GITHUB_REPOSITORY" --body-file /tmp/body.md

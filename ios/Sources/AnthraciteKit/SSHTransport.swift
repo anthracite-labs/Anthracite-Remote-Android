@@ -450,7 +450,15 @@ public final class SSHConnection {
         // The stream drives the channel's reads: pausing it stops NIO reading, and
         // draining it starts again. No byte is dropped while this happens.
         collector.output.onFlowControl { [channel] paused in
-            channel.setOption(ChannelOptions.autoRead, value: !paused, promise: nil)
+            // `autoRead` is an event-loop option, and this closure runs on whichever
+            // thread crossed the water mark. Apply it on the channel's own loop.
+            if channel.eventLoop.inEventLoop {
+                _ = channel.setOption(ChannelOptions.autoRead, value: !paused)
+            } else {
+                channel.eventLoop.execute {
+                    _ = channel.setOption(ChannelOptions.autoRead, value: !paused)
+                }
+            }
         }
         let modes = SSHTerminalModes([
             SSHTerminalModes.Opcode.VINTR: 0x03,
