@@ -69,23 +69,10 @@ final class TestSFTPPeer: SFTPTransport, @unchecked Sendable {
         stream?.finish()
     }
 
-    /// Delivers a packet body to the client, correctly framed.
+    /// Delivers one packet body. The transport carries bodies — splitting the
+    /// byte stream into frames is `SFTPPacketDecoder`'s job, inside the collector.
     func send(_ body: Data) {
-        var framed = Data()
-        let length = UInt32(body.count)
-        framed.append(contentsOf: [
-            UInt8((length >> 24) & 0xff),
-            UInt8((length >> 16) & 0xff),
-            UInt8((length >> 8) & 0xff),
-            UInt8(length & 0xff),
-        ])
-        framed.append(body)
-        deliver(framed)
-    }
-
-    /// Delivers bytes without framing, for a peer that cannot speak SFTP.
-    func sendRaw(_ data: Data) {
-        deliver(data)
+        deliver(body)
     }
 
     func disconnect() {
@@ -170,12 +157,11 @@ actor FakeSFTPServer {
 
     // MARK: Server
 
-    func handle(_ frame: Data) async {
-        // The client writes complete frames: a four-byte length, then the body.
-        // Parsing the length as the type made every request look unknown, so the
-        // server stayed silent and every test timed out.
-        guard frame.count > 4 else { return }
-        var reader = SFTPReader(Data(frame.dropFirst(4)))
+    /// [body] is the packet the client sent, without its length prefix: the
+    /// transport carries bodies, and `TestSFTPPeer` keeps the raw frames only to
+    /// read the request ids back.
+    func handle(_ body: Data) async {
+        var reader = SFTPReader(body)
         guard let type = try? reader.readByte() else { return }
         if type == SFTP.packetInit {
             guard !ignoreHandshake else { return }
@@ -451,12 +437,13 @@ final class SFTPClientStateTests: XCTestCase {
         }
     }
 
-    func testMalformedFrameFailsTheHandshakeAndEveryWaiter() async throws {
+    func testAFatalTransportErrorFailsEveryWaiter() async throws {
         let fixture = SFTPFixture()
         fixture.peer.handler = { peer, _ in
-            // A length that cannot be an SFTP packet: the decoder must treat it as
-            // fatal, not as "wait for more bytes".
-            peer.sendRaw(Data([0xff, 0xff, 0xff, 0xff, 0x02]))
+            // What the collector does when the decoder meets a length that cannot
+            // be an SFTP packet: the stream fails instead of waiting for bytes that
+            // will never make sense. Every waiter must learn it, not time out.
+            peer.failConnection(SFTPError.protocolViolation("invalid SFTP packet length"))
         }
 
         do {

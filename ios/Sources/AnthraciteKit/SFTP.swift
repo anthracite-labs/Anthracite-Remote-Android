@@ -248,7 +248,10 @@ final class SFTPChannelCollector: ChannelInboundHandler, @unchecked Sendable {
 /// reachable through this protocol, and none of them is reachable reliably over a
 /// socket.
 protocol SFTPTransport: Sendable {
-    /// The framed packets the peer sent, in order.
+    /// The packet **bodies** the peer sent, in order, already split out of the
+    /// byte stream: the length prefix is framing, and `SFTPPacketDecoder` removes
+    /// it before the client sees a packet. A transport that yields frames makes
+    /// every reply look like an unknown type.
     var packets: AsyncThrowingStream<Data, Error> { get }
     func write(_ data: Data) async throws
     func close() async
