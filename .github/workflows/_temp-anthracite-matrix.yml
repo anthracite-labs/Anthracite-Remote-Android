@@ -81,6 +81,10 @@ jobs:
           } | sed 's/%/%25/g' | head -n 10 \
             | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
           exit 1
+      - name: Record the digest for the evidence trail
+        if: always()
+        run: |
+          echo "::notice title=matrix-${{ matrix.os_id }}::os=${{ matrix.os_id }} digest=${{ steps.image.outputs.digest }} run=${{ github.run_id }}"
       - name: Record the evidence line
         if: success()
         run: |
