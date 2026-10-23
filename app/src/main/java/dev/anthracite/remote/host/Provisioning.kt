@@ -49,234 +49,114 @@ internal object ProvisionCatalog {
         tool(
             id = "git", label = "Git", description = "Version control client", category = CatalogTool.Category.VERSION_CONTROL,
             executable = "git",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("git"),
-                PackageManagerKind.DNF to listOf("git"),
-                PackageManagerKind.ZYPPER to listOf("git"),
-                PackageManagerKind.PACMAN to listOf("git"),
-                PackageManagerKind.APK to listOf("git"),
-            ),
+            packages = everywhere("git"),
         ),
         tool(
             id = "tmux", label = "tmux", description = "Detachable terminal sessions", category = CatalogTool.Category.TERMINAL,
             executable = "tmux",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("tmux"),
-                PackageManagerKind.DNF to listOf("tmux"),
-                PackageManagerKind.ZYPPER to listOf("tmux"),
-                PackageManagerKind.PACMAN to listOf("tmux"),
-                PackageManagerKind.APK to listOf("tmux"),
-            ),
+            packages = everywhere("tmux"),
         ),
         tool(
             id = "curl", label = "curl", description = "HTTP client", category = CatalogTool.Category.UTILITY,
             executable = "curl",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("curl"),
-                PackageManagerKind.DNF to listOf("curl"),
-                PackageManagerKind.ZYPPER to listOf("curl"),
-                PackageManagerKind.PACMAN to listOf("curl"),
-                PackageManagerKind.APK to listOf("curl"),
-            ),
+            packages = everywhere("curl"),
         ),
         tool(
             id = "unzip", label = "unzip", description = "ZIP extraction", category = CatalogTool.Category.FILES,
             executable = "unzip",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("unzip"),
-                PackageManagerKind.DNF to listOf("unzip"),
-                PackageManagerKind.ZYPPER to listOf("unzip"),
-                PackageManagerKind.PACMAN to listOf("unzip"),
-                PackageManagerKind.APK to listOf("unzip"),
-            ),
+            packages = everywhere("unzip"),
         ),
         tool(
             id = "jq", label = "jq", description = "JSON processor", category = CatalogTool.Category.UTILITY,
             executable = "jq",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("jq"),
-                PackageManagerKind.DNF to listOf("jq"),
-                PackageManagerKind.ZYPPER to listOf("jq"),
-                PackageManagerKind.PACMAN to listOf("jq"),
-                PackageManagerKind.APK to listOf("jq"),
-            ),
+            packages = everywhere("jq"),
         ),
         tool(
             id = "htop", label = "htop", description = "Interactive process viewer", category = CatalogTool.Category.TERMINAL,
             executable = "htop",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("htop"),
-                PackageManagerKind.DNF to listOf("htop"),
-                PackageManagerKind.ZYPPER to listOf("htop"),
-                PackageManagerKind.PACMAN to listOf("htop"),
-                PackageManagerKind.APK to listOf("htop"),
-            ),
+            packages = everywhere("htop"),
         ),
         tool(
             id = "vim", label = "vim", description = "Terminal editor", category = CatalogTool.Category.TERMINAL,
             executable = "vim",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("vim"),
-                PackageManagerKind.DNF to listOf("vim-enhanced"),
-                PackageManagerKind.ZYPPER to listOf("vim"),
-                PackageManagerKind.PACMAN to listOf("vim"),
-                PackageManagerKind.APK to listOf("vim"),
-            ),
+            packages = byManager(apt = "vim", dnf = "vim-enhanced", zypper = "vim", pacman = "vim", apk = "vim"),
         ),
         tool(
             id = "ripgrep", label = "ripgrep", description = "Fast recursive search", category = CatalogTool.Category.UTILITY,
             executable = "rg",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("ripgrep"),
-                PackageManagerKind.DNF to listOf("ripgrep"),
-                PackageManagerKind.ZYPPER to listOf("ripgrep"),
-                PackageManagerKind.PACMAN to listOf("ripgrep"),
-                PackageManagerKind.APK to listOf("ripgrep"),
-            ),
+            packages = everywhere("ripgrep"),
         ),
         tool(
             id = "rsync", label = "rsync", description = "Incremental file transfer", category = CatalogTool.Category.FILES,
             executable = "rsync",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("rsync"),
-                PackageManagerKind.DNF to listOf("rsync"),
-                PackageManagerKind.ZYPPER to listOf("rsync"),
-                PackageManagerKind.PACMAN to listOf("rsync"),
-                PackageManagerKind.APK to listOf("rsync"),
-            ),
+            packages = everywhere("rsync"),
         ),
         tool(
             id = "python", label = "Python 3", description = "Python runtime", category = CatalogTool.Category.RUNTIME,
             executable = "python3",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("python3"),
-                PackageManagerKind.DNF to listOf("python3"),
-                PackageManagerKind.ZYPPER to listOf("python3"),
-                // Arch ships Python 3 as `python`; there is no `python3` package.
-                PackageManagerKind.PACMAN to listOf("python"),
-                PackageManagerKind.APK to listOf("python3"),
-            ),
+            // Arch ships Python 3 as `python`; there is no `python3` package.
+            packages = byManager(apt = "python3", dnf = "python3", zypper = "python3", pacman = "python", apk = "python3"),
         ),
         tool(
             id = "node", label = "Node.js", description = "Node.js runtime", category = CatalogTool.Category.RUNTIME,
             executable = "node",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("nodejs"),
-                PackageManagerKind.DNF to listOf("nodejs"),
-                PackageManagerKind.ZYPPER to listOf("nodejs"),
-                PackageManagerKind.PACMAN to listOf("nodejs"),
-                PackageManagerKind.APK to listOf("nodejs"),
-            ),
+            packages = everywhere("nodejs"),
         ),
         tool(
             id = "make", label = "make", description = "Build automation", category = CatalogTool.Category.BUILD,
             executable = "make",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("make"),
-                PackageManagerKind.DNF to listOf("make"),
-                PackageManagerKind.ZYPPER to listOf("make"),
-                PackageManagerKind.PACMAN to listOf("make"),
-                PackageManagerKind.APK to listOf("make"),
-            ),
+            packages = everywhere("make"),
         ),
         tool(
             id = "gcc", label = "GCC", description = "C compiler", category = CatalogTool.Category.BUILD,
             executable = "gcc",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("gcc"),
-                PackageManagerKind.DNF to listOf("gcc"),
-                PackageManagerKind.ZYPPER to listOf("gcc"),
-                PackageManagerKind.PACMAN to listOf("gcc"),
-                PackageManagerKind.APK to listOf("gcc"),
-            ),
+            packages = everywhere("gcc"),
         ),
         tool(
             id = "wget", label = "wget", description = "Non-interactive downloader", category = CatalogTool.Category.NETWORKING,
             executable = "wget",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("wget"),
-                PackageManagerKind.DNF to listOf("wget"),
-                PackageManagerKind.ZYPPER to listOf("wget"),
-                PackageManagerKind.PACMAN to listOf("wget"),
-                PackageManagerKind.APK to listOf("wget"),
-            ),
+            packages = everywhere("wget"),
         ),
         tool(
             id = "less", label = "less", description = "Pager for long output", category = CatalogTool.Category.TERMINAL,
             executable = "less",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("less"),
-                PackageManagerKind.DNF to listOf("less"),
-                PackageManagerKind.ZYPPER to listOf("less"),
-                PackageManagerKind.PACMAN to listOf("less"),
-                PackageManagerKind.APK to listOf("less"),
-            ),
+            packages = everywhere("less"),
         ),
         tool(
             id = "tree", label = "tree", description = "Directory tree viewer", category = CatalogTool.Category.FILES,
             executable = "tree",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("tree"),
-                PackageManagerKind.DNF to listOf("tree"),
-                PackageManagerKind.ZYPPER to listOf("tree"),
-                PackageManagerKind.PACMAN to listOf("tree"),
-                PackageManagerKind.APK to listOf("tree"),
-            ),
+            packages = everywhere("tree"),
         ),
         tool(
             id = "pip", label = "Python pip", description = "Python package installer", category = CatalogTool.Category.RUNTIME,
             executable = "pip3",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("python3-pip"),
-                PackageManagerKind.DNF to listOf("python3-pip"),
-                PackageManagerKind.ZYPPER to listOf("python3-pip"),
-                PackageManagerKind.PACMAN to listOf("python-pip"),
-                PackageManagerKind.APK to listOf("py3-pip"),
-            ),
+            packages = byManager(apt = "python3-pip", dnf = "python3-pip", zypper = "python3-pip", pacman = "python-pip", apk = "py3-pip"),
         ),
         tool(
             id = "go", label = "Go", description = "Go toolchain", category = CatalogTool.Category.BUILD,
             executable = "go",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("golang-go"),
-                PackageManagerKind.DNF to listOf("golang"),
-                PackageManagerKind.ZYPPER to listOf("go"),
-                PackageManagerKind.PACMAN to listOf("go"),
-                PackageManagerKind.APK to listOf("go"),
-            ),
+            packages = byManager(apt = "golang-go", dnf = "golang", zypper = "go", pacman = "go", apk = "go"),
         ),
         tool(
             id = "rust", label = "Rust", description = "Rust compiler and Cargo", category = CatalogTool.Category.BUILD,
             executable = "cargo",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("rustc", "cargo"),
-                PackageManagerKind.DNF to listOf("rust", "cargo"),
-                PackageManagerKind.ZYPPER to listOf("rust", "cargo"),
-                PackageManagerKind.PACMAN to listOf("rust"),
-                PackageManagerKind.APK to listOf("rust", "cargo"),
+            packages = multiManager(
+                apt = listOf("rustc", "cargo"),
+                dnf = listOf("rust", "cargo"),
+                zypper = listOf("rust", "cargo"),
+                pacman = listOf("rust"),
+                apk = listOf("rust", "cargo"),
             ),
         ),
         tool(
             id = "sqlite", label = "SQLite", description = "SQLite command-line shell", category = CatalogTool.Category.DATABASE,
             executable = "sqlite3",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("sqlite3"),
-                PackageManagerKind.DNF to listOf("sqlite"),
-                PackageManagerKind.ZYPPER to listOf("sqlite3"),
-                PackageManagerKind.PACMAN to listOf("sqlite"),
-                PackageManagerKind.APK to listOf("sqlite"),
-            ),
+            packages = byManager(apt = "sqlite3", dnf = "sqlite", zypper = "sqlite3", pacman = "sqlite", apk = "sqlite"),
         ),
         tool(
             id = "postgres-client", label = "PostgreSQL client", description = "psql and pg_dump", category = CatalogTool.Category.DATABASE,
             executable = "psql",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("postgresql-client"),
-                PackageManagerKind.DNF to listOf("postgresql"),
-                PackageManagerKind.ZYPPER to listOf("postgresql"),
-                PackageManagerKind.PACMAN to listOf("postgresql"),
-                PackageManagerKind.APK to listOf("postgresql-client"),
-            ),
+            packages = byManager(apt = "postgresql-client", dnf = "postgresql", zypper = "postgresql", pacman = "postgresql", apk = "postgresql-client"),
         ),
     )
 
@@ -317,6 +197,48 @@ internal object ProvisionCatalog {
             description = "Git and tmux only: version control and a session that survives a dropped connection.",
             toolIds = listOf("git", "tmux"),
         ),
+    )
+
+    /**
+     * The same package name on every manager. Most tools are packaged identically
+     * everywhere, and repeating five identical lines invites a one-line edit that
+     * silently drops a distribution.
+     */
+    private fun everywhere(name: String): Map<PackageManagerKind, List<String>> =
+        PackageManagerKind.values().associateWith { listOf(name) }
+
+    /**
+     * Per-manager names, for the tools whose package is genuinely called something
+     * else on one family. Only the names given are planned; the rest are absent,
+     * which the planner reports as "no reviewed package here" rather than guessing.
+     */
+    private fun byManager(
+        apt: String? = null,
+        dnf: String? = null,
+        zypper: String? = null,
+        pacman: String? = null,
+        apk: String? = null,
+    ): Map<PackageManagerKind, List<String>> = buildMap {
+        apt?.let { put(PackageManagerKind.APT, listOf(it)) }
+        dnf?.let { put(PackageManagerKind.DNF, listOf(it)) }
+        zypper?.let { put(PackageManagerKind.ZYPPER, listOf(it)) }
+        pacman?.let { put(PackageManagerKind.PACMAN, listOf(it)) }
+        apk?.let { put(PackageManagerKind.APK, listOf(it)) }
+    }
+
+    /** The same shape as [byManager], for tools that ship more than one package. */
+    private fun multiManager(
+        apt: List<String>,
+        dnf: List<String>,
+        zypper: List<String>,
+        pacman: List<String>,
+        apk: List<String>,
+    ): Map<PackageManagerKind, List<String>> = mapOf(
+        PackageManagerKind.APT to apt,
+        PackageManagerKind.DNF to dnf,
+        PackageManagerKind.ZYPPER to zypper,
+        PackageManagerKind.PACMAN to pacman,
+        PackageManagerKind.APK to apk,
     )
 
     fun tool(id: String): CatalogTool? = tools.firstOrNull { it.id == id }
