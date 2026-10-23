@@ -109,7 +109,7 @@ final class ProvisioningViewModel: ObservableObject {
     /// phone connection does not stop the job.
     func start() async {
         guard let model, let plan, let verdict, verdict.canLaunch else { return }
-        guard acknowledge || isVerifiedHost(plan.supportTier) else {
+        guard acknowledge || isVerifiedHost(plan.tier) else {
             message = "Confirm that you accept running an unverified plan."
             return
         }

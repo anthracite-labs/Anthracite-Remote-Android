@@ -42,6 +42,12 @@ public struct CommandResult: Sendable {
     public let stderr: String
     public let exitCode: Int
 
+    public init(stdout: String, stderr: String, exitCode: Int) {
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exitCode = exitCode
+    }
+
     public var succeeded: Bool { exitCode == 0 }
 }
 

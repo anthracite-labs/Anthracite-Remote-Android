@@ -396,7 +396,7 @@ struct TerminalTabView: View {
                     keyButton("Detach") { model.detach(tab) }
                 }
                 Button {
-                    model.openTab(command: "tmux list-sessions", title: "tmux")
+                    Task { await model.openTab(command: "tmux list-sessions", title: "tmux") }
                 } label: {
                     Label("List tmux", systemImage: "list.bullet")
                 }

@@ -91,6 +91,8 @@ public final class TerminalScreen {
     public var onHyperlink: ((String) -> Void)?
     /// The bell. The UI decides whether to make a sound.
     public var onBell: (() -> Void)?
+    /// The window title the program asked for, already stripped of control bytes.
+    public var onTitle: ((String) -> Void)?
 
     private var primary: [[TerminalCell]]
     private var alternate: [[TerminalCell]]
@@ -871,6 +873,7 @@ public final class TerminalScreen {
         case 0, 2:
             let cleaned = body.filter { !$0.isNewline && $0.asciiValue.map { $0 >= 0x20 && $0 != 0x7F } ?? true }
             title = String(cleaned.prefix(120))
+            onTitle?(title)
         case 52:
             // Clipboard write. Never applied. The user copies explicitly.
             onBlockedClipboardWrite?()
