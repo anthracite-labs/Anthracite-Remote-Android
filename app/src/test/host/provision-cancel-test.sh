@@ -26,18 +26,8 @@ trap 'rm -rf "$work"; for pid in "${canaries[@]:-}"; do kill "$pid" 2>/dev/null;
 new_home() {
     local dir="$work/home-$1"
     mkdir -p "$dir/fakebin" "$dir/.anthracite/jobs"
-    cat >"$dir/fakebin/apt-get" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >>"$FAKE_LOG"
-if [ "${FAKE_SLOW:-0}" = 1 ]; then
-    sleep "${FAKE_SLOW_SECONDS:-5}"
-fi
-exit 0
-EOF
-    cat >"$dir/fakebin/dpkg-query" <<'EOF'
-#!/bin/sh
-exit 0
-EOF
+    write_fake_apt_get "$dir/fakebin"
+    write_fake_dpkg_query "$dir/fakebin"
     chmod +x "$dir/fakebin/"*
     echo "$dir"
 }
@@ -250,18 +240,6 @@ write_state "$job" RUNNING
 out=$(run_cancel "$home" "$job")
 check "vanished process reports already_finished" "already_finished" "$(field "$out" cancel_result)"
 check "vanished process was never signalled" "no" "$(field "$out" process_alive)"
-
-wait_status() { # $1 home, $2 job, $3 expected, $4 seconds
-    local home=$1 job=$2 want=$3 limit=$4 i=0 st=""
-    while [ "$i" -lt "$limit" ]; do
-        st=$(HOME="$home" "$SHELL_UNDER_TEST" "$KIT_DIR/anthracite-provision-status.sh" "$job" 2>/dev/null \
-            | sed -n 's/^status=//p' | head -n1)
-        [ "$st" = "$want" ] && break
-        sleep 1
-        i=$((i + 1))
-    done
-    echo "$st"
-}
 
 # 5. a genuinely running job ------------------------------------------------
 home=$(new_home real)

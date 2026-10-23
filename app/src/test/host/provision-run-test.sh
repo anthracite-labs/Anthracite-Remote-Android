@@ -23,33 +23,8 @@ trap 'rm -rf "$work"' EXIT
 new_home() {
     local dir="$work/home-$1"
     mkdir -p "$dir/fakebin"
-    cat >"$dir/fakebin/apt-get" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >>"$FAKE_LOG"
-if [ "${FAKE_FAIL:-0}" = 1 ]; then
-    echo "E: fake install failure" >&2
-    exit 100
-fi
-if [ "${FAKE_SLOW:-0}" = 1 ]; then
-    sleep "${FAKE_SLOW_SECONDS:-5}"
-fi
-for arg in "$@"; do
-    case "$arg" in
-        -*) : ;;
-        install|remove|add) : ;;
-        /*) : ;;
-        *) : >"$FAKE_INSTALLED/$arg" ;;
-    esac
-done
-exit 0
-EOF
-    cat >"$dir/fakebin/dpkg-query" <<'EOF'
-#!/bin/sh
-[ "$1" = "-s" ] || exit 2
-[ -f "$FAKE_INSTALLED/$2" ] || exit 1
-echo "Status: install ok installed"
-exit 0
-EOF
+    write_fake_apt_get "$dir/fakebin"
+    write_fake_dpkg_query "$dir/fakebin" strict
     cat >"$dir/fakebin/sudo" <<'EOF'
 #!/bin/sh
 if [ "${FAKE_SUDO_OK:-0}" = 1 ]; then
