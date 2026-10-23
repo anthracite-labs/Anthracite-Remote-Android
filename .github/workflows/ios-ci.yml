@@ -36,7 +36,7 @@ jobs:
           unzip -q -o /tmp/xcodegen.zip -d /tmp/xcodegen
           binary=$(find /tmp/xcodegen -type f -name xcodegen -perm -u+x | head -n 1)
           test -n "$binary"
-          echo "$(dirname "$binary")" >> "$GITHUB_PATH"
+          dirname "$binary" >> "$GITHUB_PATH"
           "$binary" --version
       - name: Build and test
         run: sh ci/ios-build.sh

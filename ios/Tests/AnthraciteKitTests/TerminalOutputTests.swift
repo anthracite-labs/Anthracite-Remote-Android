@@ -1,5 +1,6 @@
 @testable import AnthraciteKit
 import NIOCore
+import NIOEmbedded
 import NIOSSH
 import XCTest
 
@@ -191,7 +192,8 @@ final class TerminalOutputTests: XCTestCase {
         XCTAssertFalse(stream.isPaused, "the reader was left stopped after cancellation")
         XCTAssertEqual(reader.states.last, false)
         var iterator = stream.makeAsyncIterator()
-        XCTAssertNotNil(try await iterator.next())
+        let next = try await iterator.next()
+        XCTAssertNotNil(next)
     }
 
     // MARK: The channel handler actually stops reading

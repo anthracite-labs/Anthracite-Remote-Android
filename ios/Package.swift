@@ -21,6 +21,14 @@ let package = Package(
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
             ]
         ),
-        .testTarget(name: "AnthraciteKitTests", dependencies: ["AnthraciteKit"]),
+        .testTarget(
+            name: "AnthraciteKitTests",
+            dependencies: [
+                "AnthraciteKit",
+                // `EmbeddedChannel` lets the tests drive the real channel handler
+                // instead of calling it directly.
+                .product(name: "NIOEmbedded", package: "swift-nio"),
+            ]
+        ),
     ]
 )
