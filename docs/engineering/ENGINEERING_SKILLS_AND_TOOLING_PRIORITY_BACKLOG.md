@@ -1,115 +1,63 @@
-# Anthracite — ranked repository skills and engineering-tooling backlog
+# Anthracite engineering backlog — Ponytail pass
 
-Baseline inspected: main at d8a8065495ebf0ae7eee81eadc7f79eee3e2651c (PR #8 merged, 2026-10-23).
-This file is the repo-controlled plan. Items marked PROPOSED are not installed by this document-only change.
-Ranks are implementation order, not a command to import all upstream repositories.
+**Scope:** repository-local skills, CI and tests; not ChatGPT plugins or mobile runtime dependencies.  
+**Reviewed:** 2026-10-23. Source backlog: 46 proposed items in PR #9. This revision replaces the shopping list with work that actually closes observed gaps.  
+**Latest checked main:** \`2f2d6a194f962297b67a68c598f6eac186d922e9\`. PR #9 is documentation-only; **none of the proposed installations below is done by this file**.
 
-## Repo-local layout (required)
+## Rule
 
-- AGENTS.md: short mandatory engineering instructions and pointers to project skills.
-- .agents/skills/<skill-name>/SKILL.md: committed, reviewed agent skills. Add references/ and scripts/ only when needed.
-- .agents/skills/PROVENANCE.md: origin repository, exact upstream commit, license, local changes, last review for each copied third-party skill.
-- .github/workflows/: pinned, least-privilege CI jobs (PR critical checks; heavy tests in scheduled/manual jobs).
-- ci/: reproducible runners, fixtures, helper scripts.
-- app/src/test/ and ios/Tests/: deterministic behavioral regression tests.
-- docs/engineering/: security model, acceptance matrix, tool baselines, reports.
+1. **Fix the bug before installing a tool.** One reproducing regression beats a dozen scanners that cannot detect the fault.
+2. **Already covered? Don't install it.** First inspect existing CodeQL (Kotlin and Actions), Android Lint, JUnit, Swift XCTest/UI tests, ShellCheck, actionlint, zizmor, Dependabot, dependency review, Scorecard, CycloneDX, MobSF APK baseline, and the security/CI scripts.
+3. Prefer OS commands, native XCTest/JUnit, Docker on disposable runners, Swift/Gradle tooling, and existing CI before another framework.
+4. Add **one** repository-local engineering skill, not three competing generic agent frameworks. Pin and review any third-party skills before copying; none is required now.
+5. Every new tool must prove a distinct bug or coverage gap with a deterministic test or actionable finding. Pin its version, action SHA or image digest. Never introduce production credentials or new app-runtime dependencies.
 
-Agent Skills format: https://github.com/agentskills/agentskills
+## Do now — 8 items in priority order
 
-## P0 — fix correctness and verification blind spots first
+| Rank | Work | Repo path / minimal implementation | Done when |
+|---:|---|---|---|
+| **1** | Fix iOS SSH host-key scan cancellation | \`ios/Sources/AnthraciteKit/SSHTransport.swift\` + existing iOS tests. Make a silent peer's scan cancellable: key received, timeout, disconnect and caller cancellation resolve once. **No new dependency.** | A red-then-green deterministic test proves prompt cancellation; existing host-key pinning checks pass. |
+| **2** | Fix iOS terminal flow-control event ordering | \`ios/Sources/AnthraciteKit/TerminalOutput.swift\` and \`TerminalOutputTests.swift\`. Serialize pause/resume state with its NIO event-loop side effect; no extra stream library. | Forced producer/consumer interleaving cannot leave autoRead stale; byte ordering and no-loss tests pass. |
+| **3** | Set one repository engineering contract and one focused skill | Add concise \`AGENTS.md\` and **only** \`.agents/skills/anthracite-engineering/SKILL.md\`. Modes: review/audit/fix/simplify. Require fixed-base diff, file:line findings, trust boundaries, minimal red-green patch, no blind CI claims. The agent's global rules stay in AGENTS; procedure goes in SKILL; **no duplication**. | One runnable example review/fix demonstrably follows the contract. No Trail of Bits/Sentry/Matt/Superpowers mass import. |
+| **4** | Close the **Swift CodeQL gap** | Extend existing \`.github/workflows/codeql.yml\` with a macOS Swift job using the repo's pinned Xcode/Swift dependencies. Do not create a parallel security workflow if a matrix/job here suffices. Source: https://github.com/github/codeql-action | CI actually analyzes iOS Swift code and uploads SARIF. Preserve existing Java/Kotlin and Actions checks. |
+| **5** | Run a real, disposable OpenSSH/SFTP end-to-end smoke | Add \`ci/integration/ssh/\` scripts and a bounded manual/scheduled runner. Use native \`sshd\` / \`sftp-server\` + existing clients/tests; Docker only if needed for isolation. **Skip Testcontainers until shell orchestration becomes painful.** Source: https://github.com/openssh/openssh-portable | Exercise key pinning, cancellation, PTY, tmux attach/detach, SFTP transfer, refusal paths, reconnect. No real user host. |
+| **6** | Verify dangerous Kubernetes operations against an actual API server | \`ci/integration/kubernetes/\` with one disposable **kind** cluster and existing \`kubectl\` command generation. Source: https://github.com/kubernetes-sigs/kind | Test create-only, replaced UID, server-side UID-delete precondition, RBAC refusal and rollback's documented non-atomicity. Refuse strict-identity rollback if the guarantee is unavailable; do not fake an atomic result. |
+| **7** | Harden the MobSF job that **already exists** | Modify the existing Android CI MobSF step: replace \`opensecurity/mobile-security-framework-mobsf:latest\` with reviewed digest, keep report artifacts and decide explicitly which findings block release. Source: https://github.com/MobSF/Mobile-Security-Framework-MobSF | Reproducible scan and an inspectable report. No second MobSF install or mobile source scanner by default. |
+| **8** | Release acceptance on actual devices/hosts | Add \`docs/evidence/release-acceptance.md\`; record physical Android+iOS, OpenSSH, actual container daemon, Kubernetes, logout/reboot/tmux durability, accessibility/keyboard and process death. Use existing device/unit tests as prerequisites. | Every capability is dated **PASS / FAIL / NOT TESTED** with environment and run/evidence. Never call simulator tests a physical-device pass. |
 
-| Rank | Type and item | Source | Add to repo / expected acceptance | Status |
-| ---: | --- | --- | --- | --- |
-| 1 | Project-wide agent engineering contract | https://github.com/agentskills/agentskills | AGENTS.md: describe SSH trust, stdin-only secrets, exact process/resource identity, cancellation, no agent backend, red-green tests, final-head CI, and citation/evidence rules. | PROPOSED |
-| 2 | Anthracite regression fixer skill | Local custom | .agents/skills/anthracite-regression-fixer/SKILL.md: reproduce, failing test, minimal fix, rerun affected/full suites, prove cleanup. | PROPOSED |
-| 3 | Anthracite concurrency and cancellation auditor skill | Local custom | .agents/skills/anthracite-concurrency-audit/SKILL.md: Swift continuations/actors/NIO callbacks and Kotlin coroutine cancellation; test failure/close/timeout/cancel interleavings. | PROPOSED |
-| 4 | Extend CodeQL to Swift | https://github.com/github/codeql-action | .github/workflows/codeql-swift.yml: dedicated macos-15 Swift manual build, resolved dependencies, security-extended, SARIF; keep existing Java/Kotlin + Actions analysis. | GAP: existing CodeQL excludes Swift |
-| 5 | Anthracite security/threat-model skill | Local custom | .agents/skills/anthracite-security-review/SKILL.md: trust boundaries for SSH/SFTP, shell quoting, secret handling, tmux, host PID, Docker IDs, Kubernetes UID/resourceVersion; fail-closed review. | PROPOSED |
-| 6 | Live disposable OpenSSH/SFTP fixtures | https://github.com/openssh/openssh-portable | ci/integration/ssh/: ephemeral private host-key/auth fixture; test real scan cancellation, pinning, authentication, PTY, SFTP, tmux and disconnects; no user's hosts. | GAP: scripted peers only |
-| 7 | Testcontainers-backed service tests | https://github.com/testcontainers/testcontainers-java | app/src/test integration classes and ci/integration/: disposable SSH/SFTP services with JUnit and fixed images/digests; not an app runtime dependency. | PROPOSED |
-| 8 | Real disposable Kubernetes API tests (kind) | https://github.com/kubernetes-sigs/kind | ci/integration/kubernetes/: create-only, server-side delete UID precondition, replaced UID, rollback race and permission refusal. | GAP: mocked kubectl only |
-| 9 | Network fault injection (Toxiproxy) | https://github.com/Shopify/toxiproxy | ci/integration/network/: deterministic drop/delay/half-close during SSH/SFTP operations and cancellation. | PROPOSED |
-| 10 | Differential security PR review skill | https://github.com/trailofbits/skills | Review and pin upstream differential-review into .agents/skills/differential-review; require pinned merge base, precise lines and regression evidence. | PROPOSED |
-| 11 | Whole-codebase audit context skill | https://github.com/trailofbits/skills | Review and pin audit-context-building into .agents/skills/audit-context-building; map trust boundaries and failure states before auditing. | PROPOSED |
-| 12 | Bug variant analysis skill | https://github.com/trailofbits/skills | Review and pin variant-analysis into .agents/skills/variant-analysis; search sibling paths for new findings. | PROPOSED |
-| 13 | Semgrep customized safety rules | https://github.com/semgrep/semgrep | .semgrep/anthracite.yml and CI: targeted Kotlin/Swift/shell rules for identity, insecure defaults, secret leaks, unsafe shell patterns. Test and suppress false positives explicitly. | PROPOSED |
-| 14 | Kotlin correctness/complexity checks (detekt) | https://github.com/detekt/detekt | config/detekt.yml plus pinned compatible Gradle integration; baseline preexisting findings and fail on new ones. Check Kotlin/AGP compatibility first. | PROPOSED |
-| 15 | Swift correctness/quality lint (SwiftLint) | https://github.com/realm/SwiftLint | .swiftlint.yml and pinned macOS CI job; baseline existing debt, focus on correctness/high complexity, do not block on styling alone. | PROPOSED |
+### Code-safety decisions required alongside 5–8 (not tool purchases)
 
-## P1 — review, mobile security, quality gates and release evidence
+- Android SFTP no-overwrite: the existing transport cannot promise an atomic no-replace rename. Fail closed or label as explicitly best-effort; do not advertise a guarantee.
+- Recursive SFTP deletion: \`lstat\` cannot eliminate path-replacement races. Restrict unsafe behavior, or provide a proven stronger server-side operation; document what remains.
+- Kubernetes rollback: a post-write UID check detects an identity change but does not prevent a wrong-object mutation. Keep the limitation and strict-mode refusal when needed.
+- Persistent deployments: one record per host discards older creation history. Expand storage only if managing multiple simultaneous resources is a requested user workflow.
 
-| Rank | Type and item | Source | Add to repo / expected acceptance | Status |
-| ---: | --- | --- | --- | --- |
-| 16 | PR bug-finding skill | https://github.com/getsentry/skills | Review and pin find-bugs into .agents/skills/find-bugs; distinguish reproduced defects from hypotheses. | PROPOSED |
-| 17 | CI-to-green PR iteration skill | https://github.com/getsentry/skills | Review and pin iterate-pr into .agents/skills/iterate-pr; require final SHA, actual job results, no force push. | PROPOSED |
-| 18 | Security code review skill | https://github.com/getsentry/skills | Review and pin security-review into .agents/skills/security-review; enforce authorization and data handling review. | PROPOSED |
-| 19 | Secret detection (Gitleaks) | https://github.com/gitleaks/gitleaks | .gitleaks.toml and pinned PR workflow; scan committed history/changed lines without printing found secrets; complement existing regex checks. | PROPOSED |
-| 20 | Mobile security acceptance standards | https://github.com/OWASP/masvs and https://github.com/OWASP/mastg | docs/security/mobile-acceptance.md mapping Android/iOS checks to MASVS and MASTG; record evidence and untested status. | PROPOSED |
-| 21 | Cross-platform mobile E2E (Maestro) | https://github.com/mobile-dev-inc/maestro | ci/mobile-flows/: Android emulator + iOS simulator flows for onboarding, reconnect, error UI, keyboard, host key changes; physical hardware later. | PROPOSED |
-| 22 | Secret serialization review skill | https://github.com/getsentry/skills | Review and pin secret-serialization into .agents/skills/secret-serialization; inspect logs, error strings, preferences, JSON, debug output. | PROPOSED |
-| 23 | Insecure defaults / dangerous APIs skill | https://github.com/trailofbits/skills | Review and pin insecure-defaults and sharp-edges into .agents/skills/; inspect settings, permissions, fallback trust decisions. | PROPOSED |
-| 24 | Skill supply-chain scanner | https://github.com/getsentry/skills | Review and pin skill-scanner; audit SKILL.md, scripts, tool permissions and remote hooks before copying external skills. | PROPOSED |
-| 25 | Container/IaC/dependency analysis (Trivy) | https://github.com/aquasecurity/trivy | .github/workflows/trivy.yml scheduled/manual: SBOM/lockfiles, pinned disposable container images, Kubernetes YAML; avoid redundant PR blockers. | PROPOSED |
-| 26 | Improve existing MobSF APK baseline | https://github.com/MobSF/Mobile-Security-Framework-MobSF | Change existing Android CI MobSF job from latest/nonblocking to version/digest pinned, report machine-readable findings; only gate reviewed high-confidence rules. | PRESENT: improve existing job |
-| 27 | Dependency takeover/reputation audit skill | https://github.com/trailofbits/skills | Review and pin supply-chain-risk-auditor into .agents/skills/; periodic review of direct/transitive Gradle and Swift dependencies. | PROPOSED |
-| 28 | CI workflow security review skill | https://github.com/getsentry/skills | Review and pin gha-security-review; augment, do not duplicate, current actionlint + zizmor + CodeQL Actions checks. | PROPOSED |
+## Add **only after a measured failure** — 4 gates, not standing commitments
 
-## P2 — test depth, memory, refactoring and developer ergonomics
+| Order | Candidate | Trigger / simplest acceptable integration |
+|---:|---|---|
+| **9** | [Semgrep](https://github.com/semgrep/semgrep) | Add **one** targeted local rule when it reproducibly catches a bug variant missing from Swift/Kotlin CodeQL + existing lint; no giant generic ruleset. |
+| **10** | [Toxiproxy](https://github.com/Shopify/toxiproxy) | Only when the existing scripted peer/NIO tests and native socket-close tests cannot reliably reproduce a transport/network fault. |
+| **11** | [Gitleaks](https://github.com/gitleaks/gitleaks) | Only when a seeded secret fixture proves the current custom secret checks / existing GitHub security coverage misses a relevant credential pattern. |
+| **12** | [detekt](https://github.com/detekt/detekt) **or** [SwiftLint](https://github.com/realm/SwiftLint) | Only if code review finds repeated, actionable complexity defects missing from Android Lint, compiler warnings and Swift's native diagnostics. Adopt **one** first; baseline existing findings. |
 
-| Rank | Type and item | Source | Add to repo / expected acceptance | Status |
-| ---: | --- | --- | --- | --- |
-| 29 | Kotlin test coverage (Kover) | https://github.com/Kotlin/kotlinx-kover | Gradle coverage report and PR diff evidence; prioritize security/ownership branches over overall percentage. | PROPOSED |
-| 30 | JVM input fuzzing (Jazzer) | https://github.com/CodeIntelligenceTesting/jazzer | ci/fuzz/: fuzz SFTP/terminal/Git/json parsers; stand-alone harness if JUnit 5 migration is unwarranted; persist minimized crash inputs. | PROPOSED |
-| 31 | Property-based testing skill | https://github.com/trailofbits/skills | Review and pin property-based-testing; invariants for identity, shell escaping, parser rejection and state machines. | PROPOSED |
-| 32 | Android leak detection (LeakCanary) | https://github.com/square/leakcanary | app/build.gradle.kts debugImplementation ONLY; exercises Activity/terminal/SSH lifecycle leaks; never include in release artifact. | PROPOSED |
-| 33 | Refactor and simplify skill | https://github.com/getsentry/skills | Review and pin code-simplifier; require behavior-preserving regression coverage, no removal of trust checks or safety logging. | PROPOSED |
-| 34 | Anthracite architecture/refactor skill | Local custom | .agents/skills/anthracite-refactor-review/SKILL.md: deep seams, duplication, dead abstractions, Kotlin/Swift drift; proposals before rewrites. | PROPOSED |
-| 35 | Kotlin/Swift shared golden contract fixtures | Local custom | ci/contracts/: common trusted JSON fixtures for host identity, deployment identity, parser behavior, command escaping and refusal states; run both platforms. | PROPOSED |
-| 36 | Kotlin formatting (ktlint) | https://github.com/ktlint/ktlint | .editorconfig and pinned format/check command; use formatting rules distinct from detekt; no mass-change PR. | PROPOSED |
-| 37 | Swift formatting (SwiftFormat) | https://github.com/nicklockwood/SwiftFormat | .swiftformat with pinned binary; ensure compatible with SwiftLint; keep format-only changes isolated. | PROPOSED |
-| 38 | Shell formatting (shfmt) | https://github.com/mvdan/sh | ci format check for installer and provisioning scripts; verify portability under dash, bash, busybox ash. | PROPOSED |
-| 39 | Python checks (Ruff) | https://github.com/astral-sh/ruff | pyproject.toml and CI checks for ci/*.py; preserve special runner output/annotations. | PROPOSED |
+## Explicitly cut from the original 46-item plan
 
-## P3 — optional or overlapping tooling, install only if justified
+| Ponytail verdict | Items removed from automatic adoption | Reason |
+|---|---|---|
+| **delete:** | Mass-vendored Trail of Bits, Sentry, Matt, Superpowers skills; duplicate review, secret, architecture, bug-fix and skill-scanning skills | Multiple overlapping instruction sets cost maintenance and can conflict. Keep AGENTS.md + one repo skill; link to upstream knowledge when needed. |
+| **native:** | Testcontainers (initially), Maestro, custom mobile test framework, extra Python helper stack | Existing shell, JUnit, XCTest, simulator and native tools cover the first working test. Add frameworks only after a concrete limitation. |
+| **yagni:** | Trivy + OSV-Scanner simultaneously, mobsfscan on top of Semgrep/MobSF, new dependency-security scanners | Existing dependency review, Dependabot, SBOM, CodeQL and MobSF cover baseline. Require evidence of a blind spot before new scanners. |
+| **native:** | ktlint + SwiftFormat + shfmt + Ruff as a mandatory rollout | Existing Android Lint, IDE/Swift tooling, shell tests and \`python -m py_compile\` cover current baseline. Formatting-only changes do not reduce production risk. |
+| **yagni:** | Jazzer, Kover, LeakCanary, whole-repo golden fixture framework | Add only if real crash input, coverage blind spot, memory leak or demonstrated Android/iOS rule drift justifies the new apparatus. |
+| **delete:** | lychee/reviewdog/Bats/additional CI wrappers by default | Current offline link check, GitHub annotations, and executable shell suites are adequate until a specific recurring failure occurs. |
 
-| Rank | Type and item | Source | Add to repo / expected acceptance | Status |
-| ---: | --- | --- | --- | --- |
-| 40 | Scheduled live external-link checking | https://github.com/lycheeverse/lychee | .github/workflows/doc-links.yml scheduled/manual; keep current offline link validation in PR jobs. | OPTIONAL |
-| 41 | Shell test framework (Bats) | https://github.com/bats-core/bats-core | Use only if existing executable shell tests are becoming unmaintainable; no gratuitous rewrite. | OPTIONAL |
-| 42 | PR inline analyzer annotation (reviewdog) | https://github.com/reviewdog/reviewdog | Use only after analyzer ownership is clear; preserve minimum token permissions and no write tokens on untrusted PRs. | OPTIONAL |
-| 43 | Specialized mobile source rules (mobsfscan) | https://github.com/MobSF/mobsfscan | Add only if it finds meaningful Kotlin/Swift issues beyond Semgrep + Android Lint + SwiftLint + CodeQL + MobSF APK. | OPTIONAL/OVERLAPS |
-| 44 | OSV-Scanner for dependency corroboration | https://github.com/google/osv-scanner | Scheduled/manual only if Trivy + Dependabot + GitHub dependency review miss coverage; do not run three equivalent PR scans. | OPTIONAL/OVERLAPS |
-| 45 | Static-analysis false-positive triage skill | https://github.com/trailofbits/skills | Review and pin fp-check; require independent exploit or false-positive evidence before suppressing reported issues. | OPTIONAL |
-| 46 | Spec-to-code compliance skill | https://github.com/trailofbits/skills | Review and pin spec-to-code-compliance; enforce no forced cloud/agent architecture and unchanged Linux CLI semantics. | OPTIONAL |
+**Ponytail accounting:** 46 auto-install candidates → **8 ordered work items + 4 evidence-gated options**; **34 entries removed from the rollout**. The remaining candidates are not vendor/import instructions.
 
-## Existing checks: preserve, do not install a second copy
+## Delivery guardrails
 
-- CodeQL (java-kotlin and actions; Swift is missing).
-- Android Lint, Gradle unit/instrumentation tests, Android emulator security smoke.
-- ShellCheck, actionlint, zizmor, dependency review, Gradle dependency submission.
-- Dependabot and OpenSSF Scorecard.
-- CycloneDX SBOM emission and non-blocking Android MobSF APK baseline.
-- Swift Package.resolved, checksum-verified XcodeGen, iOS Swift tests and simulator UI tests.
-- Internal docs-link existence checks.
-
-## Adoption policy
-
-1. Use isolated PRs for P0, P1, P2 and P3 batches. Never vendor dozens of skills in one unreviewed commit.
-2. Copy only skills needed for this codebase under .agents/skills; record upstream exact SHA, license and modifications in PROVENANCE.md. If a license does not permit the proposed use, link the skill instead.
-3. Inspect SKILL.md and every bundled script before enabling tools, Bash, hooks, or network access. No curl-pipe-shell installer.
-4. Pin downloaded tools with version + checksum or immutable action SHA; pin Docker images with digest for security jobs.
-5. Do not put external scanner libraries into Android/iOS release dependencies. Test tools stay test-only, debug-only or CI-only.
-6. PR gate: Kotlin/Swift compile, existing tests, critical static security checks, and deterministic regression suites. Scheduled/manual: real cluster, Toxiproxy, MobSF deep scan, fuzz, live URLs and physical devices.
-7. No mandatory Anthracite daemon, cloud service, agent SDK, protocol adapter, hosted account, or production secrets.
-8. Never mark tests green without actual final-commit job evidence; document unverified OpenSSH, live API, runtime and hardware behaviors.
-9. Tracked tools are not accepted merely for a fashionable name. For each rank, add one negative test or actionable detection proving it addresses a real gap.
-10. Re-run the full permanent CI matrix after each critical change and keep the docs/support-matrix.md truth claims up to date.
-
-## Immediate fix order for open findings
-
-A. Repair cancellation of the iOS SSH host-key scanner, with a silent-peer and race regression.
-B. Verify and repair TerminalOutput pause/resume callback interleavings.
-C. Enforce explicit refusal or true server-supported no-overwrite for SFTP upload; preserve disclosure if best effort only.
-D. Define strict handling of SFTP recursive delete and Kubernetes rollback when identity-atomic operations are unavailable.
-E. Run physical device and real OpenSSH, SFTP, tmux, Docker, Podman and Kubernetes acceptance tests.
-F. Address managed deployment history, GitHub Load More and minor repository cleanup after safety work.
+- Work in small PRs. Priority #1 and #2 are bug fixes; #3 is agent instructions; #4–#7 are CI/integration changes. Do not combine them into one mass tooling PR.
+- Copy no third-party skill into \`.agents/skills/\` unless its license, exact upstream revision and bundled scripts have been reviewed and documented. Local SKILL.md is original project guidance.
+- CI uses pinning, minimal tokens, finite timeouts, disposable services and no production host or GitHub write calls.
+- Run affected red-green tests and permanent final-head CI before claiming any item done. \`docs/support-matrix.md\` records real evidence and unknowns.
+- Never replace an actual security guarantee with a warning; when the protocol cannot enforce safety, refuse strict operations.
