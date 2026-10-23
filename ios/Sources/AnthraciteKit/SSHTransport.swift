@@ -447,6 +447,11 @@ public final class SSHConnection {
         let channel = try await newChannel { child in
             child.pipeline.addHandler(collector)
         }
+        // The stream drives the channel's reads: pausing it stops NIO reading, and
+        // draining it starts again. No byte is dropped while this happens.
+        collector.output.onFlowControl { [channel] paused in
+            channel.setOption(ChannelOptions.autoRead, value: !paused, promise: nil)
+        }
         let modes = SSHTerminalModes([
             SSHTerminalModes.Opcode.VINTR: 0x03,
             SSHTerminalModes.Opcode.VERASE: 0x7F,
@@ -586,17 +591,12 @@ final class ShellCollector: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = SSHChannelData
 
     private let lock = NSLock()
-    private var continuation: AsyncThrowingStream<Data, Error>.Continuation?
     private var exitCode: Int?
     private var stderrBuffer = Data()
 
-    private(set) lazy var output: AsyncThrowingStream<Data, Error> = {
-        AsyncThrowingStream { continuation in
-            self.lock.lock()
-            self.continuation = continuation
-            self.lock.unlock()
-        }
-    }()
+    /// Terminal output with a bounded queue, so a consumer that falls behind stops
+    /// the channel's reads instead of growing memory without limit.
+    let output = TerminalOutput()
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let channelData = unwrapInboundIn(data)
@@ -606,10 +606,7 @@ final class ShellCollector: ChannelInboundHandler, @unchecked Sendable {
             lock.lock(); stderrBuffer.append(contentsOf: bytes); lock.unlock()
             return
         }
-        lock.lock()
-        let continuation = self.continuation
-        lock.unlock()
-        continuation?.yield(Data(bytes))
+        output.append(Data(bytes))
     }
 
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
@@ -620,20 +617,12 @@ final class ShellCollector: ChannelInboundHandler, @unchecked Sendable {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        lock.lock()
-        let continuation = self.continuation
-        self.continuation = nil
-        lock.unlock()
-        continuation?.finish()
+        output.finish()
         context.fireChannelInactive()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        lock.lock()
-        let continuation = self.continuation
-        self.continuation = nil
-        lock.unlock()
-        continuation?.finish(throwing: SSHError.channelFailed(String(describing: error)))
+        output.fail(SSHError.channelFailed(String(describing: error)))
         context.close(promise: nil)
     }
 }
@@ -647,7 +636,7 @@ public final class ShellSession: @unchecked Sendable {
         self.collector = collector
     }
 
-    public var output: AsyncThrowingStream<Data, Error> { collector.output }
+    public var output: TerminalOutput { collector.output }
 
     public func write(_ data: Data) async throws {
         guard !data.isEmpty, data.count <= 1 << 20 else { return }
