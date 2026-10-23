@@ -115,7 +115,8 @@ class DeployPlanTest {
         // Cleanup removes the file, then the directory only while it is empty, and
         // is idempotent. It is never a recursive delete.
         assertTrue(plan.envFileRemoveCommand().contains("; rmdir "))
-        assertTrue(plan.envFileRemoveCommand().endsWith("; [ ! -e "))
+        assertTrue(plan.envFileRemoveCommand().contains("; [ ! -e "))
+        assertTrue(plan.envFileRemoveCommand().endsWith("\" ]"))
         assertFalse(plan.envFileRemoveCommand().contains("rm -rf"))
         assertFalse(plan.envFileRemoveCommand().contains(secret))
     }
