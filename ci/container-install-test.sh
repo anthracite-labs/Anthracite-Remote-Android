@@ -147,15 +147,14 @@ wait_for_status() { # $1 job dir, $2 expected, $3 attempts
 step "real install, verification and job isolation"
 rm -rf "$WORK"
 mkdir -p "$WORK"
-JOB="$WORK/install-0123456789abcdef"
-# The job directory name must be the job id; create it accordingly.
-JOB="$WORK/jobs/0123456789abcdef"
-mkdir -p "$WORK/jobs"
-steps_install=$(printf '1\tinstall\t%s\n' "$PKG")
+# Jobs live where the app puts them: $HOME/.anthracite/jobs/<16 hex>.
+INSTALL_HOME="$WORK/env-install"
+mkdir -p "$INSTALL_HOME/.anthracite/jobs"
+JOB="$INSTALL_HOME/.anthracite/jobs/0123456789abcdef"
+steps_install=$(printf '1\tinstall\t%s' "$PKG")
 write_plan "$JOB" "$PLAN_MANAGER" "$steps_install"
 set +e
-HOME="$WORK/env-install" mkdir -p "$WORK/env-install"
-HOME="$WORK/env-install" sh "$RUNNER" "$JOB" >"$WORK/install.run.log" 2>&1
+HOME="$INSTALL_HOME" sh "$RUNNER" "$JOB" >"$WORK/install.run.log" 2>&1
 install_rc=$?
 set -e
 install_status=$(job_status "$JOB")
@@ -167,10 +166,10 @@ step "install verified: $PKG"
 
 # A package that cannot exist must fail, never succeed silently.
 step "failure handling"
-BAD_JOB="$WORK/jobs/fedcba9876543210"
-write_plan "$BAD_JOB" "$PLAN_MANAGER" "$(printf '1\tinstall\t%s\n' 'anthracite-nonexistent-package-9999')"
+BAD_JOB="$INSTALL_HOME/.anthracite/jobs/fedcba9876543210"
+write_plan "$BAD_JOB" "$PLAN_MANAGER" "$(printf '1\tinstall\t%s' 'anthracite-nonexistent-package-9999')"
 set +e
-HOME="$WORK/env-install" sh "$RUNNER" "$BAD_JOB" >"$WORK/fail.run.log" 2>&1
+HOME="$INSTALL_HOME" sh "$RUNNER" "$BAD_JOB" >"$WORK/fail.run.log" 2>&1
 fail_rc=$?
 set -e
 fail_status=$(job_status "$BAD_JOB")
@@ -191,24 +190,30 @@ cat >"$FAKE/$MANAGER" <<'FAKE_MANAGER'
 sleep 6
 exit 0
 FAKE_MANAGER
-cat >"$FAKE/$VERIFY_BIN" <<'FAKE_VERIFY'
+chmod +x "$FAKE/$MANAGER"
+# pacman and apk are both the installer and the verifier, so a second shim with
+# the same name would replace the slow one and make the cancellation racy.
+if [ "$VERIFY_BIN" != "$MANAGER" ]; then
+    cat >"$FAKE/$VERIFY_BIN" <<'FAKE_VERIFY'
 #!/bin/sh
 exit 0
 FAKE_VERIFY
-chmod +x "$FAKE/$MANAGER" "$FAKE/$VERIFY_BIN"
-CANCEL_JOB="$WORK/jobs/0011223344556677"
-write_plan "$CANCEL_JOB" "$PLAN_MANAGER" "$(printf '1\tinstall\t%s\n' "$PKG")"
+    chmod +x "$FAKE/$VERIFY_BIN"
+fi
+CANCEL_HOME="$WORK/env-cancel"
+mkdir -p "$CANCEL_HOME/.anthracite/jobs"
+CANCEL_JOB="$CANCEL_HOME/.anthracite/jobs/0011223344556677"
+write_plan "$CANCEL_JOB" "$PLAN_MANAGER" "$(printf '1\tinstall\t%s' "$PKG")"
 (
-    export HOME="$WORK/env-cancel"
-    mkdir -p "$HOME"
+    export HOME="$CANCEL_HOME"
     export PATH="$FAKE:$PATH"
     sh "$RUNNER" "$CANCEL_JOB" >"$WORK/cancel.run.log" 2>&1
 ) &
 runner_pid=$!
 wait_for_status "$CANCEL_JOB" RUNNING 20 || fail "the job never reached RUNNING"
-cancel_first=$(HOME="$WORK/env-cancel" sh "$CANCEL" "$CANCEL_JOB" 2>&1 || true)
+cancel_first=$(HOME="$CANCEL_HOME" sh "$CANCEL" "$CANCEL_JOB" 2>&1 || true)
 printf '%s\n' "$cancel_first" | grep -q '^cancel_result=signal_sent$' ||
-    fail "a verified runner was not signalled: $cancel_first"
+    fail "a verified runner was not signalled: $(printf '%s' "$cancel_first" | tr '\n' ' ')"
 printf '%s\n' "$cancel_first" | grep -q '^verification=pid+ticks+uid+cmdline$' ||
     fail "the cancel result did not report a proven identity"
 wait_for_status "$CANCEL_JOB" CANCELLED 30 || fail "the cancelled job did not reach CANCELLED"
@@ -220,14 +225,14 @@ step "cancellation verified"
 # An unproven identity must never be signalled: point the pid file at a live
 # process that is not the runner and confirm the refusal.
 step "unproven identity is refused"
-REUSE_JOB="$WORK/jobs/aaaabbbbccccdddd"
-write_plan "$REUSE_JOB" "$PLAN_MANAGER" "$(printf '1\tinstall\t%s\n' "$PKG")"
+REUSE_JOB="$CANCEL_HOME/.anthracite/jobs/aaaabbbbccccdddd"
+write_plan "$REUSE_JOB" "$PLAN_MANAGER" "$(printf '1\tinstall\t%s' "$PKG")"
 sleep 300 >/dev/null 2>&1 &
 canary=$!
 printf '%s\n' "$canary" >"$REUSE_JOB/pid"
 printf '1\n' >"$REUSE_JOB/start_ticks"
 printf 'status=RUNNING\n' >"$REUSE_JOB/state"
-refused=$(HOME="$WORK/env-cancel" sh "$CANCEL" "$REUSE_JOB" 2>&1 || true)
+refused=$(HOME="$CANCEL_HOME" sh "$CANCEL" "$REUSE_JOB" 2>&1 || true)
 kill "$canary" 2>/dev/null || true
 printf '%s\n' "$refused" | grep -q '^cancel_result=refused_unknown_identity$' ||
     fail "an unproven identity was not refused: $refused"
