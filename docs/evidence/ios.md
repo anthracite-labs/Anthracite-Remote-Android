@@ -1,7 +1,10 @@
 # iOS client — evidence
 
-**Build and test run:** [39886906949](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39886906949)
-**Commit:** `c3548b4456f617edc7f0bc12bd0e75532876d129`
+**Build and test run:** [40016798715](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/40016798715)
+**Commit:** `a6e940f`
+**Toolchain, read back from the run's annotation:** Swift 6.1.2, Xcode 16.4
+(16F6), XcodeGen 2.46.0, simulator iPhone 17 Pro (iOS 26.2), and the committed
+`Package.resolved` resolved unchanged.
 **Runner:** GitHub-hosted `macos-15`, `permissions: contents: read`, pinned action
 SHAs, `persist-credentials: false`, 40-minute timeout.
 **Workflow:** `_temp ios` (temporary; deleted before merge; `ios-ci.yml` is the

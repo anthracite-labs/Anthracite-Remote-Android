@@ -93,8 +93,10 @@ image a claim came from, on which date, from which run.
 ## iOS
 
 A native Swift/SwiftUI client lives in `ios/`: a `AnthraciteKit` Swift package plus
-an app target. It is built and tested on a macOS runner
-([run 39886906949](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39886906949)),
+an app target. It is built and tested on a macOS runner against a committed
+`Package.resolved` and a checksum-verified XcodeGen
+([run 40016798715](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/40016798715):
+Swift 6.1.2, Xcode 16.4, XcodeGen 2.46.0, iPhone 17 Pro on iOS 26.2),
 including a simulator launch test.
 
 | Behaviour | Status |
