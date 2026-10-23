@@ -21,6 +21,7 @@ class DeployPlanTest {
     }
 
     private val name = "anthracite-1a2b3c4d"
+    private val kubernetesUid = "0f8f8d5e-1c2b-4a3c-9d7e-2b6f5a4c3d21"
 
     private fun container(
         image: String = "nginx:1.27",
@@ -189,7 +190,11 @@ class DeployPlanTest {
         assertTrue(plan.createCommand().startsWith("kubectl --context prod-cluster --namespace demo"))
         assertEquals(listOf(plan.createCommand(), plan.rolloutCommand()), plan.commands())
         assertTrue(plan.createCommand().endsWith("create -f -"))
-        assertTrue(plan.deleteCommand().endsWith("delete deployment/anthracite-1a2b3c4d --ignore-not-found --wait=false"))
+        assertTrue(
+            plan.conditionalDeleteCommand(kubernetesUid).endsWith(
+                "delete --raw=/apis/apps/v1/namespaces/demo/deployments/anthracite-1a2b3c4d -f -",
+            ),
+        )
         assertTrue(plan.rollbackCommand().contains("rollout undo deployment/anthracite-1a2b3c4d"))
         assertTrue(plan.rolloutCommand().contains("rollout status deployment/anthracite-1a2b3c4d"))
         assertEquals("kubectl config current-context", plan.contextCommand())
@@ -197,6 +202,26 @@ class DeployPlanTest {
         assertTrue(plan.permissionCommand("delete").endsWith("auth can-i delete deployment"))
         assertTrue(plan.permissionCommand("create").endsWith("auth can-i create deployment"))
         assertTrue(rejected { plan.permissionCommand("exec") })
+    }
+
+    @Test
+    fun `a conditional delete refuses an injected identity`() {
+        val plan = workload()
+        for (bad in listOf("", "not-a-uid", "0f8f8d5e-1c2b-4a3c-9d7e-2b6f5a4c3d2", "0f8f8d5e; rm -rf /")) {
+            assertTrue("uid '$bad' should have been refused", rejected { plan.conditionalDeleteCommand(bad) })
+        }
+        // The UID is the only variable part, and it is carried in the document the
+        // cluster reads, never spliced into a shell word.
+        assertTrue(plan.conditionalDeleteCommand(kubernetesUid).contains(""""preconditions":{"uid":"$kubernetesUid"}"""))
+    }
+
+    @Test
+    fun `a statefulset delete uses its own API path`() {
+        val plan = workload(kind = WorkloadKind.STATEFULSET)
+        assertTrue(
+            plan.conditionalDeleteCommand(kubernetesUid)
+                .contains("/apis/apps/v1/namespaces/demo/statefulsets/anthracite-1a2b3c4d"),
+        )
     }
 
     @Test

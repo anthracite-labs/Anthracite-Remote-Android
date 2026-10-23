@@ -415,7 +415,8 @@ internal sealed class DeployPlan {
             "Creation is create-only: if anything already has this name the cluster refuses, and " +
                 "nothing that already exists is adopted or modified. The object carries " +
                 "${DeployPlans.MANAGED_LABEL}=1 and its cluster UID is recorded when it is created; " +
-                "rollback and delete re-read that UID on the host immediately before acting.",
+                "rollback re-reads that UID on the host immediately before acting, and delete sends " +
+                "it as a precondition the cluster itself checks inside the delete request.",
             "No Secret, Namespace or cluster-scoped resource is created here, and no other resource " +
                 "is ever touched.",
         )
@@ -496,9 +497,14 @@ internal sealed class DeployPlan {
          * The preflight runs over separate connections, so an object could in
          * principle be replaced between the check and the action. Doing the last
          * check and the mutation inside one shell invocation removes the round
-         * trip (and the phone) from that window. The residual risk is the
-         * milliseconds between two commands the host runs itself, which is stated
-         * in the plan's warnings rather than hidden.
+         * trip (and the phone) from that window.
+         *
+         * What this buys differs per mutation. A delete is additionally
+         * conditional inside the API server (`conditionalDeleteCommand`), so its
+         * remaining window is closed. `kubectl rollout undo` has no equivalent
+         * precondition, so for a rollback the milliseconds between the two commands
+         * the host runs itself stay open — narrowed, not closed, and the plan's
+         * warnings say so rather than hiding it.
          */
         fun guardedMutationCommand(mutation: String, uid: String): String {
             require(DeployPlans.isKubernetesUid(uid)) { "invalid Kubernetes UID" }
@@ -516,8 +522,34 @@ internal sealed class DeployPlan {
             }
         }
 
-        fun deleteCommand(): String =
-            kubectl("delete ${kind.resource}/${PosixShell.quote(name)} --ignore-not-found --wait=false")
+        /** The API path of this object, for a request that is not name-mapped. */
+        fun resourcePath(): String = "/apis/apps/v1/namespaces/$namespace/${kind.apiPlural}/$name"
+
+        /**
+         * A delete the cluster itself makes conditional on the identity that was
+         * reviewed.
+         *
+         * `kubectl delete NAME` is unconditional, and two commands that run in the
+         * same shell still leave the milliseconds between them open: the UID that
+         * was compared a moment earlier can belong to an object that has since been
+         * replaced by one with the same name, and the delete would remove the
+         * replacement. The API server can decide this *inside* the delete: a DELETE
+         * that carries `preconditions.uid` is refused when the object is not the one
+         * that was reviewed. `kubectl delete --raw` sends exactly that request, with
+         * the document on stdin, so no shell parsing is involved and a replaced
+         * object is never deleted.
+         *
+         * The UID comparison the guard runs first therefore explains a refusal to
+         * the user; this request is what enforces it.
+         */
+        fun conditionalDeleteCommand(uid: String): String {
+            require(DeployPlans.isKubernetesUid(uid)) { "invalid Kubernetes UID" }
+            val options = """{"apiVersion":"v1","kind":"DeleteOptions",""" +
+                """"preconditions":{"uid":"$uid"},"propagationPolicy":"Background"}"""
+            return "printf %s ${PosixShell.quote(options)} | " +
+                "kubectl --context ${PosixShell.quote(context)} " +
+                "delete --raw=${PosixShell.quote(resourcePath())} -f -"
+        }
     }
 }
 
@@ -632,7 +664,12 @@ internal object DeployPlanReview {
 }
 
 /** Workload kinds with a rollout status this screen can report honestly. */
-internal enum class WorkloadKind(val apiValue: String, val resource: String) {
-    DEPLOYMENT("Deployment", "deployment"),
-    STATEFULSET("StatefulSet", "statefulset"),
+internal enum class WorkloadKind(
+    val apiValue: String,
+    val resource: String,
+    /** The plural segment of the API path, used by a raw request. */
+    val apiPlural: String,
+) {
+    DEPLOYMENT("Deployment", "deployment", "deployments"),
+    STATEFULSET("StatefulSet", "statefulset", "statefulsets"),
 }

@@ -490,15 +490,17 @@ internal class DeployCreator(private val shell: RemoteShell) {
     }
 
     fun workloadRollback(plan: DeployPlan.Workload): ExecResult =
-        guardedMutation(plan, "patch", plan.rollbackCommand(), 120_000)
+        guardedMutation(plan, "patch", { _ -> plan.rollbackCommand() }, 120_000)
 
     fun workloadDelete(plan: DeployPlan.Workload): ExecResult =
-        guardedMutation(plan, "delete", plan.deleteCommand(), 60_000)
+        // The mutation is built from the reviewed UID, and the cluster checks that
+        // UID inside the delete itself: there is no unconditional delete here.
+        guardedMutation(plan, "delete", { uid -> plan.conditionalDeleteCommand(uid) }, 60_000)
 
     private fun guardedMutation(
         plan: DeployPlan.Workload,
         verb: String,
-        command: String,
+        command: (String) -> String,
         timeoutMs: Long,
     ): ExecResult {
         // Nothing to verify against means nothing to do: do not even connect.
@@ -514,7 +516,7 @@ internal class DeployCreator(private val shell: RemoteShell) {
         // The last identity check and the mutation travel as one host command, so
         // no round trip can slip between them.
         val uid = plan.appliedUid ?: return ExecResult(64, "", preflight.detail)
-        return shell.exec(plan.guardedMutationCommand(command, uid), null, timeoutMs)
+        return shell.exec(plan.guardedMutationCommand(command(uid), uid), null, timeoutMs)
     }
 
     private fun readIdentity(plan: DeployPlan.Workload): WorkloadIdentity? {

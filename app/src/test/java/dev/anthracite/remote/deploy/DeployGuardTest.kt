@@ -166,12 +166,12 @@ class DeployGuardTest {
         val result = DeployCreator(shell).workloadDelete(plan())
 
         assertEquals(0, result.exitCode)
-        val deletes = shell.commands.filter { it.contains("delete deployment/") }
+        val deletes = shell.commands.filter { it.contains("delete --raw=") }
         assertEquals(1, deletes.size)
         assertTrue(
             deletes.single().endsWith(
-                "kubectl --context prod-cluster --namespace demo " +
-                    "delete deployment/anthracite-1a2b3c4d --ignore-not-found --wait=false",
+                "kubectl --context prod-cluster " +
+                    "delete --raw=/apis/apps/v1/namespaces/demo/deployments/anthracite-1a2b3c4d -f -",
             ),
         )
         // Context, authority and identity are read, in that order, before the delete.
@@ -179,7 +179,7 @@ class DeployGuardTest {
         assertTrue(shell.commands[0].endsWith("config current-context"))
         assertTrue(shell.commands[1].contains("auth can-i delete deployment"))
         assertTrue(shell.commands[2].contains("get deployment/anthracite-1a2b3c4d"))
-        assertTrue(shell.commands[3].contains("delete deployment/"))
+        assertTrue(shell.commands[3].contains("delete --raw="))
     }
 
     // ------------------------------------------------------------------- creation
@@ -237,13 +237,31 @@ class DeployGuardTest {
         val result = DeployCreator(shell).workloadDelete(plan())
 
         assertEquals(0, result.exitCode)
-        val mutation = shell.commands.last { it.contains("delete deployment/") }
+        val mutation = shell.commands.last { it.contains("delete --raw=") }
         // One shell invocation: read the uid, compare, then act.
         assertTrue(mutation.startsWith("set -eu; uid=\$(kubectl --context ${PosixShell.quote("prod-cluster")} --namespace ${PosixShell.quote("demo")} get deployment/"))
         assertTrue(mutation.contains("exit ${DeployPlans.EXIT_IDENTITY_UNAVAILABLE}"))
         assertTrue(mutation.contains("if [ \"\$uid\" != ${PosixShell.quote(uid)} ]"))
         assertTrue(mutation.contains("exit ${DeployPlans.EXIT_IDENTITY_CHANGED}"))
-        assertTrue(mutation.trimEnd().endsWith("delete deployment/anthracite-1a2b3c4d --ignore-not-found --wait=false"))
+        // And the delete itself carries the UID as a server-enforced precondition,
+        // so the window between the two commands cannot delete a replacement.
+        assertTrue(
+            mutation.contains(
+                "--raw=/apis/apps/v1/namespaces/demo/deployments/anthracite-1a2b3c4d",
+            ),
+        )
+        assertTrue(mutation.contains(""""preconditions":{"uid":"$uid"}"""))
+        assertTrue(mutation.trimEnd().endsWith("-f -"))
+    }
+
+    @Test
+    fun `there is no unconditional delete left to fall back on`() {
+        val shell = healthy()
+        DeployCreator(shell).workloadDelete(plan())
+
+        assertFalse(shell.commands.any { it.contains("--ignore-not-found") })
+        assertFalse(shell.commands.any { it.contains("delete deployment/") })
+        assertEquals(1, shell.commands.count { it.contains("delete --raw=") })
     }
 
     // ---------------------------------------------------------------------- apply
