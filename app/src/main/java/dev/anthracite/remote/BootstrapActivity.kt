@@ -6,18 +6,19 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
 import dev.anthracite.remote.host.BootstrapRequest
+import dev.anthracite.remote.host.CancelOutcome
 import dev.anthracite.remote.host.HostFacts
 import dev.anthracite.remote.host.HostProfile
 import dev.anthracite.remote.host.HostProbe
 import dev.anthracite.remote.host.JobState
 import dev.anthracite.remote.host.JobStatus
 import dev.anthracite.remote.host.LogRedactor
+import dev.anthracite.remote.host.ManualInstallers
 import dev.anthracite.remote.host.PlanAction
 import dev.anthracite.remote.host.PlanDecision
 import dev.anthracite.remote.host.ProvisionCatalog
@@ -33,6 +34,7 @@ import dev.anthracite.remote.ui.confirm
 import dev.anthracite.remote.workspace.Workspace
 import dev.anthracite.remote.workspace.connectWorkspace
 import dev.anthracite.remote.workspace.io
+import dev.anthracite.remote.workspace.resolveHostOrFinish
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -81,14 +83,13 @@ class BootstrapActivity : AppCompatActivity() {
         }
         buildActions()
 
-        val store = Workspace.store(this)
         val hostId = intent.getStringExtra(HostsActivity.EXTRA_HOST_ID)
-        host = (runCatching { hostId?.let(store::find) }.getOrNull() ?: Workspace.profile)
-            ?: run {
-                Toast.makeText(this, R.string.workspace_no_host, Toast.LENGTH_LONG).show()
-                finish()
-                return
-            }
+        host = resolveHostOrFinish(
+            this,
+            hostId,
+            runCatching { Workspace.store(this).list() }.getOrDefault(emptyList()),
+            Workspace.profile,
+        ) ?: return
         jobId = savedInstanceState?.getString(KEY_JOB)
         subtitle.text = getString(R.string.bootstrap_subtitle, host.displayLabel)
         ensureConnected()
@@ -143,6 +144,39 @@ class BootstrapActivity : AppCompatActivity() {
         addActionButton(this, actions, getString(R.string.bootstrap_open_terminal), getString(R.string.bootstrap_open_terminal)) {
             startActivity(Intent(this, TerminalActivity::class.java))
         }
+        addActionButton(this, actions, getString(R.string.bootstrap_manual_tools), getString(R.string.bootstrap_manual_tools)) {
+            showManualInstallers()
+        }
+    }
+
+    /**
+     * Coding-agent CLIs are installed by the user from the vendor's own
+     * instructions. Anthracite never runs an unverified remote installer, and it
+     * never inspects what the CLI does once it is running.
+     */
+    private fun showManualInstallers() {
+        val entries = ManualInstallers.entries
+        AlertDialog.Builder(this)
+            .setTitle(R.string.bootstrap_manual_tools)
+            .setItems(entries.map { it.label }.toTypedArray()) { _, which ->
+                val entry = entries.getOrNull(which) ?: return@setItems
+                AlertDialog.Builder(this)
+                    .setTitle(entry.label)
+                    .setMessage(
+                        buildString {
+                            append(entry.description).append("\n\n")
+                            append(entry.instructions).append("\n\n")
+                            append(getString(R.string.bootstrap_manual_because, entry.manualBecause))
+                        },
+                    )
+                    .setPositiveButton(R.string.close, null)
+                    .setNeutralButton(R.string.bootstrap_open_terminal) { _, _ ->
+                        startActivity(Intent(this, TerminalActivity::class.java))
+                    }
+                    .show()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun loadFacts(force: Boolean) {
@@ -459,17 +493,24 @@ class BootstrapActivity : AppCompatActivity() {
                 val result = runCatching {
                     io {
                         ProvisionClient(Workspace.ssh)
-                            .cancel(id, Workspace.script(this@BootstrapActivity, ProvisionJobs.STATUS_FILE))
+                            .cancel(id, Workspace.script(this@BootstrapActivity, ProvisionJobs.CANCEL_FILE))
                     }
                 }
-                result.onSuccess { cancelled ->
-                    showStatus(
-                        if (cancelled) {
-                            getString(R.string.bootstrap_cancel_sent)
-                        } else {
+                result.onSuccess { outcome ->
+                    val message = when (outcome.outcome) {
+                        CancelOutcome.SIGNAL_SENT -> getString(R.string.bootstrap_cancel_sent)
+                        CancelOutcome.STILL_RUNNING -> getString(R.string.bootstrap_cancel_still_running)
+                        CancelOutcome.CONFIRMED_STOPPED -> getString(R.string.bootstrap_cancel_stopped)
+                        CancelOutcome.ALREADY_FINISHED -> getString(R.string.bootstrap_cancel_finished)
+                        CancelOutcome.REFUSED_UNKNOWN_IDENTITY ->
+                            getString(R.string.bootstrap_cancel_identity_unproven)
+                        CancelOutcome.REFUSED_INVALID_JOB, CancelOutcome.REFUSED_NOT_OWNER ->
+                            getString(R.string.bootstrap_cancel_refused)
+                        CancelOutcome.SIGNAL_FAILED, CancelOutcome.UNKNOWN ->
                             getString(R.string.bootstrap_cancel_unconfirmed)
-                        },
-                    )
+                    }
+                    val reason = outcome.reason?.let { " (" + LogRedactor.redact(it) + ")" }.orEmpty()
+                    showStatus(message + reason)
                 }.onFailure { showStatus(it.message ?: getString(R.string.bootstrap_cancel_unconfirmed)) }
             }
         }

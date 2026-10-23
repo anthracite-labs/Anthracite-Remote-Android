@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Catch test-source references to symbols that are not imported.
 
+This is **not** a dead-code detector. It was called `unused-check.py`, which
+promised reachability analysis it never did: it only proves that a name a test
+uses is imported. `ci/static_checks.py` and the compiler cover the rest, and no
+deletion should ever be justified by this script.
+
+
 A missing `import org.junit.Assert.assertEquals` or a bare `CredentialCrypto`
 reference compiles to a single "Unresolved reference", which costs a whole CI
 round trip per symbol. This reports every such reference in one pass.

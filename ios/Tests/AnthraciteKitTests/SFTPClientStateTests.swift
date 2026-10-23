@@ -1,0 +1,813 @@
+@testable import AnthraciteKit
+import XCTest
+
+/// The error an operation ended with, or nil if it succeeded: a value, so two
+/// callers can be compared without a lock or a shared dictionary.
+private func failureOf(_ operation: () async throws -> Data) async -> Error? {
+    do {
+        _ = try await operation()
+        return nil
+    } catch {
+        return error
+    }
+}
+
+/// The client side of a scripted SFTP conversation.
+///
+/// Every byte the client writes is recorded here, and every byte it receives is
+/// chosen by the test: silence, delay, duplicates, a wrong version and a hang-up
+/// are all reachable, which they are not over a real socket. Nothing in this file
+/// touches the network.
+final class TestSFTPPeer: SFTPTransport, @unchecked Sendable {
+    let packets: AsyncThrowingStream<Data, Error>
+
+    private let lock = NSLock()
+    private var stream: AsyncThrowingStream<Data, Error>.Continuation?
+    private var frames: [Data] = []
+    private var closes = 0
+
+    /// Called with each framed packet the client writes. Set once, before use.
+    var handler: (@Sendable (TestSFTPPeer, Data) -> Void)?
+
+    init() {
+        var captured: AsyncThrowingStream<Data, Error>.Continuation? = nil
+        packets = AsyncThrowingStream { captured = $0 }
+        stream = captured
+    }
+
+    /// The framed packets the client sent, in order.
+    var received: [Data] {
+        lock.lock()
+        defer { lock.unlock() }
+        return frames
+    }
+
+    /// How many version exchanges the client started.
+    var handshakeCount: Int {
+        received.filter { $0.count > 4 && $0[$0.startIndex + 4] == SFTP.packetInit }.count
+    }
+
+    /// Every request id the client used, in order, excluding the handshake.
+    var requestIds: [UInt32] {
+        received.compactMap { frame in
+            guard frame.count >= 9, frame[frame.startIndex + 4] != SFTP.packetInit else { return nil }
+            var reader = SFTPReader(frame.subdata(in: 5..<9))
+            return try? reader.readUInt32()
+        }
+    }
+
+    var closeCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return closes
+    }
+
+    func write(_ data: Data) async throws {
+        lock.lock()
+        frames.append(data)
+        lock.unlock()
+        // The client writes complete frames; the server side works on bodies. The
+        // four-byte length is framing, and handing it over made every request look
+        // like an unknown packet type.
+        guard data.count > 4 else { return }
+        handler?(self, Data(data.dropFirst(4)))
+    }
+
+    func close() async {
+        lock.lock()
+        closes += 1
+        let stream = self.stream
+        self.stream = nil
+        lock.unlock()
+        // The channel is gone: the client's packet stream ends, exactly as it does
+        // when `channelInactive` fires.
+        stream?.finish()
+    }
+
+    /// Delivers one packet body. The transport carries bodies — splitting the
+    /// byte stream into frames is `SFTPPacketDecoder`'s job, inside the collector.
+    func send(_ body: Data) {
+        deliver(body)
+    }
+
+    func disconnect() {
+        lock.lock()
+        let stream = self.stream
+        self.stream = nil
+        lock.unlock()
+        stream?.finish()
+    }
+
+    func failConnection(_ error: Error) {
+        lock.lock()
+        let stream = self.stream
+        self.stream = nil
+        lock.unlock()
+        stream?.finish(throwing: error)
+    }
+
+    private func deliver(_ data: Data) {
+        lock.lock()
+        let stream = self.stream
+        lock.unlock()
+        stream?.yield(data)
+    }
+}
+
+/// A minimal SFTP version 3 server with fault injection.
+///
+/// It serves what the client's transfers need — open, read, write, close, rename,
+/// remove, stat — and it can be told to stay silent, answer late, announce the
+/// wrong version or hang up.
+actor FakeSFTPServer {
+    let peer: TestSFTPPeer
+
+    // Fault injection. Set before the operation under test through `configure`.
+    private var ignoreHandshake = false
+    private var ignoreRequests = false
+    private var versionReply: UInt32 = 3
+    private var delayMilliseconds: UInt64 = 0
+    private var failWrites = false
+    private var hangUpAfterHandshake = false
+
+    private var files: [String: Data] = [:]
+    private var handles: [String: String] = [:]
+    private var nextHandle = 1
+
+    /// How many packets reached the server. A transport that stops delivering
+    /// leaves this at zero, which is a different defect from a client that hangs.
+    private var handled = 0
+
+    init(peer: TestSFTPPeer) {
+        self.peer = peer
+    }
+
+    // MARK: Test surface
+
+    /// The faults a real server cannot be asked to produce on demand.
+    func configure(
+        handshake: Bool? = nil,
+        requests: Bool? = nil,
+        version: UInt32? = nil,
+        delayMilliseconds delay: UInt64? = nil,
+        writes: Bool? = nil,
+        hangUpAfterHandshake: Bool? = nil
+    ) {
+        if let hangUpAfterHandshake { self.hangUpAfterHandshake = hangUpAfterHandshake }
+        if let handshake { ignoreHandshake = handshake }
+        if let requests { ignoreRequests = requests }
+        if let version { versionReply = version }
+        if let delay { delayMilliseconds = delay }
+        if let writes { failWrites = writes }
+    }
+
+    func seed(_ path: String, _ text: String) {
+        files[path] = Data(text.utf8)
+    }
+
+    func contents(_ path: String) -> String? {
+        files[path].map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    var paths: [String] {
+        files.keys.sorted()
+    }
+
+    func forget(_ path: String) {
+        files[path] = nil
+    }
+
+    // MARK: Server
+
+    var handledCount: Int { handled }
+
+    /// [body] is the packet the client sent, without its length prefix: the
+    /// transport carries bodies, and `TestSFTPPeer` keeps the raw frames only to
+    /// read the request ids back.
+    func handle(_ body: Data) async {
+        handled += 1
+        var reader = SFTPReader(body)
+        guard let type = try? reader.readByte() else { return }
+        if type == SFTP.packetInit {
+            guard !ignoreHandshake else { return }
+            var writer = SFTPWriter()
+            writer.write(byte: SFTP.packetVersion)
+            writer.write(uint32: versionReply)
+            await deliver(writer.data)
+            if hangUpAfterHandshake {
+                // The critical transition: a valid greeting and then the end of the
+                // byte stream, with no chance for the client to run in between.
+                peer.disconnect()
+            }
+            return
+        }
+        guard let id = try? reader.readUInt32() else { return }
+        guard !ignoreRequests else { return }
+        switch type {
+        case SFTP.packetOpen: await open(id: id, reader: reader)
+        case SFTP.packetRead: await read(id: id, reader: reader)
+        case SFTP.packetWrite: await write(id: id, reader: reader)
+        case SFTP.packetClose: await respond(status(id: id))
+        case SFTP.packetRename: await rename(id: id, reader: reader)
+        case SFTP.packetRemove: await remove(id: id, reader: reader)
+        case SFTP.packetStat, SFTP.packetLstat: await stat(id: id, reader: reader)
+        default: await respond(status(id: id, code: 8, message: "unsupported"))
+        }
+    }
+
+    private func open(id: UInt32, reader: SFTPReader) async {
+        var reader = reader
+        guard let path = try? reader.readString(), let flags = try? reader.readUInt32() else {
+            await respond(status(id: id, code: 8, message: "bad OPEN"))
+            return
+        }
+        // Exclusive create is the point of the upload path: a second OPEN of the
+        // same temporary name must fail rather than truncate it.
+        let exclusive = flags & SFTP.flagExcl != 0
+        if exclusive, files[path] != nil {
+            await respond(status(id: id, code: 4, message: "already exists"))
+            return
+        }
+        if flags & (SFTP.flagCreat | SFTP.flagTrunc) != 0 || files[path] == nil {
+            files[path] = Data()
+        }
+        let handle = "h\(nextHandle)"
+        nextHandle += 1
+        handles[handle] = path
+        var writer = SFTPWriter()
+        writer.write(byte: SFTP.replyHandle)
+        writer.write(uint32: id)
+        writer.write(string: handle)
+        await respond(writer.data)
+    }
+
+    private func read(id: UInt32, reader: SFTPReader) async {
+        var reader = reader
+        guard let handle = try? reader.readString(),
+              let offset = try? reader.readUInt64(),
+              let length = try? reader.readUInt32(),
+              let path = handles[handle], let data = files[path]
+        else {
+            await respond(status(id: id, code: 4, message: "no such handle"))
+            return
+        }
+        if Int(offset) >= data.count {
+            await respond(status(id: id, code: SFTP.statusEOF))
+            return
+        }
+        let start = Int(offset)
+        let end = min(start + Int(length), data.count)
+        var writer = SFTPWriter()
+        writer.write(byte: SFTP.replyData)
+        writer.write(uint32: id)
+        writer.write(bytes: data.subdata(in: start..<end))
+        await respond(writer.data)
+    }
+
+    private func write(id: UInt32, reader: SFTPReader) async {
+        var reader = reader
+        guard let handle = try? reader.readString(),
+              let offset = try? reader.readUInt64(),
+              let payload = try? reader.readBytes(),
+              let path = handles[handle]
+        else {
+            await respond(status(id: id, code: 8, message: "bad WRITE"))
+            return
+        }
+        if failWrites {
+            await respond(status(id: id, code: 4, message: "no space left"))
+            return
+        }
+        var data = files[path] ?? Data()
+        let start = Int(offset)
+        if start > data.count { data.append(Data(count: start - data.count)) }
+        if start >= data.count {
+            data.append(payload)
+        } else {
+            data.replaceSubrange(start..<min(start + payload.count, data.count), with: payload)
+        }
+        files[path] = data
+        await respond(status(id: id))
+    }
+
+    private func rename(id: UInt32, reader: SFTPReader) async {
+        var reader = reader
+        guard let from = try? reader.readString(), let to = try? reader.readString() else {
+            await respond(status(id: id, code: 8, message: "bad RENAME"))
+            return
+        }
+        if let data = files[from] {
+            files[to] = data
+            files[from] = nil
+            await respond(status(id: id))
+        } else {
+            await respond(status(id: id, code: 2, message: "no such file"))
+        }
+    }
+
+    private func remove(id: UInt32, reader: SFTPReader) async {
+        var reader = reader
+        guard let path = try? reader.readString() else {
+            await respond(status(id: id, code: 8, message: "bad REMOVE"))
+            return
+        }
+        files[path] = nil
+        await respond(status(id: id))
+    }
+
+    private func stat(id: UInt32, reader: SFTPReader) async {
+        var reader = reader
+        guard let path = try? reader.readString(), let data = files[path] else {
+            await respond(status(id: id, code: 2, message: "no such file"))
+            return
+        }
+        var writer = SFTPWriter()
+        writer.write(byte: SFTP.replyAttrs)
+        writer.write(uint32: id)
+        writer.write(uint32: SFTP.attributeSize | SFTP.attributePermissions | SFTP.attributeTimes)
+        writer.write(uint64: UInt64(data.count))
+        writer.write(uint32: 1000)
+        writer.write(uint32: 1000)
+        writer.write(uint32: 1_700_000_000)
+        await respond(writer.data)
+    }
+
+    private func status(id: UInt32, code: UInt32 = SFTP.statusOK, message: String = "") -> Data {
+        var writer = SFTPWriter()
+        writer.write(byte: SFTP.replyStatus)
+        writer.write(uint32: id)
+        writer.write(uint32: code)
+        writer.write(string: message)
+        return writer.data
+    }
+
+    private func respond(_ body: Data) async {
+        if delayMilliseconds > 0 {
+            try? await Task.sleep(for: .milliseconds(Int64(delayMilliseconds)))
+        }
+        peer.send(body)
+    }
+
+    private func deliver(_ body: Data) async {
+        if delayMilliseconds > 0 {
+            try? await Task.sleep(for: .milliseconds(Int64(delayMilliseconds)))
+        }
+        peer.send(body)
+    }
+}
+
+/// One client wired to one scripted server.
+final class SFTPFixture {
+    let peer: TestSFTPPeer
+    let server: FakeSFTPServer
+    let client: SFTPClient
+
+    init(requestTimeout: Duration = .seconds(2), handshakeTimeout: Duration = .seconds(2)) {
+        let peer = TestSFTPPeer()
+        let server = FakeSFTPServer(peer: peer)
+        peer.handler = { [weak server] _, frame in
+            // The server is an actor: the request is answered in its own context.
+            _ = Task { await server?.handle(frame) }
+        }
+        self.peer = peer
+        self.server = server
+        self.client = SFTPClient(
+            transport: peer,
+            requestTimeout: requestTimeout,
+            handshakeTimeout: handshakeTimeout
+        )
+    }
+}
+
+/// The states that decide whether this client hangs.
+///
+/// `SFTPClient` was written around a read loop plus a dictionary of continuations,
+/// and none of its interesting behaviour was reachable in a test: a real
+/// `sftp-server` will not stay silent, answer late, greet with the wrong version
+/// or hang up mid-handshake on request. Each test below drives the real client
+/// through a scripted peer and asserts that it **finishes** — every wait the client
+/// makes is bounded, so a test that hangs is a defect, not a slow machine.
+final class SFTPClientStateTests: XCTestCase {
+    // MARK: Handshake
+
+    func testConcurrentFirstCallersShareOneHandshake() async throws {
+        let fixture = SFTPFixture()
+        await fixture.server.seed("/a.txt", "alpha")
+        await fixture.server.seed("/b.txt", "beta")
+
+        async let first = fixture.client.readFile("/a.txt")
+        async let second = fixture.client.readFile("/b.txt")
+        let (a, b) = try await (first, second)
+
+        XCTAssertEqual(String(decoding: a, as: UTF8.self), "alpha")
+        XCTAssertEqual(String(decoding: b, as: UTF8.self), "beta")
+        XCTAssertEqual(fixture.peer.handshakeCount, 1, "a second caller sent a second INIT")
+        let handled = await fixture.server.handledCount
+        XCTAssertGreaterThanOrEqual(handled, 3, "INIT, OPEN and READ should have reached the server")
+    }
+
+    // MARK: Cancelling the handshake itself
+
+    func testCancellingThePendingHandshakeReturnsAtOnce() async throws {
+        // A server that never answers INIT, with a handshake timeout long enough
+        // that only cancellation can end the wait.
+        let fixture = SFTPFixture(requestTimeout: .seconds(30), handshakeTimeout: .seconds(30))
+        await fixture.server.configure(handshake: true)
+        await fixture.server.seed("/a.txt", "alpha")
+
+        let task = Task { try await fixture.client.readFile("/a.txt") }
+        try await Task.sleep(for: .milliseconds(150))
+        let started = Date()
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("a cancelled handshake must not succeed")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "unexpected error \(error)")
+        }
+        XCTAssertLessThan(
+            Date().timeIntervalSince(started),
+            5,
+            "cancellation waited for the handshake timeout instead of returning"
+        )
+
+        // One INIT, not two: cancelling a waiter must not start a new handshake.
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+        // Nothing was closed behind the other callers' backs.
+        XCTAssertEqual(fixture.peer.closeCount, 0)
+    }
+
+    func testALaterCallAfterACancelledHandshakeHasADefinedOutcome() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(2), handshakeTimeout: .seconds(2))
+        await fixture.server.configure(handshake: true)
+        await fixture.server.seed("/a.txt", "alpha")
+
+        let cancelled = Task { try await fixture.client.readFile("/a.txt") }
+        try await Task.sleep(for: .milliseconds(100))
+        cancelled.cancel()
+        _ = try? await cancelled.value
+
+        // The connection is still mid-handshake and still silent, so the next
+        // caller waits on that same handshake and gets its timeout — never a
+        // second INIT and never an answer from a stream that never greeted.
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a silent server must not answer")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+        XCTAssertEqual(fixture.peer.handshakeCount, 1, "the client started a second handshake")
+
+        // And it is terminal now: the same failure, with no further traffic.
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a failed handshake must not be retried")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+    }
+
+    func testCancellingOneCallerDoesNotFailTheOtherSharingTheHandshake() async throws {
+        // The version reply is delayed so both callers are attached to the same
+        // handshake when one of them is cancelled.
+        let fixture = SFTPFixture(requestTimeout: .seconds(5), handshakeTimeout: .seconds(5))
+        await fixture.server.configure(delayMilliseconds: 300)
+        await fixture.server.seed("/a.txt", "alpha")
+        await fixture.server.seed("/b.txt", "beta")
+
+        async let survivor = fixture.client.readFile("/b.txt")
+        let victim = Task { try await fixture.client.readFile("/a.txt") }
+        try await Task.sleep(for: .milliseconds(80))
+        victim.cancel()
+        do {
+            _ = try await victim.value
+            XCTFail("the cancelled caller must not succeed")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "unexpected error \(error)")
+        }
+
+        // The other caller's result must be its own: one caller giving up is not
+        // the connection failing.
+        let data = try await survivor
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "beta")
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+        XCTAssertEqual(fixture.peer.closeCount, 0, "one caller's cancellation closed the channel")
+    }
+
+    func testASilentServerTimesOutTheHandshakeInsteadOfHanging() async throws {
+        let fixture = SFTPFixture(requestTimeout: .milliseconds(200), handshakeTimeout: .milliseconds(200))
+        await fixture.server.configure(handshake: true)
+        let started = Date()
+
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a silent server must not succeed")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+
+        // Fail-closed: the handshake is not retried on a stream that is out of
+        // step with the peer.
+        do {
+            _ = try await fixture.client.readFile("/b.txt")
+            XCTFail("a failed handshake must not be retried")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+        XCTAssertEqual(fixture.peer.handshakeCount, 1, "the client retried the handshake")
+    }
+
+    func testAWrongVersionFailsClosed() async throws {
+        let fixture = SFTPFixture()
+        await fixture.server.configure(version: 4)
+
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("version 4 is not this client's version")
+        } catch let error as SFTPError {
+            guard case .protocolViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+
+        // The channel is closed and every later call fails the same way, without
+        // writing another INIT onto it.
+        do {
+            _ = try await fixture.client.readFile("/b.txt")
+            XCTFail("a corrupt handshake must fail closed")
+        } catch let error as SFTPError {
+            guard case .protocolViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+        XCTAssertEqual(fixture.peer.closeCount, 1)
+    }
+
+    func testDisconnectDuringTheHandshakeFailsTheCaller() async throws {
+        let fixture = SFTPFixture()
+        fixture.peer.handler = { peer, _ in peer.disconnect() }
+
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a closed channel must not succeed")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .notConnected)
+        }
+    }
+
+    func testAFatalTransportErrorFailsEveryWaiter() async throws {
+        let fixture = SFTPFixture()
+        fixture.peer.handler = { peer, _ in
+            // What the collector does when the decoder meets a length that cannot
+            // be an SFTP packet: the stream fails instead of waiting for bytes that
+            // will never make sense. Every waiter must learn it, not time out.
+            peer.failConnection(SFTPError.protocolViolation("invalid SFTP packet length"))
+        }
+
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("an impossible frame must fail")
+        } catch let error as SFTPError {
+            guard case .protocolViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+    }
+
+    // MARK: Success and failure at the same instant
+
+    /// A connection that ends in the same instant its handshake succeeds must
+    /// never be reported to any caller as usable.
+    ///
+    /// The greeting is delivered and the byte stream ends without a pause, so the
+    /// client's read loop calls `connectionLost` while the handshake task is
+    /// finishing. Which of the two reaches the actor first is the scheduler's
+    /// business — the outcome may not depend on it: every caller must learn the
+    /// terminal cause (`notConnected`), not "success" followed by a request that
+    /// waits out its timeout.
+    func testACallerNeverSeesSuccessWhenTheConnectionJustFailed() async throws {
+        for attempt in 0..<40 {
+            let fixture = SFTPFixture(requestTimeout: .milliseconds(300), handshakeTimeout: .seconds(2))
+            await fixture.server.configure(hangUpAfterHandshake: true)
+            await fixture.server.seed("/a.txt", "alpha")
+
+            let started = Date()
+            do {
+                _ = try await fixture.client.readFile("/a.txt")
+                XCTFail("attempt \(attempt): a dead connection answered a read")
+            } catch {
+                XCTAssertEqual(
+                    error as? SFTPError,
+                    .notConnected,
+                    "attempt \(attempt): the terminal cause must reach the caller, not a timeout"
+                )
+            }
+            XCTAssertLessThan(
+                Date().timeIntervalSince(started),
+                3,
+                "attempt \(attempt): the caller waited for its own deadline instead of learning the connection died"
+            )
+            // Exactly one greeting, and nothing was resurrected after the failure.
+            XCTAssertEqual(fixture.peer.handshakeCount, 1, "attempt \(attempt)")
+            do {
+                _ = try await fixture.client.readFile("/a.txt")
+                XCTFail("attempt \(attempt): a failed connection was revived")
+            } catch {
+                XCTAssertEqual(error as? SFTPError, .notConnected, "attempt \(attempt)")
+            }
+            XCTAssertEqual(fixture.peer.handshakeCount, 1, "attempt \(attempt)")
+        }
+    }
+
+    func testASecondCallerAlsoLearnsTheTerminalCause() async throws {
+        let fixture = SFTPFixture(requestTimeout: .milliseconds(300), handshakeTimeout: .seconds(2))
+        await fixture.server.configure(hangUpAfterHandshake: true)
+        await fixture.server.seed("/a.txt", "alpha")
+        await fixture.server.seed("/b.txt", "beta")
+
+        async let first = failureOf { try await fixture.client.readFile("/a.txt") }
+        async let second = failureOf { try await fixture.client.readFile("/b.txt") }
+        let outcomes = await [first, second]
+        for outcome in outcomes {
+            guard let outcome else {
+                XCTFail("a dead connection answered a read")
+                continue
+            }
+            XCTAssertEqual(outcome as? SFTPError, .notConnected, "unexpected error \(outcome)")
+        }
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+    }
+
+    func testALateGreetingCannotResurrectAFailedConnection() async throws {
+        // The handshake times out with no server at all, then the greeting arrives:
+        // the connection is already terminal and must stay that way.
+        let fixture = SFTPFixture(requestTimeout: .milliseconds(300), handshakeTimeout: .milliseconds(300))
+        await fixture.server.configure(handshake: true)
+        await fixture.server.seed("/a.txt", "alpha")
+
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a silent server must not answer")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+
+        // A greeting delivered after the deadline finds no waiter and must not
+        // reopen anything.
+        var writer = SFTPWriter()
+        writer.write(byte: SFTP.packetVersion)
+        writer.write(uint32: 3)
+        fixture.peer.send(writer.data)
+        try await Task.sleep(for: .milliseconds(50))
+
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a late greeting revived a failed connection")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+    }
+
+    // MARK: Replies
+
+    func testADelayedReplyStillMatchesItsRequest() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(3), handshakeTimeout: .seconds(3))
+        await fixture.server.seed("/slow.txt", "slow but correct")
+        await fixture.server.configure(delayMilliseconds: 150)
+
+        let data = try await fixture.client.readFile("/slow.txt")
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "slow but correct")
+    }
+
+    func testOutOfOrderRepliesAreMatchedById() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(3))
+        await fixture.server.seed("/one.txt", "first")
+        await fixture.server.seed("/two.txt", "second")
+        await fixture.server.configure(delayMilliseconds: 40)
+
+        async let one = fixture.client.readFile("/one.txt")
+        async let two = fixture.client.readFile("/two.txt")
+        let (first, second) = try await (one, two)
+
+        XCTAssertEqual(String(decoding: first, as: UTF8.self), "first")
+        XCTAssertEqual(String(decoding: second, as: UTF8.self), "second")
+        // One snapshot: the deferred CLOSE requests arrive after the transfers
+        // return, so two evaluations of the same property can differ.
+        let ids = fixture.peer.requestIds
+        XCTAssertEqual(Set(ids).count, ids.count, "the client reused a request id")
+    }
+
+    func testALateReplyAfterATimeoutDoesNotCorruptTheNextRequest() async throws {
+        let fixture = SFTPFixture(requestTimeout: .milliseconds(150), handshakeTimeout: .seconds(2))
+        await fixture.server.seed("/a.txt", "alpha")
+        await fixture.server.configure(requests: true)
+
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a silent server must time out")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+        let stale = fixture.peer.requestIds.last
+        await fixture.server.configure(requests: false)
+
+        // The reply for the abandoned request arrives now, with its old id.
+        if let stale {
+            var writer = SFTPWriter()
+            writer.write(byte: SFTP.replyStatus)
+            writer.write(uint32: stale)
+            writer.write(uint32: SFTP.statusOK)
+            fixture.peer.send(writer.data)
+        }
+
+        let data = try await fixture.client.readFile("/a.txt")
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "alpha")
+    }
+
+    func testCancellingARequestReturnsAtOnceAndTheClientStaysUsable() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(30), handshakeTimeout: .seconds(2))
+        await fixture.server.seed("/a.txt", "alpha")
+        await fixture.server.configure(requests: true)
+
+        let task = Task { try await fixture.client.readFile("/a.txt") }
+        try await Task.sleep(for: .milliseconds(100))
+        let started = Date()
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("a cancelled request must not succeed")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "unexpected error \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "cancellation waited for the timeout")
+
+        await fixture.server.configure(requests: false)
+        let data = try await fixture.client.readFile("/a.txt")
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "alpha")
+    }
+
+    func testCloseReleasesEveryWaitingCaller() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(30), handshakeTimeout: .seconds(2))
+        await fixture.server.seed("/a.txt", "alpha")
+        await fixture.server.configure(requests: true)
+
+        let task = Task { try await fixture.client.readFile("/a.txt") }
+        try await Task.sleep(for: .milliseconds(100))
+        let started = Date()
+        await fixture.client.close()
+
+        do {
+            _ = try await task.value
+            XCTFail("a closed client must not answer")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .notConnected)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
+
+    // MARK: Transfers
+
+    func testUploadThenDownloadRoundTrips() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(2))
+        let payload = Data("a whole file\n".utf8)
+
+        try await fixture.client.writeFile("/upload.txt", data: payload)
+        let readBack = try await fixture.client.readFile("/upload.txt")
+
+        XCTAssertEqual(readBack, payload)
+        // The temporary name was renamed into place, not left behind.
+        let paths = await fixture.server.paths
+        XCTAssertEqual(paths, ["/upload.txt"])
+    }
+
+    func testAFailedUploadRemovesItsTemporaryFile() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(2))
+        await fixture.server.configure(writes: true)
+
+        do {
+            try await fixture.client.writeFile("/broken.txt", data: Data("payload".utf8))
+            XCTFail("a refused write must not report success")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .server(code: 4, message: "no space left"))
+        }
+        let paths = await fixture.server.paths
+        XCTAssertEqual(paths, [], "the temporary file was left behind")
+    }
+
+    func testAnUploadOverAnExistingFileReplacesItOnlyAfterSuccess() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(2))
+        await fixture.server.seed("/existing.txt", "old contents")
+
+        try await fixture.client.writeFile("/existing.txt", data: Data("new".utf8))
+
+        let contents = await fixture.server.contents("/existing.txt")
+        let paths = await fixture.server.paths
+        XCTAssertEqual(contents, "new")
+        XCTAssertEqual(paths, ["/existing.txt"])
+    }
+}

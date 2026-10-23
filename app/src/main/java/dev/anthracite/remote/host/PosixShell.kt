@@ -62,6 +62,14 @@ internal object PosixShell {
     /** Docker/Podman container, image or pod identifier. */
     fun isContainerId(value: String): Boolean = CONTAINER_ID.matches(value)
 
+    /**
+     * Container image reference: `registry/owner/name:tag` or `...@sha256:...`.
+     * Deliberately narrower than "anything Docker accepts", because the value is
+     * interpolated into a host command.
+     */
+    fun isImageReference(value: String): Boolean =
+        value.length <= 255 && !value.contains("..") && IMAGE_REFERENCE.matches(value)
+
     /** Kubernetes DNS-1123 name used for namespaces and resources. */
     fun isKubernetesName(value: String): Boolean = KUBERNETES_NAME.matches(value)
 
@@ -81,6 +89,8 @@ internal object PosixShell {
     private val EXECUTABLE = Regex("[A-Za-z0-9_./+-]{1,200}")
     private val HASH = Regex("[0-9a-fA-F]{4,64}")
     private val CONTAINER_ID = Regex("[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+    private val IMAGE_REFERENCE =
+        Regex("[A-Za-z0-9][A-Za-z0-9._/-]{0,200}(:[A-Za-z0-9._-]{1,64})?(@sha256:[a-f0-9]{64})?")
     private val KUBERNETES_NAME = Regex("[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
     private val PACKAGE_NAME = Regex("[a-z0-9][a-z0-9+._-]{0,127}")
     private val FORBIDDEN_REF_CHARS = listOf(' ', '~', '^', ':', '?', '*', '[', '\\')

@@ -19,6 +19,7 @@ class ProvisionPlannerTest {
         diskKb: Long = 5_000_000,
         container: Boolean = false,
         workingDirectory: String = "/home/ada",
+        machineId: String = "",
     ) = HostFacts(
         capturedAtMillis = 10,
         complete = true,
@@ -51,7 +52,7 @@ class ProvisionPlannerTest {
         tools = tools,
         kubeContexts = emptyList(),
         kubeCurrentContext = null,
-        raw = emptyMap(),
+        raw = if (machineId.isBlank()) emptyMap() else mapOf("machine_id" to machineId),
     )
 
     private fun request(vararg ids: String, acknowledge: Boolean = false) =
@@ -85,6 +86,28 @@ class ProvisionPlannerTest {
                     tool.packagesFor(manager).isNotEmpty(),
                 )
             }
+        }
+    }
+
+    @Test
+    fun `every preset references only catalogued tools`() {
+        for (profile in ProvisionCatalog.profiles) {
+            assertTrue("${profile.id} has no tools", profile.toolIds.isNotEmpty())
+            assertEquals(profile.toolIds.distinct(), profile.toolIds)
+            for (id in profile.toolIds) {
+                assertNotNull("${profile.id} references unknown tool $id", ProvisionCatalog.tool(id))
+            }
+        }
+    }
+
+    @Test
+    fun `coding-agent CLIs are instructions, never native plans`() {
+        assertTrue(ManualInstallers.entries.isNotEmpty())
+        for (entry in ManualInstallers.entries) {
+            assertTrue(entry.instructions.isNotBlank())
+            assertTrue(entry.manualBecause.isNotBlank())
+            // Nothing in the manual list may also be a silently executable catalog entry.
+            assertEquals(null, ProvisionCatalog.tool(entry.id))
         }
     }
 
@@ -138,15 +161,145 @@ class ProvisionPlannerTest {
         assertEquals(PlanDecision.ALLOWED, ProvisionPlanner.decide(acknowledged, host).decision)
     }
 
+    private fun evidence(
+        capabilities: Set<ProvisionCapability>,
+        osId: String = "debian",
+        version: String = "12",
+        arch: String = "x86_64",
+    ) = DistributionEvidence(
+        osId = osId,
+        osVersion = version,
+        arch = arch,
+        image = "$osId:$version",
+        imageDigest = "sha256:" + "a".repeat(64),
+        testedAt = "2026-10-23",
+        runUrl = "https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/1",
+        capabilities = capabilities,
+    )
+
     @Test
-    fun `a container never claims a verified host tier`() {
+    fun `shipped evidence lists only capabilities the matrix actually exercised`() {
+        assertTrue(ProvisioningSupport.evidence.isNotEmpty())
+        for (record in ProvisioningSupport.evidence) {
+            assertTrue("${record.image} has no install evidence", record.installTested)
+            assertTrue(record.imageDigest.startsWith("${record.image.substringBefore(':')}@sha256:"))
+            assertEquals(64, record.imageDigest.substringAfter("sha256:").length)
+            assertTrue(record.runUrl.contains("/actions/runs/"))
+            assertTrue(record.testedAt.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")))
+            // SSH, session and reboot behaviour were not part of that run.
+            assertFalse(ProvisionCapability.SSH_PTY in record.capabilities)
+            assertFalse(ProvisionCapability.SESSION_DURABILITY in record.capabilities)
+            assertFalse(ProvisionCapability.REBOOT_DURABILITY in record.capabilities)
+        }
+        assertTrue(ProvisioningSupport.hostEvidence.isEmpty())
+    }
+
+    @Test
+    fun `a tested image still cannot certify a real host of that name`() {
+        val realHost = facts()
+        val plan = ProvisionPlanner.plan(realHost, request("tmux"))
+        assertEquals(SupportTier.UNVERIFIED, plan.supportTier)
+        assertTrue(plan.warnings.any { it.contains("not on this host") })
+        assertEquals(PlanDecision.ALLOWED_UNVERIFIED, ProvisionPlanner.decide(plan, realHost).decision)
+    }
+
+    @Test
+    fun `read-only discovery never certifies package provisioning`() {
+        val host = facts(container = true)
+        val discoveredOnly = listOf(
+            evidence(setOf(ProvisionCapability.SSH_PTY, ProvisionCapability.OS_DISCOVERY)),
+        )
+        val plan = ProvisionPlanner.plan(host, request("tmux"), evidence = discoveredOnly)
+        assertEquals(SupportTier.UNVERIFIED, plan.supportTier)
+        assertTrue(plan.testedCapabilities.isEmpty())
+        assertEquals(PlanDecision.ALLOWED_UNVERIFIED, ProvisionPlanner.decide(plan, host).decision)
+        assertTrue(plan.warnings.any { it.contains("discovery alone") })
+    }
+
+    @Test
+    fun `an image install result is honest but never authorises a silent run`() {
+        val installed = listOf(
+            evidence(
+                setOf(
+                    ProvisionCapability.PACKAGE_INSTALL,
+                    ProvisionCapability.PACKAGE_VERIFY,
+                    ProvisionCapability.CANCELLATION,
+                    ProvisionCapability.CLEANUP,
+                ),
+            ),
+        )
         val container = facts(container = true)
-        val plan = ProvisionPlanner.plan(container, request("tmux"))
-        assertEquals(SupportTier.VERIFIED_CONTAINER, plan.supportTier)
-        assertTrue(plan.warnings.any { it.contains("container") })
+        val containerPlan = ProvisionPlanner.plan(container, request("tmux"), evidence = installed)
+        assertEquals(SupportTier.TESTED_IN_IMAGE, containerPlan.supportTier)
+        // The image is not this host: the acknowledgement is still required.
+        assertEquals(PlanDecision.ALLOWED_UNVERIFIED, ProvisionPlanner.decide(containerPlan, container).decision)
 
         val realHost = facts(container = false)
-        assertEquals(SupportTier.UNVERIFIED, ProvisionPlanner.plan(realHost, request("tmux")).supportTier)
+        val hostPlan = ProvisionPlanner.plan(realHost, request("tmux"), evidence = installed)
+        assertEquals(SupportTier.UNVERIFIED, hostPlan.supportTier)
+        assertEquals(PlanDecision.ALLOWED_UNVERIFIED, ProvisionPlanner.decide(hostPlan, realHost).decision)
+
+        val acknowledged = ProvisionPlanner.plan(
+            realHost,
+            request("tmux", acknowledge = true),
+            evidence = installed,
+        )
+        assertEquals(PlanDecision.ALLOWED, ProvisionPlanner.decide(acknowledged, realHost).decision)
+    }
+
+    @Test
+    fun `evidence for another release or architecture does not transfer`() {
+        val installed = listOf(
+            evidence(
+                setOf(ProvisionCapability.PACKAGE_INSTALL, ProvisionCapability.PACKAGE_VERIFY),
+                version = "11",
+            ),
+        )
+        assertEquals(
+            SupportTier.UNVERIFIED,
+            ProvisionPlanner.plan(facts(version = "12"), request("tmux"), evidence = installed).supportTier,
+        )
+        val arm = listOf(
+            evidence(
+                setOf(ProvisionCapability.PACKAGE_INSTALL, ProvisionCapability.PACKAGE_VERIFY),
+                arch = "aarch64",
+            ),
+        )
+        assertEquals(
+            SupportTier.UNVERIFIED,
+            ProvisionPlanner.plan(facts(), request("tmux"), evidence = arm).supportTier,
+        )
+    }
+
+    @Test
+    fun `only evidence keyed to this exact host skips the acknowledgement`() {
+        val host = facts(machineId = "0123456789abcdef0123456789abcdef")
+        val verifiedHosts = mapOf(
+            host.machineIdentity to setOf(
+                ProvisionCapability.PACKAGE_INSTALL,
+                ProvisionCapability.PACKAGE_VERIFY,
+            ),
+        )
+        val plan = ProvisionPlanner.plan(host, request("tmux"), hostEvidence = verifiedHosts)
+        assertEquals(SupportTier.VERIFIED_HOST, plan.supportTier)
+        assertEquals(PlanDecision.ALLOWED, ProvisionPlanner.decide(plan, host).decision)
+
+        // The same record must not transfer to a host with another identity.
+        val other = facts(machineId = "fedcba9876543210fedcba9876543210")
+        val otherPlan = ProvisionPlanner.plan(other, request("tmux"), hostEvidence = verifiedHosts)
+        assertEquals(SupportTier.UNVERIFIED, otherPlan.supportTier)
+        assertEquals(PlanDecision.ALLOWED_UNVERIFIED, ProvisionPlanner.decide(otherPlan, other).decision)
+    }
+
+    @Test
+    fun `a host without a machine identity can never match host evidence`() {
+        val host = facts(machineId = "")
+        val plan = ProvisionPlanner.plan(
+            host,
+            request("tmux"),
+            hostEvidence = mapOf("" to setOf(ProvisionCapability.PACKAGE_INSTALL)),
+        )
+        assertEquals(SupportTier.UNVERIFIED, plan.supportTier)
     }
 
     @Test

@@ -1,0 +1,271 @@
+@testable import AnthraciteKit
+import NIOCore
+import NIOEmbedded
+import NIOSSH
+import XCTest
+
+/// Terminal output is bounded, ordered and lossless.
+///
+/// A slow consumer used to mean an unbounded buffer, because the stream NIO fed
+/// buffered without limit. These tests measure the bound itself (not just that a
+/// callback exists), prove that no byte is dropped or reordered while the reader is
+/// stopped and started, and drive the channel handler to show it really asks NIO to
+/// stop reading.
+final class TerminalOutputTests: XCTestCase {
+    /// Records the reader's state as the stream reports it.
+    private final class Reader: @unchecked Sendable {
+        private let lock = NSLock()
+        private var events: [Bool] = []
+
+        var states: [Bool] {
+            lock.lock()
+            defer { lock.unlock() }
+            return events
+        }
+
+        var paused: Bool { states.last ?? false }
+
+        func record(_ paused: Bool) {
+            lock.lock()
+            events.append(paused)
+            lock.unlock()
+        }
+    }
+
+    private func chunk(_ number: Int, size: Int = 32 * 1024) -> Data {
+        Data(repeating: UInt8(number % 251), count: size)
+    }
+
+    // MARK: The bound
+
+    func testTheStreamAsksTheReaderToStopAtTheMarkAndKeepsEveryByte() {
+        let reader = Reader()
+        let stream = TerminalOutput()
+        stream.onFlowControl { reader.record($0) }
+
+        // A reader that honours the stop signal — what NIO's autoRead does — writes
+        // no more once it has been asked to stop. This is the producer the bound is
+        // about, and the peak queue is measured across it.
+        var sent = 0
+        var peak = 0
+        for number in 0..<64 where !reader.paused {
+            let part = chunk(number)
+            stream.append(part)
+            sent += part.count
+            peak = max(peak, stream.bufferedByteCount)
+        }
+
+        XCTAssertTrue(reader.paused, "the reader was never asked to stop")
+        XCTAssertGreaterThan(peak, TerminalOutput.highWaterMark)
+        XCTAssertLessThanOrEqual(
+            peak,
+            TerminalOutput.highWaterMark + 32 * 1024,
+            "a paused reader was still handed more than one chunk"
+        )
+        // Nothing was discarded on the way: every byte handed over is still queued.
+        XCTAssertEqual(stream.bufferedByteCount, sent)
+        // Asked once, not once per chunk, with the current state delivered first.
+        XCTAssertEqual(reader.states, [false, true], "the reader was told the same thing repeatedly")
+    }
+
+    func testABlockingProducerKeepsItsBytesRatherThanLosingThem() async throws {
+        let stream = TerminalOutput()
+        // A producer that ignores the stop signal cannot be stopped by a consumer
+        // that is not reading. The stream says so by keeping what it was given
+        // rather than dropping it: a hard cap here would mean silent data loss.
+        for number in 0..<32 { stream.append(chunk(number)) }
+        XCTAssertTrue(stream.isPaused)
+        XCTAssertEqual(stream.bufferedByteCount, 32 * 32 * 1024)
+
+        let parts = (0..<32).map { chunk($0) }
+        // Ending the stream first: the bytes already queued are still delivered, and
+        // the drain below must not park waiting for more.
+        stream.finish()
+        var received = Data()
+        var iterator = stream.makeAsyncIterator()
+        while let part = try? await iterator.next() {
+            received.append(part)
+        }
+        XCTAssertEqual(received, parts.reduce(Data()) { $0 + $1 })
+        XCTAssertFalse(stream.isPaused, "the reader was not restarted after draining")
+    }
+
+    func testConsumingBelowTheLowWaterMarkStartsTheReaderAgain() async throws {
+        let reader = Reader()
+        let stream = TerminalOutput()
+        stream.onFlowControl { reader.record($0) }
+        for number in 0..<32 { stream.append(chunk(number)) }
+        XCTAssertTrue(reader.paused)
+
+        var iterator = stream.makeAsyncIterator()
+        // Drain until the queue is under the mark, then the reader must restart.
+        while stream.bufferedByteCount > TerminalOutput.lowWaterMark {
+            _ = try await iterator.next()
+        }
+        XCTAssertFalse(reader.paused, "the reader was never restarted")
+        XCTAssertEqual(reader.states, [false, true, false])
+    }
+
+    // MARK: Losslessness
+
+    func testEveryByteArrivesInOrderWhileTheReaderStopsAndStarts() async throws {
+        let reader = Reader()
+        let stream = TerminalOutput()
+        stream.onFlowControl { reader.record($0) }
+
+        let parts = (0..<64).map { chunk($0, size: 20 * 1024) }
+        let producer = Task {
+            for part in parts { stream.append(part) }
+            stream.finish()
+        }
+
+        var received = Data()
+        for try await part in stream { received.append(part) }
+        await producer.value
+
+        XCTAssertEqual(received.count, parts.reduce(0) { $0 + $1.count })
+        XCTAssertEqual(received, parts.reduce(Data()) { $0 + $1 })
+        // The reader was stopped at least once and restarted: the path was used.
+        XCTAssertTrue(reader.states.contains(true))
+        XCTAssertEqual(reader.paused, false, "the reader was left stopped")
+    }
+
+    func testASlowConsumerStillSeesEveryByte() async throws {
+        let reader = Reader()
+        let stream = TerminalOutput()
+        stream.onFlowControl { reader.record($0) }
+        let parts = (0..<40).map { chunk($0, size: 16 * 1024) }
+
+        let producer = Task {
+            for part in parts { stream.append(part) }
+            stream.finish()
+        }
+        var received = Data()
+        for try await part in stream {
+            received.append(part)
+            // A deliberately slow consumer: the producer must wait on the bound.
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        await producer.value
+
+        XCTAssertEqual(received, parts.reduce(Data()) { $0 + $1 })
+        XCTAssertLessThanOrEqual(stream.bufferedByteCount, TerminalOutput.highWaterMark + 32 * 1024)
+    }
+
+    func testUTF8AndANSISequencesAreNotSplitOrAltered() async throws {
+        // A multi-byte character and an escape sequence spanning chunk boundaries
+        // must survive byte for byte: the stream carries bytes, and it must never
+        // try to be clever about them.
+        let text = "héllo \u{1B}[38;5;208mworld\u{1B}[0m 日本語 🚀\n"
+        let bytes = Data(text.utf8)
+        let stream = TerminalOutput()
+        for index in stride(from: 0, to: bytes.count, by: 3) {
+            let end = min(index + 3, bytes.count)
+            stream.append(bytes.subdata(in: index..<end))
+        }
+        stream.finish()
+
+        var received = Data()
+        for try await part in stream { received.append(part) }
+        XCTAssertEqual(String(decoding: received, as: UTF8.self), text)
+    }
+
+    // MARK: Ending
+
+    func testEndingTheStreamDeliversQueuedBytesThenStops() async throws {
+        let stream = TerminalOutput()
+        stream.append(Data("first".utf8))
+        stream.finish()
+        stream.append(Data("after the end".utf8))
+
+        var received = Data()
+        for try await part in stream { received.append(part) }
+        XCTAssertEqual(String(decoding: received, as: UTF8.self), "first")
+    }
+
+    func testAFailureReachesTheConsumer() async throws {
+        let stream = TerminalOutput()
+        stream.append(Data("buffered".utf8))
+        stream.fail(SSHError.channelFailed("the channel ended"))
+
+        var received = Data()
+        do {
+            for try await part in stream { received.append(part) }
+            XCTFail("a failed stream must throw")
+        } catch let error as SSHError {
+            XCTAssertEqual(error, .channelFailed("the channel ended"))
+        }
+        XCTAssertEqual(String(decoding: received, as: UTF8.self), "buffered")
+    }
+
+    // MARK: Cancellation
+
+    func testACancelledConsumerDoesNotStrandTheStream() async throws {
+        let reader = Reader()
+        let stream = TerminalOutput()
+        stream.onFlowControl { reader.record($0) }
+        // Fill past the bound, then drain every byte: the stream is empty, so the
+        // next consumer really parks on next() instead of taking a queued chunk.
+        for number in 0..<32 { stream.append(chunk(number)) }
+        var iterator = stream.makeAsyncIterator()
+        while stream.bufferedByteCount > 0 {
+            _ = try await iterator.next()
+        }
+        XCTAssertFalse(stream.isPaused, "the reader was not restarted after draining")
+
+        let consumer = Task { () -> Data? in
+            var parked = stream.makeAsyncIterator()
+            return try await parked.next()
+        }
+        for _ in 0..<10_000 where !stream.hasParkedConsumer {
+            await Task.yield()
+        }
+        XCTAssertTrue(stream.hasParkedConsumer, "the consumer never reached next()")
+
+        consumer.cancel()
+        let outcome = await consumer.result
+        guard case .failure(let error) = outcome else {
+            return XCTFail("a cancelled consumer must not receive a chunk")
+        }
+        XCTAssertTrue(error is CancellationError, "unexpected error: \(error)")
+        XCTAssertFalse(stream.isPaused, "the reader was left stopped after cancellation")
+
+        // The stream is still usable: a later chunk still arrives in order.
+        stream.append(Data("after".utf8))
+        var resumed = stream.makeAsyncIterator()
+        let next = try await resumed.next()
+        XCTAssertEqual(next, Data("after".utf8))
+    }
+
+    // MARK: The channel handler actually stops reading
+
+    func testTheCollectorStopsAndRestartsReadingWhenTheQueueFills() async throws {
+        let collector = ShellCollector()
+        let reader = Reader()
+        collector.output.onFlowControl { reader.record($0) }
+        let channel = EmbeddedChannel(handler: collector)
+        defer { _ = try? channel.finish() }
+
+        // Feed far more than the bound through the real channel handler.
+        for number in 0..<40 {
+            var buffer = channel.allocator.buffer(capacity: 32 * 1024)
+            buffer.writeBytes(chunk(number))
+            // `writeInbound` wraps its argument in a NIOAny itself; wrapping it here
+            // first trips NIO's own assertion.
+            _ = try channel.writeInbound(SSHChannelData(type: .channel, data: .byteBuffer(buffer)))
+        }
+
+        XCTAssertTrue(reader.paused, "the handler kept reading past the bound")
+        // Everything the handler was handed is still there: the stop signal is asked
+        // for, nothing is dropped to enforce it.
+        XCTAssertEqual(collector.output.bufferedByteCount, 40 * 32 * 1024)
+
+        // Draining below the low-water mark restarts the reader through the same
+        // hook the channel uses.
+        var iterator = collector.output.makeAsyncIterator()
+        while collector.output.bufferedByteCount > TerminalOutput.lowWaterMark {
+            _ = try await iterator.next()
+        }
+        XCTAssertFalse(reader.paused, "the handler never restarted reading")
+    }
+}

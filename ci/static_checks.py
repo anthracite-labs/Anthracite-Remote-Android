@@ -15,6 +15,10 @@ Checks:
   4. Every activity named in the manifest has a Kotlin source file.
   5. No obvious committed credentials (tokens, private keys, passwords).
   6. Every Kotlin source file declares the package it lives in.
+  7. Links in README.md and docs/**/*.md are bounded and resolvable: relative
+     targets must exist in the repository and external ones must be https. No
+     request is made — a check that fetches the internet is neither offline nor
+     deterministic, and a link that dies later is not a defect in this commit.
 """
 from __future__ import annotations
 
@@ -236,6 +240,76 @@ def check_secrets() -> None:
                 problem(os.path.relpath(path, ROOT), f"{label} pattern at line {line}")
 
 
+
+# --------------------------------------------------------------------------- 7
+DOC_ROOTS = ["README.md", "SECURITY.md", "docs"]
+MAX_DOCS = 400
+MAX_DOC_BYTES = 512 * 1024
+LINK = re.compile(r"\]\(([^)\s]+)")
+
+
+def doc_files() -> list[str]:
+    found: list[str] = []
+    for entry in DOC_ROOTS:
+        path = os.path.join(ROOT, entry)
+        if os.path.isfile(path):
+            found.append(path)
+        elif os.path.isdir(path):
+            for directory, _, names in os.walk(path):
+                for name in names:
+                    if name.endswith(".md"):
+                        found.append(os.path.join(directory, name))
+    return sorted(found)[:MAX_DOCS]
+
+
+def check_doc_links() -> None:
+    files = doc_files()
+    if not files:
+        problem("docs", "no documentation was found to check")
+    for path in files:
+        relative = os.path.relpath(path, ROOT)
+        try:
+            if os.path.getsize(path) > MAX_DOC_BYTES:
+                problem(relative, "documentation file is larger than the bound this check reads")
+                continue
+            text = open(path, encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError) as error:
+            problem(relative, f"documentation file could not be read: {error}")
+            continue
+        in_fence = False
+        for number, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            for target in LINK.findall(line):
+                where = f"{relative}:{number}"
+                if target.startswith("#") or target.startswith("mailto:"):
+                    continue
+                if target.startswith("http://"):
+                    problem(where, f"insecure link {target}")
+                    continue
+                if target.startswith("https://"):
+                    rest = target[len("https://"):]
+                    host = rest.split("/", 1)[0]
+                    if not host or " " in host or "@" in host:
+                        problem(where, f"link has no usable host: {target}")
+                    continue
+                if "://" in target:
+                    problem(where, f"link uses an unexpected scheme: {target}")
+                    continue
+                plain = target.split("#", 1)[0]
+                if not plain:
+                    continue
+                resolved = os.path.normpath(os.path.join(os.path.dirname(path), plain))
+                if not os.path.exists(resolved):
+                    problem(where, f"relative link does not resolve: {target}")
+                    continue
+                if os.path.commonpath([ROOT, resolved]) != ROOT:
+                    problem(where, f"relative link leaves the repository: {target}")
+
+
 def main() -> int:
     global declared
     check_workflows()
@@ -246,6 +320,7 @@ def main() -> int:
     check_references(declared)
     check_manifest_activities()
     check_secrets()
+    check_doc_links()
 
     for where, message in problems:
         print(f"::error file={where}::{message}")

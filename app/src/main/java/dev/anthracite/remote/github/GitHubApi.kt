@@ -292,6 +292,26 @@ internal data class IssueSummary(
     val updatedAt: String?,
 )
 
+internal data class IssueDetail(
+    val number: Int,
+    val title: String,
+    val state: String,
+    val author: String,
+    val body: String,
+    val comments: Int,
+    val labels: List<String>,
+    val isPullRequest: Boolean,
+    val updatedAt: String?,
+)
+
+internal data class IssueComment(val author: String, val body: String, val createdAt: String?)
+
+/** The only two states this screen may set. A reason is never invented. */
+internal enum class IssueState(val apiValue: String, val label: String) {
+    OPEN("open", "Reopen"),
+    CLOSED("closed", "Close"),
+}
+
 internal data class PullSummary(
     val number: Int,
     val title: String,
@@ -395,6 +415,72 @@ internal class GitHubApi(
                     next,
                 ),
             )
+        }
+    }
+
+    /** One issue, with the body and labels the list view does not carry. */
+    fun issueDetail(repo: RepoRef, number: Int): GitHubResult<IssueDetail> =
+        request("GET", "/repos/$repo/issues/${positive(number)}") { json, _ ->
+            val issue = json.asObject() ?: return@request GitHubResult.Failed("Unexpected issue response")
+            GitHubResult.Ok(
+                IssueDetail(
+                    number = issue.int("number") ?: return@request GitHubResult.Failed("Unexpected issue response"),
+                    title = issue.string("title") ?: "",
+                    state = issue.string("state") ?: "open",
+                    author = issue.obj("user")?.string("login") ?: "unknown",
+                    body = issue.string("body").orEmpty(),
+                    comments = issue.int("comments") ?: 0,
+                    labels = issue.array("labels")?.items.orEmpty().mapNotNull { it.asObject()?.string("name") },
+                    isPullRequest = issue["pull_request"] != null,
+                    updatedAt = issue.string("updated_at"),
+                ),
+            )
+        }
+
+    fun listIssueComments(repo: RepoRef, number: Int, page: Int = 1): GitHubResult<Paged<IssueComment>> =
+        request(
+            "GET",
+            "/repos/$repo/issues/${positive(number)}/comments?per_page=30&page=${page.coerceAtLeast(1)}",
+        ) { json, next ->
+            val array = json.asArray() ?: return@request GitHubResult.Failed("Unexpected comment response")
+            GitHubResult.Ok(
+                Paged(
+                    array.items.mapNotNull { item ->
+                        val comment = item.asObject() ?: return@mapNotNull null
+                        IssueComment(
+                            author = comment.obj("user")?.string("login") ?: "unknown",
+                            body = comment.string("body").orEmpty(),
+                            createdAt = comment.string("created_at"),
+                        )
+                    },
+                    next,
+                ),
+            )
+        }
+
+    /**
+     * Opens or closes an issue. The caller must have confirmed the exact
+     * repository and issue number; nothing here can target another repository.
+     */
+    fun setIssueState(repo: RepoRef, number: Int, state: IssueState): GitHubResult<String> =
+        request(
+            "PATCH",
+            "/repos/$repo/issues/${positive(number)}",
+            jsonBody(mapOf("state" to state.apiValue)),
+        ) { json, _ ->
+            val issue = json.asObject() ?: return@request GitHubResult.Failed("Unexpected issue response")
+            GitHubResult.Ok(issue.string("state") ?: state.apiValue)
+        }
+
+    fun createIssue(repo: RepoRef, title: String, body: String): GitHubResult<Int> {
+        val safeTitle = sanitizeTitle(title) ?: return GitHubResult.Invalid("An issue title is required")
+        val fields = buildMap {
+            put("title", safeTitle)
+            sanitizeBody(body)?.let { put("body", it) }
+        }
+        return request("POST", "/repos/$repo/issues", jsonBody(fields)) { json, _ ->
+            val issue = json.asObject() ?: return@request GitHubResult.Failed("Unexpected issue response")
+            GitHubResult.Ok(issue.int("number") ?: return@request GitHubResult.Failed("GitHub did not return the new issue number"))
         }
     }
 
@@ -603,6 +689,14 @@ internal class GitHubApi(
         return number
     }
 
+    /** Titles are single-line: control characters and line breaks are refused. */
+    private fun sanitizeTitle(title: String): String? {
+        val trimmed = title.replace("\u0000", "").trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.any { it == '\n' || it == '\r' || it == '\t' }) return null
+        return trimmed.take(MAX_TITLE_CHARS)
+    }
+
     private fun sanitizeBody(body: String): String? {
         val trimmed = body.replace("\u0000", "").trim()
         if (trimmed.isEmpty()) return null
@@ -638,5 +732,6 @@ internal class GitHubApi(
 
     private companion object {
         const val MAX_BODY_CHARS = 20_000
+        const val MAX_TITLE_CHARS = 256
     }
 }

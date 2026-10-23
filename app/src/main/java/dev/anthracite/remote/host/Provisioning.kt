@@ -24,6 +24,8 @@ internal data class CatalogTool(
         RUNTIME("Runtimes"),
         BUILD("Build tools"),
         UTILITY("Utilities"),
+        NETWORKING("Networking"),
+        DATABASE("Databases"),
     }
 
     fun packagesFor(manager: PackageManagerKind): List<String> = packages[manager].orEmpty()
@@ -41,152 +43,120 @@ internal data class CatalogProfile(val id: String, val label: String, val descri
  * the supported families.
  */
 internal object ProvisionCatalog {
-    const val VERSION = "2026-10-22.1"
+    const val VERSION = "2026-10-23.1"
 
     val tools: List<CatalogTool> = listOf(
         tool(
             id = "git", label = "Git", description = "Version control client", category = CatalogTool.Category.VERSION_CONTROL,
             executable = "git",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("git"),
-                PackageManagerKind.DNF to listOf("git"),
-                PackageManagerKind.ZYPPER to listOf("git"),
-                PackageManagerKind.PACMAN to listOf("git"),
-                PackageManagerKind.APK to listOf("git"),
-            ),
+            packages = everywhere("git"),
         ),
         tool(
             id = "tmux", label = "tmux", description = "Detachable terminal sessions", category = CatalogTool.Category.TERMINAL,
             executable = "tmux",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("tmux"),
-                PackageManagerKind.DNF to listOf("tmux"),
-                PackageManagerKind.ZYPPER to listOf("tmux"),
-                PackageManagerKind.PACMAN to listOf("tmux"),
-                PackageManagerKind.APK to listOf("tmux"),
-            ),
+            packages = everywhere("tmux"),
         ),
         tool(
             id = "curl", label = "curl", description = "HTTP client", category = CatalogTool.Category.UTILITY,
             executable = "curl",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("curl"),
-                PackageManagerKind.DNF to listOf("curl"),
-                PackageManagerKind.ZYPPER to listOf("curl"),
-                PackageManagerKind.PACMAN to listOf("curl"),
-                PackageManagerKind.APK to listOf("curl"),
-            ),
+            packages = everywhere("curl"),
         ),
         tool(
             id = "unzip", label = "unzip", description = "ZIP extraction", category = CatalogTool.Category.FILES,
             executable = "unzip",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("unzip"),
-                PackageManagerKind.DNF to listOf("unzip"),
-                PackageManagerKind.ZYPPER to listOf("unzip"),
-                PackageManagerKind.PACMAN to listOf("unzip"),
-                PackageManagerKind.APK to listOf("unzip"),
-            ),
+            packages = everywhere("unzip"),
         ),
         tool(
             id = "jq", label = "jq", description = "JSON processor", category = CatalogTool.Category.UTILITY,
             executable = "jq",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("jq"),
-                PackageManagerKind.DNF to listOf("jq"),
-                PackageManagerKind.ZYPPER to listOf("jq"),
-                PackageManagerKind.PACMAN to listOf("jq"),
-                PackageManagerKind.APK to listOf("jq"),
-            ),
+            packages = everywhere("jq"),
         ),
         tool(
             id = "htop", label = "htop", description = "Interactive process viewer", category = CatalogTool.Category.TERMINAL,
             executable = "htop",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("htop"),
-                PackageManagerKind.DNF to listOf("htop"),
-                PackageManagerKind.ZYPPER to listOf("htop"),
-                PackageManagerKind.PACMAN to listOf("htop"),
-                PackageManagerKind.APK to listOf("htop"),
-            ),
+            packages = everywhere("htop"),
         ),
         tool(
             id = "vim", label = "vim", description = "Terminal editor", category = CatalogTool.Category.TERMINAL,
             executable = "vim",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("vim"),
-                PackageManagerKind.DNF to listOf("vim-enhanced"),
-                PackageManagerKind.ZYPPER to listOf("vim"),
-                PackageManagerKind.PACMAN to listOf("vim"),
-                PackageManagerKind.APK to listOf("vim"),
-            ),
+            packages = byManager(apt = "vim", dnf = "vim-enhanced", zypper = "vim", pacman = "vim", apk = "vim"),
         ),
         tool(
             id = "ripgrep", label = "ripgrep", description = "Fast recursive search", category = CatalogTool.Category.UTILITY,
             executable = "rg",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("ripgrep"),
-                PackageManagerKind.DNF to listOf("ripgrep"),
-                PackageManagerKind.ZYPPER to listOf("ripgrep"),
-                PackageManagerKind.PACMAN to listOf("ripgrep"),
-                PackageManagerKind.APK to listOf("ripgrep"),
-            ),
+            packages = everywhere("ripgrep"),
         ),
         tool(
             id = "rsync", label = "rsync", description = "Incremental file transfer", category = CatalogTool.Category.FILES,
             executable = "rsync",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("rsync"),
-                PackageManagerKind.DNF to listOf("rsync"),
-                PackageManagerKind.ZYPPER to listOf("rsync"),
-                PackageManagerKind.PACMAN to listOf("rsync"),
-                PackageManagerKind.APK to listOf("rsync"),
-            ),
+            packages = everywhere("rsync"),
         ),
         tool(
             id = "python", label = "Python 3", description = "Python runtime", category = CatalogTool.Category.RUNTIME,
             executable = "python3",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("python3"),
-                PackageManagerKind.DNF to listOf("python3"),
-                PackageManagerKind.ZYPPER to listOf("python3"),
-                // Arch ships Python 3 as `python`; there is no `python3` package.
-                PackageManagerKind.PACMAN to listOf("python"),
-                PackageManagerKind.APK to listOf("python3"),
-            ),
+            // Arch ships Python 3 as `python`; there is no `python3` package.
+            packages = byManager(apt = "python3", dnf = "python3", zypper = "python3", pacman = "python", apk = "python3"),
         ),
         tool(
             id = "node", label = "Node.js", description = "Node.js runtime", category = CatalogTool.Category.RUNTIME,
             executable = "node",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("nodejs"),
-                PackageManagerKind.DNF to listOf("nodejs"),
-                PackageManagerKind.ZYPPER to listOf("nodejs"),
-                PackageManagerKind.PACMAN to listOf("nodejs"),
-                PackageManagerKind.APK to listOf("nodejs"),
-            ),
+            packages = everywhere("nodejs"),
         ),
         tool(
             id = "make", label = "make", description = "Build automation", category = CatalogTool.Category.BUILD,
             executable = "make",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("make"),
-                PackageManagerKind.DNF to listOf("make"),
-                PackageManagerKind.ZYPPER to listOf("make"),
-                PackageManagerKind.PACMAN to listOf("make"),
-                PackageManagerKind.APK to listOf("make"),
-            ),
+            packages = everywhere("make"),
         ),
         tool(
             id = "gcc", label = "GCC", description = "C compiler", category = CatalogTool.Category.BUILD,
             executable = "gcc",
-            packages = mapOf(
-                PackageManagerKind.APT to listOf("gcc"),
-                PackageManagerKind.DNF to listOf("gcc"),
-                PackageManagerKind.ZYPPER to listOf("gcc"),
-                PackageManagerKind.PACMAN to listOf("gcc"),
-                PackageManagerKind.APK to listOf("gcc"),
+            packages = everywhere("gcc"),
+        ),
+        tool(
+            id = "wget", label = "wget", description = "Non-interactive downloader", category = CatalogTool.Category.NETWORKING,
+            executable = "wget",
+            packages = everywhere("wget"),
+        ),
+        tool(
+            id = "less", label = "less", description = "Pager for long output", category = CatalogTool.Category.TERMINAL,
+            executable = "less",
+            packages = everywhere("less"),
+        ),
+        tool(
+            id = "tree", label = "tree", description = "Directory tree viewer", category = CatalogTool.Category.FILES,
+            executable = "tree",
+            packages = everywhere("tree"),
+        ),
+        tool(
+            id = "pip", label = "Python pip", description = "Python package installer", category = CatalogTool.Category.RUNTIME,
+            executable = "pip3",
+            packages = byManager(apt = "python3-pip", dnf = "python3-pip", zypper = "python3-pip", pacman = "python-pip", apk = "py3-pip"),
+        ),
+        tool(
+            id = "go", label = "Go", description = "Go toolchain", category = CatalogTool.Category.BUILD,
+            executable = "go",
+            packages = byManager(apt = "golang-go", dnf = "golang", zypper = "go", pacman = "go", apk = "go"),
+        ),
+        tool(
+            id = "rust", label = "Rust", description = "Rust compiler and Cargo", category = CatalogTool.Category.BUILD,
+            executable = "cargo",
+            packages = multiManager(
+                apt = listOf("rustc", "cargo"),
+                dnf = listOf("rust", "cargo"),
+                zypper = listOf("rust", "cargo"),
+                pacman = listOf("rust"),
+                apk = listOf("rust", "cargo"),
             ),
+        ),
+        tool(
+            id = "sqlite", label = "SQLite", description = "SQLite command-line shell", category = CatalogTool.Category.DATABASE,
+            executable = "sqlite3",
+            packages = byManager(apt = "sqlite3", dnf = "sqlite", zypper = "sqlite3", pacman = "sqlite", apk = "sqlite"),
+        ),
+        tool(
+            id = "postgres-client", label = "PostgreSQL client", description = "psql and pg_dump", category = CatalogTool.Category.DATABASE,
+            executable = "psql",
+            packages = byManager(apt = "postgresql-client", dnf = "postgresql", zypper = "postgresql", pacman = "postgresql", apk = "postgresql-client"),
         ),
     )
 
@@ -209,6 +179,66 @@ internal object ProvisionCatalog {
             description = "htop, vim, ripgrep and rsync.",
             toolIds = listOf("htop", "vim", "ripgrep", "rsync"),
         ),
+        CatalogProfile(
+            id = "compiled",
+            label = "Compiled languages",
+            description = "GCC, make, Go and Rust with Cargo.",
+            toolIds = listOf("gcc", "make", "go", "rust"),
+        ),
+        CatalogProfile(
+            id = "data",
+            label = "Database clients",
+            description = "SQLite shell and the PostgreSQL client tools.",
+            toolIds = listOf("sqlite", "postgres-client"),
+        ),
+        CatalogProfile(
+            id = "minimal",
+            label = "Smallest useful host",
+            description = "Git and tmux only: version control and a session that survives a dropped connection.",
+            toolIds = listOf("git", "tmux"),
+        ),
+    )
+
+    /**
+     * The same package name on every manager. Most tools are packaged identically
+     * everywhere, and repeating five identical lines invites a one-line edit that
+     * silently drops a distribution.
+     */
+    private fun everywhere(name: String): Map<PackageManagerKind, List<String>> =
+        PackageManagerKind.values().associateWith { listOf(name) }
+
+    /**
+     * Per-manager names, for the tools whose package is genuinely called something
+     * else on one family. Only the names given are planned; the rest are absent,
+     * which the planner reports as "no reviewed package here" rather than guessing.
+     */
+    private fun byManager(
+        apt: String? = null,
+        dnf: String? = null,
+        zypper: String? = null,
+        pacman: String? = null,
+        apk: String? = null,
+    ): Map<PackageManagerKind, List<String>> = buildMap {
+        apt?.let { put(PackageManagerKind.APT, listOf(it)) }
+        dnf?.let { put(PackageManagerKind.DNF, listOf(it)) }
+        zypper?.let { put(PackageManagerKind.ZYPPER, listOf(it)) }
+        pacman?.let { put(PackageManagerKind.PACMAN, listOf(it)) }
+        apk?.let { put(PackageManagerKind.APK, listOf(it)) }
+    }
+
+    /** The same shape as [byManager], for tools that ship more than one package. */
+    private fun multiManager(
+        apt: List<String>,
+        dnf: List<String>,
+        zypper: List<String>,
+        pacman: List<String>,
+        apk: List<String>,
+    ): Map<PackageManagerKind, List<String>> = mapOf(
+        PackageManagerKind.APT to apt,
+        PackageManagerKind.DNF to dnf,
+        PackageManagerKind.ZYPPER to zypper,
+        PackageManagerKind.PACMAN to pacman,
+        PackageManagerKind.APK to apk,
     )
 
     fun tool(id: String): CatalogTool? = tools.firstOrNull { it.id == id }
@@ -232,40 +262,283 @@ internal object ProvisionCatalog {
 }
 
 /**
- * Verified support tiers. A tier is only raised with evidence: a container run
- * proves package names and manager behaviour, not supervisor or logout
- * behaviour, which needs a real host or VM.
+ * Independent capabilities. Proving one of these never promotes another: a
+ * successful read-only probe says nothing about package installation, and a
+ * successful install says nothing about a supervisor, a logout or a reboot.
  */
+internal enum class ProvisionCapability(val label: String) {
+    SSH_PTY("SSH and interactive terminal"),
+    OS_DISCOVERY("Read-only discovery"),
+    PLAN_GENERATION("Package plan generation"),
+    PACKAGE_INSTALL("Package installation"),
+    PACKAGE_VERIFY("Post-install verification"),
+    CANCELLATION("Cancellation and stop handling"),
+    CLEANUP("Cleanup after a job"),
+    SESSION_DURABILITY("Detached session durability"),
+    REBOOT_DURABILITY("Survives a host reboot"),
+    CONTAINER_RUNTIME("Container runtime control"),
+    KUBERNETES("Kubernetes access"),
+}
+
+/**
+ * Evidence for one *exact* image, VM or host.
+ *
+ * A capability is only listed here after it was exercised end to end, and the
+ * record names the image digest (or host identity), the date and the GitHub
+ * Actions run. Recording a distribution name alone is not evidence: the same
+ * name can resolve to a different image tomorrow.
+ */
+internal data class DistributionEvidence(
+    val osId: String,
+    val osVersion: String,
+    val arch: String,
+    val image: String,
+    val imageDigest: String,
+    val testedAt: String,
+    val runUrl: String,
+    val capabilities: Set<ProvisionCapability>,
+) {
+    val installTested: Boolean
+        get() = ProvisionCapability.PACKAGE_INSTALL in capabilities &&
+            ProvisionCapability.PACKAGE_VERIFY in capabilities
+}
+
+/**
+ * What can honestly be claimed for *this* host, and why.
+ *
+ * [tier] is a statement about the connected machine, not about an image with a
+ * similar name. A container that matches a tested image can only ever reach
+ * [SupportTier.TESTED_IN_IMAGE]; that still requires the user's acknowledgement
+ * before a package mutation, because the host's own supervisor, logout and
+ * reboot behaviour were never exercised.
+ */
+internal data class CapabilityAssessment(
+    val tier: SupportTier,
+    val capabilities: Set<ProvisionCapability>,
+    val evidence: DistributionEvidence?,
+    val detail: String,
+)
+
+/**
+ * Tools whose vendors do not publish a pinned, verifiable artifact for every
+ * supported distribution. Anthracite shows the vendor's own instructions and
+ * runs nothing: an unverified `curl | sh` is exactly what this app must not do,
+ * and a curated *instructions* list is not a command allowlist.
+ */
+internal data class ManualInstaller(
+    val id: String,
+    val label: String,
+    val description: String,
+    val instructions: String,
+    val manualBecause: String,
+)
+
+internal object ManualInstallers {
+    val entries: List<ManualInstaller> = listOf(
+        ManualInstaller(
+            id = "opencode",
+            label = "OpenCode CLI",
+            description = "Terminal coding agent. The existing OpenCode WebUI journey is unaffected.",
+            instructions = "Install OpenCode with the vendor's documented installer for your platform, " +
+                "then run `opencode` in any Anthracite terminal tab. Review the download and its checksum " +
+                "before running it.",
+            manualBecause = "The vendor distributes a moving installer script; Anthracite does not execute " +
+                "remote scripts and cannot pin that artifact per distribution.",
+        ),
+        ManualInstaller(
+            id = "claude-code",
+            label = "Claude Code CLI",
+            description = "Terminal coding agent from Anthropic.",
+            instructions = "Install Claude Code with the vendor's documented package or npm command, sign in " +
+                "interactively inside a terminal tab, then run `claude`.",
+            manualBecause = "Authentication is interactive and the vendor's distribution policy is not a " +
+                "native package; running it unattended would either fail or store a credential Anthracite " +
+                "must not hold.",
+        ),
+        ManualInstaller(
+            id = "codex",
+            label = "Codex CLI",
+            description = "Terminal coding agent from OpenAI.",
+            instructions = "Install Codex CLI with the vendor's documented command for Node.js or your " +
+                "platform, then run `codex` in a terminal tab.",
+            manualBecause = "No distribution package is available and the vendor's installer is unpinned.",
+        ),
+        ManualInstaller(
+            id = "gemini",
+            label = "Gemini CLI",
+            description = "Terminal coding agent from Google.",
+            instructions = "Install Gemini CLI with the vendor's documented npm command, then run `gemini` " +
+                "in a terminal tab and complete the sign-in there.",
+            manualBecause = "Node.js distribution and interactive sign-in only; there is no verified native " +
+                "package or pinned artifact Anthracite could install safely.",
+        ),
+    )
+
+    fun entry(id: String): ManualInstaller? = entries.firstOrNull { it.id == id }
+}
+
+/** Verified support tiers. Only [VERIFIED_HOST] skips the acknowledgement. */
 internal enum class SupportTier(val label: String) {
-    VERIFIED_HOST("Verified on a real host"),
-    VERIFIED_CONTAINER("Verified in a container (supervisor/logout untested)"),
+    /** This exact host completed install, verify, cancel and cleanup. */
+    VERIFIED_HOST("Verified on this host"),
+
+    /**
+     * A container image of the same distribution, release and architecture
+     * completed install and verify. Supervisor/logout/reboot remain untested.
+     */
+    TESTED_IN_IMAGE("Installation tested in a container image, not on this host"),
+
     UNVERIFIED("Not verified for this distribution"),
 }
 
 internal object ProvisioningSupport {
-    /**
-     * Evidence for each entry lives in `docs/support-matrix.md` with the CI run or
-     * host that produced it. Adding an entry without a run is not allowed.
-     */
-    private val verifiedContainers: Set<String> = setOf(
-        "debian:12",
-        "ubuntu:24.04",
-        "alpine:3.21",
-        "fedora:42",
-        "archlinux:latest",
-        "opensuse/tumbleweed:latest",
+    private const val MATRIX_RUN =
+        "https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39881616212"
+
+    private val containerCapabilities: Set<ProvisionCapability> = setOf(
+        ProvisionCapability.OS_DISCOVERY,
+        ProvisionCapability.PLAN_GENERATION,
+        ProvisionCapability.PACKAGE_INSTALL,
+        ProvisionCapability.PACKAGE_VERIFY,
+        ProvisionCapability.CANCELLATION,
+        ProvisionCapability.CLEANUP,
     )
 
-    fun tierFor(facts: HostFacts): SupportTier {
-        if (facts.packageManager == null) return SupportTier.UNVERIFIED
-        val key = "${facts.osId}:${facts.osVersionId}"
-        if (key in verifiedContainers && !facts.containerized) {
-            // A container image name is not proof for a real host of the same name.
-            return SupportTier.UNVERIFIED
+    /**
+     * One record per image that completed install -> verify -> failure handling ->
+     * cancellation -> cleanup in a disposable container. The digest, the date and
+     * the run are part of the record: the image name alone proves nothing, because
+     * a mutable tag can resolve to a different image tomorrow.
+     *
+     * Nothing here lists SSH, tmux, supervisor, logout or reboot: those were not
+     * exercised by this run and are separate capabilities.
+     */
+    val evidence: List<DistributionEvidence> = listOf(
+        DistributionEvidence(
+            osId = "debian",
+            osVersion = "12",
+            arch = "x86_64",
+            image = "debian:12",
+            imageDigest = "debian@sha256:854dd8ab51d62866dbd8f5431d15ce77b12983a2a4a1e1fe43a2395dc7ef9f61",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "ubuntu",
+            osVersion = "24.04",
+            arch = "x86_64",
+            image = "ubuntu:24.04",
+            imageDigest = "ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "fedora",
+            osVersion = "42",
+            arch = "x86_64",
+            image = "fedora:42",
+            imageDigest = "fedora@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "arch",
+            osVersion = "",
+            arch = "x86_64",
+            image = "archlinux:latest",
+            imageDigest = "archlinux@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "opensuse-tumbleweed",
+            osVersion = "20261021",
+            arch = "x86_64",
+            image = "opensuse/tumbleweed:latest",
+            imageDigest = "opensuse/tumbleweed@sha256:0c6f00841281acf55a8ef29e777fc2db40d0923289ba933d566542cff2cddc00",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "alpine",
+            osVersion = "3.21",
+            arch = "x86_64",
+            image = "alpine:3.21",
+            imageDigest = "alpine@sha256:bbfcd601d7cd20d35bb0b8b866ad1a8a0d107ca3e1c20870c75c5ce2c1186d30",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+    )
+
+    /** Evidence keyed to a specific machine (VM or host), never to a distro name. */
+    val hostEvidence: Map<String, Set<ProvisionCapability>> = emptyMap()
+
+    fun assessmentFor(
+        facts: HostFacts,
+        records: List<DistributionEvidence> = evidence,
+        hosts: Map<String, Set<ProvisionCapability>> = hostEvidence,
+    ): CapabilityAssessment {
+        if (facts.packageManager == null) {
+            return CapabilityAssessment(
+                SupportTier.UNVERIFIED,
+                emptySet(),
+                null,
+                "No supported native package manager was detected on this host.",
+            )
         }
-        if (key in verifiedContainers) return SupportTier.VERIFIED_CONTAINER
-        return SupportTier.UNVERIFIED
+        // Only a host identity that was itself tested may skip the acknowledgement.
+        val hostCapabilities = hosts[facts.machineIdentity].orEmpty()
+        if (ProvisionCapability.PACKAGE_INSTALL in hostCapabilities &&
+            ProvisionCapability.PACKAGE_VERIFY in hostCapabilities
+        ) {
+            return CapabilityAssessment(
+                SupportTier.VERIFIED_HOST,
+                hostCapabilities,
+                null,
+                "Guided provisioning was verified on this host.",
+            )
+        }
+        val match = records.firstOrNull { record ->
+            record.osId == facts.osId &&
+                record.osVersion == facts.osVersionId &&
+                record.arch == facts.architecture &&
+                record.installTested
+        } ?: return CapabilityAssessment(
+            SupportTier.UNVERIFIED,
+            emptySet(),
+            null,
+            "No package-installation evidence exists for ${facts.displayName} " +
+                "${facts.architecture}: discovery alone does not certify provisioning.",
+        )
+        val provenance = "${match.image} (digest ${match.imageDigest.take(19)}…), " +
+            "tested ${match.testedAt}, ${match.runUrl}"
+        return if (facts.containerized) {
+            CapabilityAssessment(
+                SupportTier.TESTED_IN_IMAGE,
+                match.capabilities,
+                match,
+                "Package installation was tested in $provenance. The container image, not this " +
+                    "host's supervisor, logout or reboot behaviour, is what that run covered.",
+            )
+        } else {
+            CapabilityAssessment(
+                SupportTier.UNVERIFIED,
+                match.capabilities,
+                match,
+                "Package names were tested in $provenance, not on this host. A real host of the " +
+                    "same distribution still has its own package availability, supervisor, logout " +
+                    "and reboot behaviour.",
+            )
+        }
     }
+
+    fun tierFor(facts: HostFacts): SupportTier = assessmentFor(facts).tier
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +579,8 @@ internal data class ProvisionPlan(
     val estimatedDownloadBytes: Long?,
     val warnings: List<String>,
     val stepsDigest: String,
+    val supportDetail: String,
+    val testedCapabilities: Set<ProvisionCapability>,
 ) {
     val installActions: List<PlanAction.Install> get() = actions.filterIsInstance<PlanAction.Install>()
 
@@ -332,7 +607,12 @@ internal object ProvisionPlanner {
     const val PACKAGES_PER_STEP = 16
     const val MIN_DISK_KB = 200 * 1024L
 
-    fun plan(facts: HostFacts, request: BootstrapRequest): ProvisionPlan {
+    fun plan(
+        facts: HostFacts,
+        request: BootstrapRequest,
+        evidence: List<DistributionEvidence> = ProvisioningSupport.evidence,
+        hostEvidence: Map<String, Set<ProvisionCapability>> = ProvisioningSupport.hostEvidence,
+    ): ProvisionPlan {
         val manager = facts.packageManager
         val requested = request.toolIds.distinct().take(MAX_TOOLS)
         val actions = mutableListOf<PlanAction>()
@@ -381,10 +661,10 @@ internal object ProvisionPlanner {
             PlanStep(index + 1, chunk, toolIds)
         }
 
-        val tier = ProvisioningSupport.tierFor(facts)
-        if (tier == SupportTier.UNVERIFIED) {
-            warnings += "Guided provisioning is not verified for ${facts.displayName} ${facts.architecture}. " +
-                "Use the terminal to install software, or continue only if you accept the risk."
+        val assessment = ProvisioningSupport.assessmentFor(facts, evidence, hostEvidence)
+        val tier = assessment.tier
+        if (tier != SupportTier.VERIFIED_HOST) {
+            warnings += assessment.detail
         }
         if (facts.containerized) {
             warnings += "The host appears to be a container. Package changes affect that container only."
@@ -409,6 +689,8 @@ internal object ProvisionPlanner {
             estimatedDownloadBytes = null,
             warnings = warnings,
             stepsDigest = digest,
+            supportDetail = assessment.detail,
+            testedCapabilities = assessment.capabilities,
         )
     }
 
@@ -447,11 +729,17 @@ internal object ProvisionPlanner {
                 false,
             )
         }
-        return if (plan.supportTier == SupportTier.UNVERIFIED && !plan.request.acknowledgeUnverified) {
+        // Only a run that this exact host completed may skip the acknowledgement.
+        // Image evidence never does: a container test proves package names, not
+        // the supervisor, logout or reboot behaviour of the connected machine.
+        return if (plan.supportTier != SupportTier.VERIFIED_HOST && !plan.request.acknowledgeUnverified) {
+            val why = plan.supportDetail.ifBlank {
+                "This distribution is not in the verified matrix; read-only discovery does not certify " +
+                    "package installation."
+            }
             PlanVerdict(
                 PlanDecision.ALLOWED_UNVERIFIED,
-                "This distribution is not in the verified matrix. Review the exact commands, then confirm " +
-                    "that you accept running them at your own risk.",
+                "$why Review the exact commands, then confirm that you accept running them at your own risk.",
                 true,
             )
         } else {
@@ -517,6 +805,8 @@ internal data class JobStatus(
     val exitCode: Int,
     val processAlive: Boolean,
     val startTicksMatch: Boolean?,
+    /** `null` when the host did not report; never guessed from a PID alone. */
+    val identityVerified: Boolean?,
     val pid: String?,
     val logTail: String,
     val logBytes: Long,
@@ -528,6 +818,7 @@ internal data class JobStatus(
 internal object ProvisionJobs {
     const val RUNNER_FILE = "anthracite-provision-run.sh"
     const val STATUS_FILE = "anthracite-provision-status.sh"
+    const val CANCEL_FILE = "anthracite-provision-cancel.sh"
     const val JOB_ROOT = ".anthracite/jobs"
     const val LOG_TAIL_LIMIT = 3000
 
@@ -563,18 +854,27 @@ internal object ProvisionJobs {
 
     fun statusCommand(jobId: String): String = "sh -s \"\$HOME/${jobDirectory(jobId)}\""
 
-    fun cancelCommand(pid: String): String {
-        require(pid.matches(Regex("[0-9]{1,10}"))) { "pid is invalid" }
-        return "kill -TERM $pid"
-    }
+    /**
+     * Runs the reviewed compare-and-signal script on the host.
+     *
+     * The phone never selects a PID and never sends a signal itself: the host kit
+     * re-verifies the recorded process identity immediately before signalling and
+     * refuses when it cannot prove ownership.
+     */
+    fun cancelScriptCommand(jobId: String): String = "sh -s \"\$HOME/${jobDirectory(jobId)}\""
 
-    fun parseStatus(stdout: String): JobStatus {
+    private fun fields(stdout: String): Map<String, String> {
         val values = LinkedHashMap<String, String>()
         for (line in stdout.lineSequence()) {
             val separator = line.indexOf('=')
             if (separator <= 0) continue
             values[line.substring(0, separator).trim()] = line.substring(separator + 1).trim()
         }
+        return values
+    }
+
+    fun parseStatus(stdout: String): JobStatus {
+        val values = fields(stdout)
         val state = when (values["status"]?.uppercase()) {
             "PLANNED" -> JobState.PLANNED
             "APPROVED" -> JobState.APPROVED
@@ -593,14 +893,20 @@ internal object ProvisionJobs {
             "no" -> false
             else -> null
         }
+        val identityVerified = when (values["identity"]) {
+            "verified" -> true
+            "unverified" -> false
+            else -> null
+        }
         val logTail = decodeLogTail(values["log_tail_b64"].orEmpty())
         val pid = values["pid"]?.takeIf { it.matches(Regex("[0-9]{1,10}")) }
         return JobStatus(
-            state = reconcile(state, alive, ticksMatch),
+            state = reconcile(state, alive, ticksMatch, identityVerified),
             step = values["step"].orEmpty(),
             exitCode = values["exit_code"]?.toIntOrNull() ?: -1,
             processAlive = alive,
             startTicksMatch = ticksMatch,
+            identityVerified = identityVerified,
             pid = pid,
             logTail = logTail.first,
             logBytes = values["log_bytes"]?.toLongOrNull() ?: 0L,
@@ -614,10 +920,49 @@ internal object ProvisionJobs {
      * The host is authoritative. A recorded RUNNING state with no matching
      * process is an interruption, never a success and never a silent restart.
      */
-    fun reconcile(recorded: JobState, alive: Boolean, ticksMatch: Boolean?): JobState = when {
+    fun reconcile(
+        recorded: JobState,
+        alive: Boolean,
+        ticksMatch: Boolean?,
+        identityVerified: Boolean? = null,
+    ): JobState = when {
         recorded == JobState.RUNNING && !alive -> JobState.INTERRUPTED
         recorded == JobState.RUNNING && ticksMatch == false -> JobState.INTERRUPTED
+        // A live PID whose command line is not this job is not our job. The state
+        // is unknown, not running and not successful.
+        recorded == JobState.RUNNING && identityVerified == false -> JobState.UNKNOWN
         else -> recorded
+    }
+
+    /**
+     * Parses the host-side compare-and-signal result. A signal that was merely
+     * requested is never reported as a completed stop.
+     */
+    fun parseCancel(stdout: String): CancelResult {
+        val values = fields(stdout)
+        val outcome = when (values["cancel_result"]) {
+            "refused_invalid_job" -> CancelOutcome.REFUSED_INVALID_JOB
+            "refused_unknown_identity" -> CancelOutcome.REFUSED_UNKNOWN_IDENTITY
+            "refused_not_owner" -> CancelOutcome.REFUSED_NOT_OWNER
+            "already_finished" -> CancelOutcome.ALREADY_FINISHED
+            "signal_sent" -> CancelOutcome.SIGNAL_SENT
+            "still_running" -> CancelOutcome.STILL_RUNNING
+            "confirmed_stopped" -> CancelOutcome.CONFIRMED_STOPPED
+            "signal_failed" -> CancelOutcome.SIGNAL_FAILED
+            else -> CancelOutcome.UNKNOWN
+        }
+        return CancelResult(
+            outcome = outcome,
+            reason = values["reason"],
+            state = values["state"],
+            pid = values["pid"]?.takeIf { it.matches(Regex("[0-9]{1,10}")) },
+            processAlive = when (values["process_alive"]) {
+                "yes" -> true
+                "no" -> false
+                else -> null
+            },
+            verification = values["verification"]?.takeIf { it != "none" },
+        )
     }
 
     private fun decodeLogTail(encoded: String): Pair<String, Boolean> {
@@ -627,6 +972,49 @@ internal object ProvisionJobs {
         val text = String(bytes.copyOfRange(bytes.size - minOf(bytes.size, LOG_TAIL_LIMIT), bytes.size), Charsets.UTF_8)
         return text to truncated
     }
+}
+
+/**
+ * What the host reported after a compare-and-signal request.
+ *
+ * [SIGNAL_SENT] and [STILL_RUNNING] mean "the verified runner was asked to stop
+ * and is still alive". Only [CONFIRMED_STOPPED] and [ALREADY_FINISHED] mean the
+ * process is gone; a successful `kill` syscall is never treated as termination.
+ */
+internal enum class CancelOutcome {
+    REFUSED_INVALID_JOB,
+    REFUSED_UNKNOWN_IDENTITY,
+    REFUSED_NOT_OWNER,
+    ALREADY_FINISHED,
+    SIGNAL_SENT,
+    STILL_RUNNING,
+    CONFIRMED_STOPPED,
+    SIGNAL_FAILED,
+    UNKNOWN;
+
+    val signalWasSent: Boolean
+        get() = this == SIGNAL_SENT || this == STILL_RUNNING
+
+    val stopped: Boolean
+        get() = this == CONFIRMED_STOPPED || this == ALREADY_FINISHED
+}
+
+internal data class CancelResult(
+    val outcome: CancelOutcome,
+    val reason: String?,
+    val state: String?,
+    val pid: String?,
+    val processAlive: Boolean?,
+    /** Non-null only when the host proved pid, start time, owner and cmdline. */
+    val verification: String?,
+) {
+    val identityProven: Boolean get() = verification != null
+
+    /** A signal was delivered to a verified runner; it may still be alive. */
+    val signalWasSent: Boolean get() = outcome.signalWasSent
+
+    /** The host observed the process exit; not merely "a kill call returned 0". */
+    val stopped: Boolean get() = outcome.stopped
 }
 
 /**
@@ -687,14 +1075,15 @@ internal class ProvisionClient(private val ssh: SshClient) {
     }
 
     /**
-     * Requests cancellation only for a process whose recorded start time still
-     * matches. A reused PID is never signalled.
+     * Asks the host to stop a job. The identity check, the decision and the
+     * signal all happen on the host in one reviewed script, so a reused PID or a
+     * missing start time can never be signalled by a stale phone observation.
      */
-    fun cancel(jobId: String, statusScript: String): Boolean {
-        val status = status(jobId, statusScript)
-        val pid = status.pid ?: return false
-        if (!status.processAlive || status.startTicksMatch == false) return false
-        val result = ssh.exec(ProvisionJobs.cancelCommand(pid))
-        return result.exitCode == 0
+    fun cancel(jobId: String, cancelScript: String): CancelResult {
+        val result = ssh.exec(
+            ProvisionJobs.cancelScriptCommand(jobId),
+            stdin = cancelScript.toByteArray(Charsets.UTF_8),
+        )
+        return ProvisionJobs.parseCancel(result.stdout)
     }
 }

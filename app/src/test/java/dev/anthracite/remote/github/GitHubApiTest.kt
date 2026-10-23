@@ -225,4 +225,104 @@ class GitHubApiTest {
         }
         assertEquals("a/b", RepoRef("a", "b").toString())
     }
+
+    // ------------------------------------------------------------------ issues
+
+    @Test
+    fun `issues are listed with their state, author and pull-request marker`() {
+        val body = """
+            [{"number":3,"title":"Broken","state":"open","user":{"login":"ada"},"comments":2,
+              "updated_at":"2026-10-22T10:00:00Z"},
+             {"number":4,"title":"A pull","state":"open","user":{"login":"bob"},"comments":0,
+              "pull_request":{"url":"x"}}]
+        """.trimIndent()
+        val transport = FakeTransport {
+            response(
+                200,
+                body,
+                mapOf("link" to listOf("<https://api.github.com/repos/a/b/issues?page=2>; rel=\"next\"")),
+            )
+        }
+        val page = (api(transport).listIssues(repo, "closed") as GitHubResult.Ok).value
+        assertEquals(2, page.items.size)
+        assertEquals("Broken", page.items[0].title)
+        assertEquals("ada", page.items[0].author)
+        assertFalse(page.items[0].isPullRequest)
+        assertTrue(page.items[1].isPullRequest)
+        assertEquals(2, page.nextPage)
+        // The state filter is a fixed vocabulary, never a caller-supplied fragment:
+        // an unrecognised value collapses to "open" rather than reaching the URL.
+        assertTrue(transport.requests.single().url.endsWith("/issues?state=closed&per_page=30&page=1"))
+        val unexpected = (api(FakeTransport { response(200, "[]") }).listIssues(repo, "all") as GitHubResult.Ok).value
+        assertTrue(unexpected.items.isEmpty())
+    }
+
+    @Test
+    fun `an issue detail carries the body, labels and state`() {
+        val body = """
+            {"number":12,"title":"Crash on start","state":"open","user":{"login":"ada"},
+             "body":"Steps to reproduce","comments":1,
+             "labels":[{"name":"bug"},{"name":"android"}],"updated_at":"2026-10-22T10:00:00Z"}
+        """.trimIndent()
+        val detail = (api(FakeTransport { response(200, body) }).issueDetail(repo, 12)
+            as GitHubResult.Ok).value
+        assertEquals(12, detail.number)
+        assertEquals("Crash on start", detail.title)
+        assertEquals(listOf("bug", "android"), detail.labels)
+        assertEquals("Steps to reproduce", detail.body)
+        assertFalse(detail.isPullRequest)
+    }
+
+    @Test
+    fun `issue comments are paged and parsed`() {
+        val body = """
+            [{"user":{"login":"ada"},"body":"first","created_at":"2026-10-20T09:00:00Z"},
+             {"user":{"login":"bob"},"body":"second","created_at":"2026-10-21T09:00:00Z"}]
+        """.trimIndent()
+        val page = (api(FakeTransport { response(200, body) }).listIssueComments(repo, 3)
+            as GitHubResult.Ok).value
+        assertEquals(listOf("ada", "bob"), page.items.map { it.author })
+        assertEquals("second", page.items[1].body)
+        assertEquals(null, page.nextPage)
+    }
+
+    @Test
+    fun `closing an issue patches only that issue's state`() {
+        val transport = FakeTransport {
+            response(200, """{"number":3,"state":"closed"}""")
+        }
+        val state = (api(transport).setIssueState(repo, 3, IssueState.CLOSED) as GitHubResult.Ok).value
+        assertEquals("closed", state)
+        val sent = transport.requests.single()
+        assertEquals("PATCH", sent.method)
+        assertTrue(sent.url.endsWith("/repos/$repo/issues/3"))
+        assertEquals("""{"state":"closed"}""", String(sent.body ?: ByteArray(0), Charsets.UTF_8))
+    }
+
+    @Test
+    fun `a new issue needs a single-line title and never leaves an empty body`() {
+        val transport = FakeTransport { response(201, """{"number":31}""") }
+        val client = api(transport)
+
+        val created = client.createIssue(repo, "Broken build", "Details")
+        assertEquals(31, (created as GitHubResult.Ok).value)
+        val sent = transport.requests.single()
+        assertEquals("POST", sent.method)
+        assertTrue(sent.url.endsWith("/repos/$repo/issues"))
+        val body = String(sent.body ?: ByteArray(0), Charsets.UTF_8)
+        assertTrue(body.contains(""""title":"Broken build""""))
+        assertTrue(body.contains(""""body":"Details""""))
+
+        for (badTitle in listOf("", "   ", "line one\nline two", "tab\ttitle")) {
+            val rejected = client.createIssue(repo, badTitle, "x")
+            assertTrue("title '$badTitle' should have been rejected", rejected is GitHubResult.Invalid)
+        }
+        assertEquals(1, transport.requests.size)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `an issue number of zero is refused before any request`() {
+        val transport = FakeTransport { error("the transport must not be called") }
+        api(transport).issueDetail(repo, 0)
+    }
 }

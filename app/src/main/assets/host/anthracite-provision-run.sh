@@ -28,6 +28,11 @@ if [ -z "$JOB" ] || [ ! -d "$JOB" ]; then
     echo "usage: $0 <job-directory>" >&2
     exit 64
 fi
+# The directory is ours or nothing here is trustworthy.
+if [ -L "$JOB" ] || [ "$(ls -nd "$JOB" 2>/dev/null | tr -s ' ' | cut -d' ' -f3)" != "$(id -u)" ]; then
+    echo "refusing a job directory that is a symlink or is not owned by this user" >&2
+    exit 77
+fi
 
 STATE="$JOB/state"
 LOG="$JOB/job.log"
@@ -84,7 +89,12 @@ process_start_ticks() {
     [ -r "/proc/$pid/stat" ] || return 1
     line=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
     rest=${line##*) }
-    printf '%s\n' "$rest" | awk '{print $20}'
+    # Positional splitting avoids awk, which a minimal image may not ship.
+    # `rest` starts at field 3, so starttime (field 22 overall) is $20 here.
+    # shellcheck disable=SC2086
+    set -- $rest
+    [ "$#" -ge 20 ] || return 1
+    printf '%s\n' "${20}"
 }
 
 plan_value() {
@@ -94,8 +104,19 @@ plan_value() {
 
 # ---------------------------------------------------------------- preconditions
 
+# Both files must be ours, regular, and not links: a symlink here would let the
+# plan that was reviewed be swapped for another file between approval and run.
+owned_regular() {
+    [ -f "$1" ] || return 1
+    [ -L "$1" ] && return 1
+    [ "$(ls -nd "$1" 2>/dev/null | tr -s ' ' | cut -d' ' -f3)" = "$(id -u)" ] || return 1
+    return 0
+}
+
 [ -r "$PLAN" ] || fail "plan file is missing"
 [ -r "$STEPS" ] || fail "steps file is missing"
+owned_regular "$PLAN" || fail "plan file is not a regular file owned by this user"
+owned_regular "$STEPS" || fail "steps file is not a regular file owned by this user"
 
 JOB_ID=$(plan_value job_id)
 MANAGER=$(plan_value manager)
@@ -107,10 +128,19 @@ CATALOG=$(plan_value catalog_version)
 case "$JOB_ID" in
     ''|*[!a-f0-9]*) fail "job id is invalid" ;;
 esac
+[ "${#JOB_ID}" -eq 16 ] || fail "job id is invalid"
+[ "$JOB_ID" = "$(basename "$JOB")" ] || fail "job id does not match the job directory"
 case "$ADMIN" in
     0|1) : ;;
     *) fail "admin flag is invalid" ;;
 esac
+
+# The digest grammar is checked before it is used. A blank or abbreviated hash is
+# refused here rather than silently skipping verification later.
+case "$EXPECTED_HASH" in
+    ''|*[!a-f0-9]*) fail "plan_hash is missing or malformed; refusing to run an unverified plan" ;;
+esac
+[ "${#EXPECTED_HASH}" -eq 64 ] || fail "plan_hash is not a SHA-256 digest; refusing to run an unverified plan"
 
 # Facts must still match the approved plan.
 if [ -r /etc/os-release ] && [ -n "$EXPECTED_OS" ]; then
@@ -130,6 +160,32 @@ case "$MANAGER" in
     *) fail "unsupported package manager: ${MANAGER:-none}" ;;
 esac
 
+# Manager and distribution must still agree. The plan carries both, so verifying
+# only the OS name would let an apt plan run `dnf` on Debian or vice versa.
+if [ -r /etc/os-release ]; then
+    OS_ID=$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | head -n 1 | tr -d '"'"'"'')
+    OS_LIKE=$(sed -n 's/^ID_LIKE=//p' /etc/os-release 2>/dev/null | head -n 1 | tr -d '"'"'"'')
+    EXPECTED_MANAGER=""
+    case "$OS_ID" in
+        debian|ubuntu|raspbian|linuxmint|pop|elementary|kali|devuan) EXPECTED_MANAGER=apt ;;
+        fedora|rhel|centos|rocky|almalinux|ol) EXPECTED_MANAGER=dnf ;;
+        arch|archarm|manjaro|endeavouros|garuda) EXPECTED_MANAGER=pacman ;;
+        opensuse*|sles|sled|suse) EXPECTED_MANAGER=zypper ;;
+        alpine) EXPECTED_MANAGER=apk ;;
+    esac
+    if [ -z "$EXPECTED_MANAGER" ] && [ -n "$OS_LIKE" ]; then
+        case " $OS_LIKE " in
+            *" debian "*) EXPECTED_MANAGER=apt ;;
+            *" rhel "*|*" fedora "*) EXPECTED_MANAGER=dnf ;;
+            *" arch "*) EXPECTED_MANAGER=pacman ;;
+            *" suse "*|*" opensuse "*) EXPECTED_MANAGER=zypper ;;
+        esac
+    fi
+    if [ -n "$EXPECTED_MANAGER" ] && [ "$MANAGER" != "$EXPECTED_MANAGER" ]; then
+        fail "manager/OS mismatch: ${OS_ID:-unknown} uses $EXPECTED_MANAGER, but the plan says $MANAGER"
+    fi
+fi
+
 command -v "$INSTALL_BIN" >/dev/null 2>&1 || fail "package manager $INSTALL_BIN is not installed"
 command -v "$VERIFY_BIN" >/dev/null 2>&1 || fail "verification tool $VERIFY_BIN is not installed"
 if [ "$ADMIN" = 1 ] && ! command -v sudo >/dev/null 2>&1; then
@@ -137,15 +193,59 @@ if [ "$ADMIN" = 1 ] && ! command -v sudo >/dev/null 2>&1; then
 fi
 
 # Plan integrity: the runner recomputes the digest of the steps it is about to run.
-if command -v sha256sum >/dev/null 2>&1 && [ -n "$EXPECTED_HASH" ]; then
-    ACTUAL_HASH=$(sha256sum "$STEPS" 2>/dev/null | awk '{print $1}')
-    if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
-        fail "steps do not match the approved plan digest"
-    fi
-    printf 'plan_hash_verified=1\n' >>"$RESULT" 2>/dev/null
+# There is no "unavailable" path. If no trustworthy SHA-256 implementation can be
+# found, the job stops before it touches the package manager.
+HASH_TOOL=""
+ACTUAL_HASH=""
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_HASH=$(sha256sum "$STEPS" 2>/dev/null | cut -d' ' -f1)
+    HASH_TOOL=sha256sum
+elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_HASH=$(shasum -a 256 "$STEPS" 2>/dev/null | cut -d' ' -f1)
+    HASH_TOOL=shasum
+elif command -v openssl >/dev/null 2>&1; then
+    ACTUAL_HASH=$(openssl dgst -sha256 -r "$STEPS" 2>/dev/null | cut -d' ' -f1)
+    HASH_TOOL=openssl
 else
-    printf 'plan_hash_verified=unavailable\n' >>"$RESULT" 2>/dev/null
+    fail "no_checksum_tool: no usable SHA-256 implementation (sha256sum, shasum or openssl); refusing to run an unverified plan"
 fi
+case "$ACTUAL_HASH" in
+    ''|*[!a-f0-9]*) fail "no_checksum_tool: $HASH_TOOL did not produce a SHA-256 digest" ;;
+esac
+[ "${#ACTUAL_HASH}" -eq 64 ] || fail "no_checksum_tool: $HASH_TOOL produced a digest of the wrong length"
+if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
+    fail "steps do not match the approved plan digest"
+fi
+printf 'plan_hash_verified=%s\n' "$HASH_TOOL" >>"$RESULT" 2>/dev/null
+
+# The steps file grammar is validated in full *before* the lock and before any
+# package manager runs, so a malformed tail cannot execute a partial plan.
+if [ -n "$(tail -c 1 "$STEPS" 2>/dev/null)" ]; then
+    fail "steps file does not end with a newline"
+fi
+EXPECTED_INDEX=1
+while IFS= read -r raw_line; do
+    [ -n "$raw_line" ] || fail "steps file contains an empty line"
+    old_ifs=$IFS
+    IFS=$(printf '\t')
+    set -f
+    set -- $raw_line
+    set +f
+    IFS=$old_ifs
+    [ "$#" -eq 3 ] || fail "steps file line $EXPECTED_INDEX does not have three tab-separated fields"
+    case "$1" in
+        ''|*[!0-9]*) fail "steps file line $EXPECTED_INDEX has a non-numeric index" ;;
+    esac
+    [ "$1" = "$EXPECTED_INDEX" ] || fail "steps file line $EXPECTED_INDEX is out of order"
+    [ "$2" = install ] || fail "steps file line $EXPECTED_INDEX has an unsupported step kind"
+    [ -n "$3" ] || fail "steps file line $EXPECTED_INDEX has no packages"
+    for package in $3; do
+        case "$package" in
+            ''|*[!A-Za-z0-9+._-]*) fail "steps file line $EXPECTED_INDEX has an invalid package name" ;;
+        esac
+    done
+    EXPECTED_INDEX=$((EXPECTED_INDEX + 1))
+done <"$STEPS"
 
 # Exclusive per-user lock, never a package-manager lock.
 mkdir -p "$LOCKROOT" 2>/dev/null

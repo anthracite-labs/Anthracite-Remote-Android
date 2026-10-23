@@ -57,6 +57,14 @@ internal data class HostFacts(
 
     val hasSudo: Boolean get() = sudoInstalled
 
+    /**
+     * The host's own stable identifier, used only to key tested evidence to *this*
+     * machine. Empty when the host does not expose `/etc/machine-id`; an empty
+     * identity matches no evidence, so it can never silently promote a tier.
+     */
+    val machineIdentity: String
+        get() = raw["machine_id"].orEmpty().takeIf { it.length in 8..64 } ?: ""
+
     /** A container cannot prove supervisor, linger or reboot behaviour. */
     val containerized: Boolean
         get() = containerDocker || containerHint.isNotBlank() || pid1.equals("tini", ignoreCase = true)
