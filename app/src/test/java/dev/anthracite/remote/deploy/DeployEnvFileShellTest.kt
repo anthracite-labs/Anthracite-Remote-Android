@@ -116,6 +116,27 @@ class DeployEnvFileShellTest {
         return Outcome(exit, err.readText())
     }
 
+    /**
+     * Injects [body] at the validation→claim boundary of the generated command.
+     *
+     * The command marks that boundary with `set -C;`: the destination has just
+     * been validated and the very next step claims it. Running a competing
+     * process there makes the race deterministic — no timing loop, no reliance on
+     * luck — while every line of the logic under test still executes unchanged.
+     */
+    private fun withCompetitor(command: String, body: String): String {
+        val marker = "set -C;"
+        val at = command.indexOf(marker)
+        require(at >= 0) { "the generated command no longer marks the claim boundary with set -C;" }
+        return command.substring(0, at) + body + "; " + command.substring(at)
+    }
+
+    /** A home whose deployment directory is the private one the command expects. */
+    private fun preparedHome(name: String): File = home(name).also { root ->
+        deployDir(root).mkdirs()
+        tool("/bin/chmod", "700", deployDir(root).path)
+    }
+
     // ------------------------------------------------------------------ positive
 
     @Test
@@ -230,6 +251,113 @@ class DeployEnvFileShellTest {
                 targetPath(plan, home).exists(),
             )
         }
+    }
+
+    // ------------------------------------------------------------------- the race
+
+    @Test
+    fun `a file created between validation and the claim is never deleted`() {
+        for (shell in shells) {
+            val root = preparedHome("race-${shell.name}")
+            val plan = plan()
+            val target = targetPath(plan, root)
+            // The competing process wins the window and writes its own file.
+            val command = withCompetitor(
+                plan.envFileCommand(),
+                "printf 'FOREIGN=1\n' > \"\$f\"; chmod 644 \"\$f\"",
+            )
+
+            val outcome = run(shell, command, root, plan.envFileBytes())
+
+            assertEquals("${shell.path}: ${outcome.stderr}", DeployPlans.EXIT_INSECURE_PATH, outcome.exit)
+            assertTrue("${shell.path}: the competing file was deleted", target.isFile)
+            assertEquals("${shell.path}: the competing file was modified", "FOREIGN=1\n", target.readText())
+            assertEquals("${shell.path}: the competing file's mode was changed", "rw-r--r--", permissions(target))
+            // It is a refusal to claim, not a failed write: the two are different
+            // conditions and must stay distinguishable.
+            assertTrue("${shell.path}: ${outcome.stderr}", outcome.stderr.contains("left untouched"))
+            assertFalse("${shell.path}: reported as a write failure", outcome.stderr.contains("could not be written"))
+            assertFalse("${shell.path}: the secret reached stderr", outcome.stderr.contains(secret))
+        }
+    }
+
+    @Test
+    fun `a claim lost to a competitor leaves the filesystem otherwise untouched`() {
+        val shell = shells.first()
+        val root = preparedHome("race-untouched")
+        val plan = plan()
+        val directory = deployDir(root)
+        val before = directory.listFiles()!!.map { it.name }.toSet()
+        val command = withCompetitor(plan.envFileCommand(), "printf 'FOREIGN=1\n' > \"\$f\"")
+
+        assertEquals(DeployPlans.EXIT_INSECURE_PATH, run(shell, command, root, plan.envFileBytes()).exit)
+
+        assertEquals("a stray file was left behind", before + targetPath(plan, root).name, directory.listFiles()!!.map { it.name }.toSet())
+        assertEquals("the secret was written anyway", "FOREIGN=1\n", targetPath(plan, root).readText())
+    }
+
+    @Test
+    fun `a partial write after a won claim removes only its own file`() {
+        val payload = (0 until 400).joinToString("") { "KEY$it=value$it\n" }.toByteArray()
+        for (shell in shells) {
+            val root = preparedHome("partial-owned-${shell.name}")
+            val plan = plan()
+
+            val outcome = run(shell, plan.envFileCommand(), root, payload, prefix = "ulimit -f 1; ")
+
+            assertEquals("${shell.path}: ${outcome.stderr}", DeployPlans.EXIT_ENV_WRITE_FAILED, outcome.exit)
+            assertFalse("${shell.path}: a partial secret survived", targetPath(plan, root).exists())
+            assertEquals("${shell.path}: the directory was left dirty", 0, deployDir(root).listFiles()!!.size)
+        }
+    }
+
+    @Test
+    fun `an operation killed mid-write never removes another operation's file`() {
+        val shell = shells.first()
+        val root = preparedHome("cancelled")
+        val cancelled = plan("anthracite-cccc3333")
+        val other = plan("anthracite-dddd4444")
+        // A second operation has already claimed and written its own file.
+        val otherFile = targetPath(other, root).apply { writeText("OTHER=1\n") }
+
+        // Start the operation, wait until it has claimed its file, then kill it
+        // while it is still reading the secret from stdin.
+        val process = ProcessBuilder(shell.path, "-c", cancelled.envFileCommand())
+            .redirectOutput(scratch(".out"))
+            .redirectError(scratch(".err"))
+            .apply { environment()["HOME"] = root.absolutePath }
+            .start()
+        val claimed = targetPath(cancelled, root)
+        val deadline = System.currentTimeMillis() + 30_000
+        while (!claimed.exists() && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        assertTrue("the operation never claimed its file", claimed.exists())
+        process.destroyForcibly()
+        finish(process, "the killed operation")
+
+        assertTrue("the other operation's file was removed", otherFile.isFile)
+        assertEquals("OTHER=1\n", otherFile.readText())
+        // Its own leftover is its own to remove, by its own random name.
+        tool(shell.path, "-c", "HOME=${root.path}; export HOME; ${cancelled.envFileRemoveCommand()}")
+        assertFalse(claimed.exists())
+        assertTrue("cleanup of one operation removed another's file", otherFile.isFile)
+    }
+
+    @Test
+    fun `a stale partial file is never deleted by a different operation`() {
+        val shell = shells.first()
+        val root = preparedHome("stale")
+        val stale = plan("anthracite-eeee5555")
+        val fresh = plan("anthracite-ffff6666")
+        val staleFile = targetPath(stale, root).apply { writeText("TOKEN=leftover") }
+
+        // The fresh operation has its own name, so it neither claims nor cleans
+        // the leftover: only the operation that owns it may remove it.
+        val outcome = run(shell, fresh.envFileCommand(), root, fresh.envFileBytes())
+
+        assertEquals(outcome.stderr, 0, outcome.exit)
+        assertTrue("a different operation deleted a leftover it does not own", staleFile.isFile)
+        assertEquals("TOKEN=leftover", staleFile.readText())
+        assertTrue(targetPath(fresh, root).isFile)
     }
 
     @Test
