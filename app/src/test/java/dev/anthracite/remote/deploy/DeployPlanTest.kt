@@ -208,7 +208,8 @@ class DeployPlanTest {
         val plan = workload(kind = WorkloadKind.STATEFULSET, replicas = 3, containerPort = 9090)
         val manifest = plan.manifest()
         assertEquals(1, Regex("^kind: ", RegexOption.MULTILINE).findAll(manifest).count())
-        assertEquals(1, Regex("^---", RegexOption.MULTILINE).findAll(manifest).count())
+        // One document: no `---` separator can hide a second resource.
+        assertEquals(0, Regex("^---", RegexOption.MULTILINE).findAll(manifest).count())
         assertTrue(manifest.contains("kind: StatefulSet"))
         assertTrue(manifest.contains("  name: anthracite-1a2b3c4d\n"))
         assertTrue(manifest.contains("  namespace: demo\n"))

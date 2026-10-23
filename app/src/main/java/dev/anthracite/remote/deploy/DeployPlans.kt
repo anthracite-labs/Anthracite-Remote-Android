@@ -460,7 +460,7 @@ internal object WorkloadGuard {
         val metadata = document.obj("metadata") ?: return null
         val uid = metadata.string("uid") ?: return null
         if (!DeployPlans.isKubernetesUid(uid)) return null
-        val label = metadata.obj("labels")?.string(DeployPlans.MANAGED_LABEL)
+        val label = metadata.obj("labels")?.string(DeployPlans.MANAGED_LABEL)?.ifBlank { null }
         return WorkloadIdentity(uid, label)
     }
 }

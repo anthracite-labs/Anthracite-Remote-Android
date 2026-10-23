@@ -455,6 +455,14 @@ internal class DeployCreator(private val shell: RemoteShell) {
         command: String,
         timeoutMs: Long,
     ): ExecResult {
+        // Nothing to verify against means nothing to do: do not even connect.
+        if (plan.appliedUid == null) {
+            return ExecResult(
+                64,
+                "",
+                WorkloadGuard.explanation(WorkloadMutationVerdict.REFUSED_NO_RECORDED_IDENTITY),
+            )
+        }
         val preflight = workloadPreflight(plan, verb)
         if (!preflight.allowed) return ExecResult(64, "", preflight.detail)
         return shell.exec(command, null, timeoutMs)

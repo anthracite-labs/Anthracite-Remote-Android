@@ -327,7 +327,7 @@ struct TerminalTabView: View {
                                 sessions = try await model.tmuxSessions()
                                 showingSessions = true
                             } catch {
-                                model.banner = Banner(
+                                model.banner = AppModel.Banner(
                                     text: "The host's tmux sessions could not be read: \(error)",
                                     isError: true
                                 )
