@@ -22,6 +22,14 @@ check "lib file exists" "yes" "$([[ -f "$LIB" ]] && echo yes || echo no)"
 check_contains "lib defines process_gone" "process_gone()" "$(cat "$LIB")"
 check "cancel sources lib" "sourced" "$([[ -n "$(grep -F 'anthracite-provision-lib.sh' "$CANCEL")" ]] && echo sourced || echo missing)"
 check "status sources lib" "sourced" "$([[ -n "$(grep -F 'anthracite-provision-lib.sh' "$STATUS")" ]] && echo sourced || echo missing)"
+# The fallbacks must stay byte-identical to the lib (modulo indentation): a fix
+# to the zombie check that misses them would leave old hosts signalling
+# unproven PIDs.
+lib_body=$(sed -n '/^[[:space:]]*process_gone() {/,/^[[:space:]]*}/p' "$LIB" | sed 's/^[[:space:]]*//')
+cancel_body=$(sed -n '/^[[:space:]]*process_gone() {/,/^[[:space:]]*}/p' "$CANCEL" | sed 's/^[[:space:]]*//')
+status_body=$(sed -n '/^[[:space:]]*process_gone() {/,/^[[:space:]]*}/p' "$STATUS" | sed 's/^[[:space:]]*//')
+check "cancel fallback matches lib" "$lib_body" "$cancel_body"
+check "status fallback matches lib" "$lib_body" "$status_body"
 
 # 2. process_gone behaviour via the lib ------------------------------------
 # Missing /proc PID is gone (exit 0).
