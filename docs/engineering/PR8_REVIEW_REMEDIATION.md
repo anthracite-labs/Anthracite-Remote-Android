@@ -125,5 +125,9 @@ all successful. Details and the failed first attempt (39894393722) are in
 * No live Kubernetes cluster, container runtime, tmux server or SSH host was used.
   The guard's *logic* is unit tested against a fake shell; its behaviour against a
   real API server, a real RBAC authorizer and a real UID is not.
+* The recorded UID lives in the Activity's memory for the session. After process
+  death the app cannot offer a rollback or delete for that object at all: it fails
+  closed rather than guessing an identity. Persisting the identity is a follow-up,
+  not something this PR claims.
 * No physical device and no Android instrumentation test of the wizard.
 * The iOS listing parser is unit tested; no live tmux server was contacted.
