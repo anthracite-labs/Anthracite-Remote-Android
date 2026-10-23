@@ -19,7 +19,7 @@ final class TestSFTPPeer: SFTPTransport, @unchecked Sendable {
     var handler: (@Sendable (TestSFTPPeer, Data) -> Void)?
 
     init() {
-        var captured: AsyncThrowingStream<Data, Error>.Continuation?
+        var captured: AsyncThrowingStream<Data, Error>.Continuation? = nil
         packets = AsyncThrowingStream { captured = $0 }
         stream = captured
     }
@@ -120,12 +120,12 @@ final class TestSFTPPeer: SFTPTransport, @unchecked Sendable {
 actor FakeSFTPServer {
     let peer: TestSFTPPeer
 
-    // Fault injection. Set before the operation under test; read on the actor.
-    var ignoreHandshake = false
-    var ignoreRequests = false
-    var versionReply: UInt32 = 3
-    var delayMilliseconds: UInt64 = 0
-    var failWrites = false
+    // Fault injection. Set before the operation under test through `configure`.
+    private var ignoreHandshake = false
+    private var ignoreRequests = false
+    private var versionReply: UInt32 = 3
+    private var delayMilliseconds: UInt64 = 0
+    private var failWrites = false
 
     private var files: [String: Data] = [:]
     private var handles: [String: String] = [:]
@@ -136,6 +136,21 @@ actor FakeSFTPServer {
     }
 
     // MARK: Test surface
+
+    /// The faults a real server cannot be asked to produce on demand.
+    func configure(
+        handshake: Bool? = nil,
+        requests: Bool? = nil,
+        version: UInt32? = nil,
+        delayMilliseconds delay: UInt64? = nil,
+        writes: Bool? = nil
+    ) {
+        if let handshake { ignoreHandshake = handshake }
+        if let requests { ignoreRequests = requests }
+        if let version { versionReply = version }
+        if let delay { delayMilliseconds = delay }
+        if let writes { failWrites = writes }
+    }
 
     func seed(_ path: String, _ text: String) {
         files[path] = Data(text.utf8)
@@ -330,8 +345,9 @@ final class SFTPFixture {
     init(requestTimeout: Duration = .milliseconds(300), handshakeTimeout: Duration = .milliseconds(300)) {
         let peer = TestSFTPPeer()
         let server = FakeSFTPServer(peer: peer)
-        peer.handler = { [weak server] peer, frame in
-            Task { await server?.handle(frame) }
+        peer.handler = { [weak server] _, frame in
+            // The server is an actor: the request is answered in its own context.
+            _ = Task { await server?.handle(frame) }
         }
         self.peer = peer
         self.server = server
@@ -370,7 +386,7 @@ final class SFTPClientStateTests: XCTestCase {
 
     func testASilentServerTimesOutTheHandshakeInsteadOfHanging() async throws {
         let fixture = SFTPFixture(requestTimeout: .milliseconds(200), handshakeTimeout: .milliseconds(200))
-        await fixture.server.ignoreHandshake = true
+        await fixture.server.configure(handshake: true)
         let started = Date()
 
         do {
@@ -394,7 +410,7 @@ final class SFTPClientStateTests: XCTestCase {
 
     func testAWrongVersionFailsClosed() async throws {
         let fixture = SFTPFixture()
-        await fixture.server.versionReply = 4
+        await fixture.server.configure(version: 4)
 
         do {
             _ = try await fixture.client.readFile("/a.txt")
@@ -454,7 +470,7 @@ final class SFTPClientStateTests: XCTestCase {
     func testADelayedReplyStillMatchesItsRequest() async throws {
         let fixture = SFTPFixture(requestTimeout: .seconds(3), handshakeTimeout: .seconds(3))
         await fixture.server.seed("/slow.txt", "slow but correct")
-        await fixture.server.delayMilliseconds = 150
+        await fixture.server.configure(delayMilliseconds: 150)
 
         let data = try await fixture.client.readFile("/slow.txt")
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "slow but correct")
@@ -464,7 +480,7 @@ final class SFTPClientStateTests: XCTestCase {
         let fixture = SFTPFixture(requestTimeout: .seconds(3))
         await fixture.server.seed("/one.txt", "first")
         await fixture.server.seed("/two.txt", "second")
-        await fixture.server.delayMilliseconds = 40
+        await fixture.server.configure(delayMilliseconds: 40)
 
         async let one = fixture.client.readFile("/one.txt")
         async let two = fixture.client.readFile("/two.txt")
@@ -478,7 +494,7 @@ final class SFTPClientStateTests: XCTestCase {
     func testALateReplyAfterATimeoutDoesNotCorruptTheNextRequest() async throws {
         let fixture = SFTPFixture(requestTimeout: .milliseconds(150), handshakeTimeout: .seconds(2))
         await fixture.server.seed("/a.txt", "alpha")
-        await fixture.server.ignoreRequests = true
+        await fixture.server.configure(requests: true)
 
         do {
             _ = try await fixture.client.readFile("/a.txt")
@@ -487,7 +503,7 @@ final class SFTPClientStateTests: XCTestCase {
             XCTAssertEqual(error as? SFTPError, .timedOut)
         }
         let stale = fixture.peer.requestIds.last
-        await fixture.server.ignoreRequests = false
+        await fixture.server.configure(requests: false)
 
         // The reply for the abandoned request arrives now, with its old id.
         if let stale {
@@ -505,7 +521,7 @@ final class SFTPClientStateTests: XCTestCase {
     func testCancellingARequestReturnsAtOnceAndTheClientStaysUsable() async throws {
         let fixture = SFTPFixture(requestTimeout: .seconds(30), handshakeTimeout: .seconds(2))
         await fixture.server.seed("/a.txt", "alpha")
-        await fixture.server.ignoreRequests = true
+        await fixture.server.configure(requests: true)
 
         let task = Task { try await fixture.client.readFile("/a.txt") }
         try await Task.sleep(for: .milliseconds(100))
@@ -520,7 +536,7 @@ final class SFTPClientStateTests: XCTestCase {
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 5, "cancellation waited for the timeout")
 
-        await fixture.server.ignoreRequests = false
+        await fixture.server.configure(requests: false)
         let data = try await fixture.client.readFile("/a.txt")
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "alpha")
     }
@@ -528,7 +544,7 @@ final class SFTPClientStateTests: XCTestCase {
     func testCloseReleasesEveryWaitingCaller() async throws {
         let fixture = SFTPFixture(requestTimeout: .seconds(30), handshakeTimeout: .seconds(2))
         await fixture.server.seed("/a.txt", "alpha")
-        await fixture.server.ignoreRequests = true
+        await fixture.server.configure(requests: true)
 
         let task = Task { try await fixture.client.readFile("/a.txt") }
         try await Task.sleep(for: .milliseconds(100))
@@ -561,7 +577,7 @@ final class SFTPClientStateTests: XCTestCase {
 
     func testAFailedUploadRemovesItsTemporaryFile() async throws {
         let fixture = SFTPFixture(requestTimeout: .seconds(2))
-        await fixture.server.failWrites = true
+        await fixture.server.configure(writes: true)
 
         do {
             try await fixture.client.writeFile("/broken.txt", data: Data("payload".utf8))
