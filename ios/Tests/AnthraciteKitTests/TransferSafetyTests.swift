@@ -12,7 +12,7 @@ final class TransferSafetyTests: XCTestCase {
         var decoder = SFTPPacketDecoder()
         decoder.append(Data([0x00, 0x00, 0x00, 0x00]))
         XCTAssertThrowsError(try decoder.next()) { error in
-            guard case SFTPError.protocolViolation = error as? SFTPError else {
+            guard let sftp = error as? SFTPError, case .protocolViolation = sftp else {
                 return XCTFail("expected a protocol violation, got \(error)")
             }
         }

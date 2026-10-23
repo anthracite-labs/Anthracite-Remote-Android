@@ -275,7 +275,7 @@ final class SFTPWireTests: XCTestCase {
         XCTAssertTrue(reader.isAtEnd)
     }
 
-    func testDecoderHandlesSplitPacketsAndRejectsAbsurdLengths() {
+    func testDecoderHandlesSplitPacketsAndRejectsAbsurdLengths() throws {
         var writer = SFTPWriter()
         writer.write(byte: SFTP.replyData)
         writer.write(uint32: 7)
