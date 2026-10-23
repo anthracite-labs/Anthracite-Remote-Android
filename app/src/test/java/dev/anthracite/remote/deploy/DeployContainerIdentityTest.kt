@@ -126,14 +126,15 @@ class DeployContainerIdentityTest {
 
     @Test
     fun `the file is removed even when the write fails`() {
+        val target = plan()
         val shell = FakeShell {
             when {
-                it == plan().envFileCommand() -> ExecResult(DeployPlans.EXIT_INSECURE_PATH, "", "refused")
+                it == target.envFileCommand() -> ExecResult(DeployPlans.EXIT_INSECURE_PATH, "", "refused")
                 it.startsWith("rm -f") -> ExecResult(0, "", "")
                 else -> ExecResult(0, "", "")
             }
         }
-        val outcome = DeployCreator(shell).containerRun(plan())
+        val outcome = DeployCreator(shell).containerRun(target)
 
         assertEquals(DeployPlans.EXIT_INSECURE_PATH, outcome.result.exitCode)
         assertNull(outcome.identity)

@@ -85,7 +85,7 @@ class DeployPlanTest {
         assertTrue(run.contains("--publish 8080:80"))
         assertTrue(run.contains("--volume /srv/data:/var/lib/data:ro"))
         // The value is not an argument: the runtime reads a 0600 file instead.
-        assertTrue(run.contains("--env-file \"\$HOME/.anthracite/deploy/anthracite-1a2b3c4d.env\""))
+        assertTrue(run.contains("--env-file ${plan.envFilePath()}"))
         assertFalse(run.contains("GREETING"))
         assertTrue(run.endsWith(" nginx:1.27"))
         assertTrue(plan.warnings.any { it.contains("root") })
@@ -104,7 +104,8 @@ class DeployPlanTest {
         assertEquals("TOKEN=***", plan.environmentPreview().single())
         assertEquals("TOKEN=$secret\n", String(plan.envFileBytes()))
         // The file is created with a private umask and removed by path only.
-        assertTrue(plan.envFileCommand().startsWith("umask 077; mkdir -p"))
+        assertTrue(plan.envFileCommand().startsWith("umask 077; d=\"\$HOME/.anthracite/deploy\""))
+        assertTrue(plan.envFileCommand().contains("set -C; cat > \"\$f\""))
         assertTrue(plan.envFileRemoveCommand().startsWith("rm -f \""))
         assertFalse(plan.envFileRemoveCommand().contains(secret))
     }

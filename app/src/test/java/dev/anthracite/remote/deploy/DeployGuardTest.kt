@@ -1,6 +1,7 @@
 package dev.anthracite.remote.deploy
 
 import dev.anthracite.remote.ExecResult
+import dev.anthracite.remote.host.PosixShell
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -190,7 +191,7 @@ class DeployGuardTest {
                 command.endsWith("config current-context") -> ExecResult(0, "prod-cluster", "")
                 command.contains("auth can-i") -> ExecResult(0, "yes", "")
                 command.endsWith("create -f -") -> ExecResult(
-                    0,
+                    1,
                     "",
                     "Error from server (AlreadyExists): error when creating \"-\": " +
                         "deployments.apps \"anthracite-1a2b3c4d\" already exists",
@@ -238,9 +239,9 @@ class DeployGuardTest {
         assertEquals(0, result.exitCode)
         val mutation = shell.commands.last { it.contains("delete deployment/") }
         // One shell invocation: read the uid, compare, then act.
-        assertTrue(mutation.startsWith("set -eu; uid=\$(kubectl --context 'prod-cluster' --namespace 'demo' get deployment/"))
+        assertTrue(mutation.startsWith("set -eu; uid=\$(kubectl --context ${PosixShell.quote("prod-cluster")} --namespace ${PosixShell.quote("demo")} get deployment/"))
         assertTrue(mutation.contains("exit ${DeployPlans.EXIT_IDENTITY_UNAVAILABLE}"))
-        assertTrue(mutation.contains("if [ \"\$uid\" != '${uid}' ]"))
+        assertTrue(mutation.contains("if [ \"\$uid\" != ${PosixShell.quote(uid)} ]"))
         assertTrue(mutation.contains("exit ${DeployPlans.EXIT_IDENTITY_CHANGED}"))
         assertTrue(mutation.trimEnd().endsWith("delete deployment/anthracite-1a2b3c4d --ignore-not-found --wait=false"))
     }
