@@ -224,7 +224,9 @@ final class TerminalOutputTests: XCTestCase {
         for number in 0..<40 {
             var buffer = channel.allocator.buffer(capacity: 32 * 1024)
             buffer.writeBytes(chunk(number))
-            _ = try channel.writeInbound(NIOAny(SSHChannelData(type: .channel, data: .byteBuffer(buffer))))
+            // `writeInbound` wraps its argument in a NIOAny itself; wrapping it here
+            // first trips NIO's own assertion.
+            _ = try channel.writeInbound(SSHChannelData(type: .channel, data: .byteBuffer(buffer)))
         }
 
         XCTAssertTrue(reader.paused, "the handler kept reading past the bound")
