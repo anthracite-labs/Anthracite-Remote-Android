@@ -16,3 +16,7 @@ keystore.properties
 *.jks
 *.keystore
 .DS_Store
+# Generated Python bytecode is never committed; PR checks run from source.
+__pycache__/
+*.pyc
+*.pyo

@@ -196,9 +196,9 @@ class ManagedDeploymentsTest {
 
         preferences.failNextCommit = true
         // A valid record for a different container: only the failed commit can
-        // explain the old value still being there.
+        // explain the old collection still being there.
         assertFalse(store.save(container(otherContainerId)))
-        assertEquals(container(), store.load())
+        assertEquals(listOf(container()), store.loadAll())
     }
 
     @Test
@@ -209,6 +209,7 @@ class ManagedDeploymentsTest {
         preferences.failNextCommit = true
         assertFalse(store.save(container()))
         assertNull(store.load())
+        assertTrue(store.loadAll().isEmpty())
     }
 
     @Test
@@ -218,6 +219,86 @@ class ManagedDeploymentsTest {
         assertTrue(store.save(container()))
         assertTrue(store.clear())
         assertNull(store.load())
+        assertTrue(store.loadAll().isEmpty())
+    }
+
+    @Test
+    fun `a second deployment is added instead of replacing the first`() {
+        val preferences = FakePreferences()
+        val store = ManagedDeploymentStore(preferences, ManagedDeploymentStore.keyFor("host-1"))
+        assertTrue(store.save(container()))
+        assertTrue(store.save(container(otherContainerId).copy(name = "anthracite-9f8e7d6c")))
+
+        val all = store.loadAll()
+        assertEquals(2, all.size)
+        assertEquals(setOf(containerId, otherContainerId), all.map { it.identity }.toSet())
+    }
+
+    @Test
+    fun `saving the same identity updates it in place`() {
+        val preferences = FakePreferences()
+        val store = ManagedDeploymentStore(preferences, ManagedDeploymentStore.keyFor("host-1"))
+        assertTrue(store.save(container()))
+        assertTrue(store.save(container().copy(createdAtMillis = 1_700_000_000_001)))
+
+        assertEquals(listOf(container().copy(createdAtMillis = 1_700_000_000_001)), store.loadAll())
+    }
+
+    @Test
+    fun `the collection is bounded and evicts the oldest first`() {
+        val preferences = FakePreferences()
+        val store = ManagedDeploymentStore(preferences, ManagedDeploymentStore.keyFor("host-1"))
+        val cap = ManagedDeploymentStore.MAX_RECORDS_PER_HOST
+        for (index in 0 until cap + 3) {
+            val identity = "%064x".format(index.toLong() + 0xabcd)
+            assertTrue(store.save(container(identity).copy(createdAtMillis = 1_700_000_000_000 + index)))
+        }
+        val all = store.loadAll()
+        assertEquals(cap, all.size)
+        // The three oldest are gone; the newest — including the just-saved one —
+        // survive.
+        assertTrue(all.none { it.createdAtMillis == 1_700_000_000_000L })
+        assertEquals(1_700_000_000_000L + cap + 2, all.maxOf { it.createdAtMillis })
+        assertEquals(all.maxByOrNull { it.createdAtMillis }, store.load())
+    }
+
+    @Test
+    fun `removing one identity leaves the others alone`() {
+        val preferences = FakePreferences()
+        val store = ManagedDeploymentStore(preferences, ManagedDeploymentStore.keyFor("host-1"))
+        assertTrue(store.save(container()))
+        assertTrue(store.save(container(otherContainerId).copy(name = "anthracite-9f8e7d6c")))
+
+        assertTrue(store.remove(containerId))
+        assertEquals(listOf(otherContainerId), store.loadAll().map { it.identity })
+        // Removing it again is a no-op, not a failure.
+        assertTrue(store.remove(containerId))
+    }
+
+    @Test
+    fun `a legacy single record loads and migrates on the next save`() {
+        val preferences = FakePreferences()
+        val key = ManagedDeploymentStore.keyFor("host-1")
+        preferences.values[key] = ManagedDeploymentCodec.encode(container())!!
+        val store = ManagedDeploymentStore(preferences, key)
+
+        assertEquals(listOf(container()), store.loadAll())
+        assertTrue(store.save(container(otherContainerId).copy(name = "anthracite-9f8e7d6c")))
+        assertEquals(2, store.loadAll().size)
+    }
+
+    @Test
+    fun `a collection round trip keeps every record and drops garbage`() {
+        val records = listOf(container(), workload())
+        val encoded = ManagedDeploymentCodec.encodeAll(records)
+        assertNotNull(encoded)
+        assertEquals(records.toSet(), ManagedDeploymentCodec.decodeAll(encoded).toSet())
+
+        assertTrue(ManagedDeploymentCodec.decodeAll(null).isEmpty())
+        assertTrue(ManagedDeploymentCodec.decodeAll("").isEmpty())
+        assertTrue(ManagedDeploymentCodec.decodeAll("{").isEmpty())
+        assertTrue(ManagedDeploymentCodec.decodeAll("""{"version":9,"records":[]}""").isEmpty())
+        assertNull(ManagedDeploymentCodec.encodeAll(listOf(container(identity = "not-an-id"))))
     }
 
     @Test

@@ -262,23 +262,33 @@ internal class SftpBrowser(private val ssh: SshClient) {
         for (entry in list(path)) {
             count++
             if (count > MAX_ENTRIES) throw RemoteFileException("Directory has too many entries to delete safely")
+            // The listing is a snapshot: only paths still inside the directory
+            // being deleted are acted on, whatever the listing claimed.
+            if (!RemotePath.isWithin(path, entry.path)) {
+                throw RemoteFileException(
+                    "A directory changed while it was being deleted; nothing further was removed",
+                )
+            }
+            // The listing is a snapshot, and another process on the host can
+            // replace an entry before it is removed — a directory with a symlink
+            // to somewhere else, which `ls` would then follow into, or any entry
+            // whose kind changed since it was listed. Re-read every entry with
+            // `lstat` immediately before acting and stop if it is no longer the
+            // entry that was listed.
+            //
+            // This narrows the window; it does not close it. No SFTP v3 request
+            // can be made conditional on what was read, so the honest statement
+            // is "we stop when we can tell", never "this cannot be redirected".
+            val current = stat(entry.path, followLinks = false)
+                ?: throw RemoteFileException(
+                    "A directory changed while it was being deleted; nothing further was removed",
+                )
+            if (current.directory != entry.directory || current.symlink != entry.symlink) {
+                throw RemoteFileException(
+                    "A directory changed while it was being deleted; nothing further was removed",
+                )
+            }
             if (entry.directory && !entry.symlink) {
-                // The listing is a snapshot, and another process on the host can
-                // replace this entry with a symlink to somewhere else before the
-                // recursion reopens it — `ls` follows the link, and the delete would
-                // then work outside the chosen directory. Re-read the entry with
-                // `lstat` immediately before descending and stop if it is no longer
-                // the plain directory that was listed.
-                //
-                // This narrows the window; it does not close it. No SFTP v3 request
-                // can be made conditional on what was read, so the honest statement
-                // is "we stop when we can tell", never "this cannot be redirected".
-                val current = stat(entry.path, followLinks = false)
-                if (current == null || !current.directory || current.symlink) {
-                    throw RemoteFileException(
-                        "A directory changed while it was being deleted; nothing further was removed",
-                    )
-                }
                 deleteTree(entry.path, depth + 1)
             } else {
                 withSftp { it.rm(entry.path) }
@@ -317,6 +327,14 @@ internal class SftpBrowser(private val ssh: SshClient) {
      * The two existence checks only narrow the race; another client may create
      * the destination between the last check and rename. The unique temporary
      * name isolates partial uploads, not concurrent writes to the final path.
+     *
+     * There is deliberately no atomic no-replace mode here: the server cannot
+     * provide one through this transport, so this method refuses to imply it.
+     * Callers that need a guarantee that a concurrent creation cannot be
+     * replaced must not use SFTP upload for that path. When a creation is
+     * detected at either check the upload is refused and the temporary file is
+     * removed; a creation in the final instant between the last check and the
+     * rename cannot be detected and may be replaced by the rename.
      */
     fun upload(path: String, bytes: ByteArray, overwrite: Boolean) {
         require(RemotePath.isValid(path)) { "invalid remote path" }

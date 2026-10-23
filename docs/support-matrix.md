@@ -67,7 +67,7 @@ image a claim came from, on which date, from which run.
 | Key encoding incl. modifiers, function keys, paste, mouse | unit tested | `TerminalKeysTest` |
 | Clipboard write blocked (OSC 52), hyperlinks never opened | unit tested | `TerminalEmulatorTest` |
 | Host-owned sessions (tmux identity, detach/reattach) | unit tested parsers + shell | `TmuxParsingTest`, `provision-run-test.sh` |
-| IME behaviour, glyph rendering, touch scrolling on hardware | **untested** | needs a physical device pass |
+| IME behaviour, glyph rendering, touch scrolling on hardware | **untested** | acceptance plan in `docs/acceptance/android-hardware.md`, not run |
 | Logout and reboot survival | **unknown, never claimed** | `HostFacts.durability()` reports UNKNOWN |
 | Terminal tabs across process death | not supported by design | `tmux` is the durable option |
 
@@ -80,14 +80,15 @@ image a claim came from, on which date, from which run.
 | GitHub device flow + PAT, rate-limit and 401 handling | unit tested against a mock transport; live API untested |
 | GitHub issues: list, detail, comments, open/close, create | mocked-transport tests only; no live API write test |
 | GitHub PR: list, diff, reviews, checks, SHA-pinned merge | mocked-transport tests; live merge untested |
+| Service CLI surface (tmux session create/list/capture/kill, `ssh -G`, sftp failure speed, docker/podman/kubectl client versions) | smoke tested against the real binaries (`service-smoke-test.sh`, `service_integration` job); no daemon, cluster or network contacted |
 | Container creation, logs, ownership-checked removal | plan/command unit tests: removal re-reads the runtime id recorded at creation, requires it and the label to match, and removes by id; no live daemon in CI |
 | Environment values for created containers | written through stdin to a per-plan-token `0600` file created under noclobber in a directory checked to be private and not a symlink, passed with `--env-file`, removed on every path; unit tested; anyone with the runtime socket can still read them with `inspect`, which the screen states; a racing local process inside the user's own home is not fully excluded |
 | Android SFTP upload no-overwrite | **not guaranteed, and no longer implied**: JSch 2.28.8 cannot request an exclusive create (`SSH_FXF_EXCL` is private and never sent) and SFTP v3 `RENAME` replaces, so another client can create the target between the final check and the rename |
-| SFTP recursive delete vs. a path swapped to a symlink | **narrowed, not eliminated**: every directory is re-read with `lstat` immediately before it is descended into, so an entry replaced by a link stops the delete instead of being followed; SFTP v3 has no handle-relative remove, so no request can be made conditional on what was read, and the confirmation text says the delete is not one atomic step |
+| SFTP recursive delete vs. a path swapped to a symlink | **narrowed, not eliminated**: every entry is re-read with `lstat` immediately before it is acted on and the delete stops when an entry is no longer the entry that was listed, so a replaced directory is never descended into; SFTP v3 has no handle-relative remove, so no request can be made conditional on what was read, and the confirmation text says the delete is not one atomic step |
 | Kubernetes workload creation | `kubectl create` only: an existing object is refused with `AlreadyExists` and left untouched; creation is authorised by `can-i create`; names carry 128 random bits. Unit tested against a fake host; **no live cluster in CI** |
 | Kubernetes workload delete | the deletion is `kubectl delete --raw=<resource path> -f -` carrying `DeleteOptions.preconditions.uid`, so the API server itself refuses it when the object is not the reviewed one; the document is built from the recorded UID and reaches kubectl on stdin. Unit tested (argv and stdin document executed under `/bin/sh` with a stand-in `kubectl`, and a refusal propagating as a non-zero status); **no live API server in CI** |
 | Kubernetes workload rollback | `kubectl rollout undo` has no server-side precondition. The context, RBAC and UID are re-read immediately before it, and the UID is read **again afterwards**: a replaced object is reported as replaced (exit 66) and an unreadable one as unknown (exit 65) instead of as success. Narrowed and then verified, not atomic, and the plan warning says so. Unit tested in `DeployGuardTest` |
-| Managed deployment identity across process death | the container id or Kubernetes UID recorded at creation is persisted with the host id, host-key fingerprint, runtime, context, namespace and kind. On restore the record is compared with the current target before anything is read, and the live identity is read before any action is offered; only an equal identity enables logs and removal, and replaced/gone/unreadable/other-target are shown as themselves. Records are versioned and refused if corrupt. Unit tested (`ManagedDeploymentsTest`); not exercised across a real process death on a device |
+| Managed deployment identity across process death | the container id or Kubernetes UID recorded at creation is persisted with the host id, host-key fingerprint, runtime, context, namespace and kind. One host holds a bounded collection of records (8, oldest evicted first), each keyed by its own immutable identity and reconciled individually — a second deployment is added, never swaps the first. On restore the records for the current target are compared before anything is read, and each live identity is read before any action is offered; only an equal identity enables logs and removal, and replaced/gone/unreadable/other-target are shown as themselves. Records are versioned (legacy single records still load) and refused if corrupt. Unit tested (`ManagedDeploymentsTest`); not exercised across a real process death on a device |
 | Kubernetes object identity | the UID is recorded after a confirmed apply; without it no rollback or delete is offered: unit tested; a real API server was never contacted |
 
 ## iOS
@@ -121,7 +122,7 @@ including a simulator launch test.
 | GitHub: issues list/detail/comments/create/close, checks, SHA-pinned merge | stubbed-transport tests; no live API call |
 | Deployments: container list/logs/ownership-checked removal, Kubernetes apply with per-mutation RBAC check, native `systemd-run --user` | command construction unit tested; no live daemon or cluster |
 | Guided provisioning: same reviewed host scripts as Android, plan digest, detached runner, host-side compare-and-signal cancel | plan/cancel logic unit tested; no real-host run |
-| IME, VoiceOver, hardware keyboard, re-creation after process death | **untested** (no physical device) |
+| IME, VoiceOver, hardware keyboard, re-creation after process death | **untested** | acceptance plan in `docs/acceptance/ios-hardware.md`, not run (no physical device) |
 
 ## Deliberately out of scope
 

@@ -1,0 +1,26 @@
+name: External link check
+
+# PR checks stay offline on purpose: ci/static_checks.py validates URL shape and
+# local targets without a request, so a link that dies later is never a defect
+# in the commit that added it. This workflow is the other half — a weekly
+# scheduled availability pass with retries, where 401/403/429 are warnings
+# rather than failures.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    name: External documentation links
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check external link availability
+        run: python3 ci/check_external_links.py

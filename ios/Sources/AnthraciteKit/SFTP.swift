@@ -801,6 +801,11 @@ public actor SFTPClient {
     /// Writes to a temporary name and renames it. A final name never points at a
     /// half-written file.
     ///
+    /// The rename replaces whatever is at the final name: like the Android
+    /// upload path, this offers no atomic no-replace mode, because SFTP v3
+    /// rename cannot provide one. Callers that must not replace a concurrent
+    /// creation should check first and treat the window as best-effort.
+    ///
     /// The temporary name is random per attempt. A fixed suffix meant one
     /// interrupted upload left `<file>.anthracite-part` behind, and every later
     /// attempt then failed on the exclusive create until someone removed it by

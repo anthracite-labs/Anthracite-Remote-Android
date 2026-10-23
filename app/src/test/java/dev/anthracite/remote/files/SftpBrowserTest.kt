@@ -151,6 +151,38 @@ class SftpBrowserTest {
     }
 
     @Test
+    fun `concurrent uploads to the same path leave one complete winner and no litter`() {
+        // No atomic no-replace primitive exists in JSch/SFTP v3, so two uploads
+        // racing on one path may both pass the existence checks and rename in
+        // turn. What must still hold: the rename swaps complete files, so the
+        // survivor is always one whole payload, never a mixture, and every
+        // temporary name is either renamed or removed.
+        val first = ByteArray(128 * 1024) { 0x41 }
+        val second = ByteArray(128 * 1024) { 0x42 }
+        val pool = Executors.newFixedThreadPool(2)
+        val start = CountDownLatch(1)
+        try {
+            val tasks = listOf(first, second).map { payload ->
+                pool.submit<Boolean> {
+                    start.await()
+                    runCatching { browser.upload("/same-path.txt", payload, false) }
+                    true
+                }
+            }
+            start.countDown()
+            tasks.forEach { assertTrue(it.get(30, TimeUnit.SECONDS)) }
+            val survivor = Files.readAllBytes(root.resolve("same-path.txt"))
+            assertTrue(
+                "a concurrent upload left a mixture behind",
+                survivor.contentEquals(first) || survivor.contentEquals(second),
+            )
+            assertTrue(root.toFile().listFiles().orEmpty().none { it.name.endsWith(".anthracite.tmp") })
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
     fun `long unicode destination does not make the temporary name exceed filesystem byte limit`() {
         val name = "中".repeat(80) // 240 UTF-8 bytes, a legal ext4 filename
         browser.upload("/$name", byteArrayOf(42), overwrite = false)
@@ -200,6 +232,26 @@ class SftpBrowserTest {
 
         assertFalse(Files.exists(root.resolve("tree")))
         assertTrue(Files.exists(root.resolve("sibling.txt")))
+    }
+
+    @Test
+    fun `recursive delete removes a symlink to a directory as a link and never follows it`() {
+        val outside = Files.createTempDirectory("anthracite-sftp-outside")
+        try {
+            Files.write(outside.resolve("precious.txt"), "keep me".toByteArray())
+            Files.createDirectories(root.resolve("tree"))
+            Files.createSymbolicLink(root.resolve("tree/linkdir"), outside)
+
+            browser.delete("/tree", recursive = true)
+
+            assertFalse(Files.exists(root.resolve("tree")))
+            assertFalse(
+                Files.exists(root.resolve("tree/linkdir"), java.nio.file.LinkOption.NOFOLLOW_LINKS),
+            )
+            assertTrue("the link target must survive", Files.exists(outside.resolve("precious.txt")))
+        } finally {
+            outside.toFile().deleteRecursively()
+        }
     }
 
     @Test

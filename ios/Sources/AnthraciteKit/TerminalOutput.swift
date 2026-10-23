@@ -42,6 +42,12 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
     private var parked: CheckedContinuation<Data?, Error>?
     private var terminal: Result<Void, Error>?
     private var paused = false
+    /// Monotonic generation bumped on every pause/resume transition. Flow-control
+    /// delivery captures a generation and drops it if a newer transition exists,
+    /// so a stale pause can never overwrite a fresh resume (or vice versa).
+    /// After delivery, a changed generation is re-delivered, so the final signal
+    /// always matches the final state even when transitions overlap.
+    private var generation: UInt64 = 0
     /// Called with `true` to stop reading, `false` to start again.
     private var flowControl: (@Sendable (Bool) -> Void)?
 
@@ -52,11 +58,14 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
     /// Connects the reader. The current state is delivered at once, so a pause that
     /// happened before the channel existed is not lost.
     func onFlowControl(_ closure: @escaping @Sendable (Bool) -> Void) {
+        let current: Bool
+        let gen: UInt64
         lock.lock()
         flowControl = closure
-        let pausedNow = paused
+        current = paused
+        gen = generation
         lock.unlock()
-        closure(pausedNow)
+        emitFlowControl(generation: gen, paused: current)
     }
 
     public func makeAsyncIterator() -> AsyncIterator { AsyncIterator(stream: self) }
@@ -90,7 +99,8 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
     func append(_ chunk: Data) {
         guard !chunk.isEmpty else { return }
         var parked: CheckedContinuation<Data?, Error>?
-        var pause = false
+        var notifyGen: UInt64?
+        var notifyValue = false
         lock.lock()
         if terminal != nil {
             lock.unlock()
@@ -104,12 +114,14 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
             buffered += chunk.count
             if !paused, buffered > Self.highWaterMark {
                 paused = true
-                pause = true
+                generation &+= 1
+                notifyGen = generation
+                notifyValue = true
             }
         }
         lock.unlock()
         parked?.resume(returning: chunk)
-        if pause { flowControl?(true) }
+        if let gen = notifyGen { emitFlowControl(generation: gen, paused: notifyValue) }
     }
 
     /// Ends the stream normally; bytes already queued are still delivered.
@@ -137,17 +149,18 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
     private func nextChunk() async throws -> Data? {
         // Fast path, and the one that keeps the bound honest: taking a chunk may
         // drop the queue below the low-water mark, which reopens the reader.
-        var resume = false
+        var resumeGen: UInt64?
         lock.lock()
         if !queue.isEmpty {
             let chunk = queue.removeFirst()
             buffered -= chunk.count
             if paused, buffered <= Self.lowWaterMark {
                 paused = false
-                resume = true
+                generation &+= 1
+                resumeGen = generation
             }
             lock.unlock()
-            if resume { flowControl?(false) }
+            if let gen = resumeGen { emitFlowControl(generation: gen, paused: false) }
             return chunk
         }
         if let terminal {
@@ -156,9 +169,15 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
             return nil
         }
         if Task.isCancelled {
-            if paused { paused = false; resume = true }
+            if paused {
+                paused = false
+                generation &+= 1
+                resumeGen = generation
+            } else {
+                resumeGen = nil
+            }
             lock.unlock()
-            if resume { flowControl?(false) }
+            if let gen = resumeGen { emitFlowControl(generation: gen, paused: false) }
             throw CancellationError()
         }
         lock.unlock()
@@ -168,16 +187,18 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
                 // Registration and the checks share one lock, so a chunk that
                 // arrives now either resolves this waiter or is queued behind it —
                 // it can never be left unread with a consumer parked forever.
+                var innerResumeGen: UInt64?
                 lock.lock()
                 if !queue.isEmpty {
                     let chunk = queue.removeFirst()
                     buffered -= chunk.count
                     if paused, buffered <= Self.lowWaterMark {
                         paused = false
-                        resume = true
+                        generation &+= 1
+                        innerResumeGen = generation
                     }
                     lock.unlock()
-                    if resume { flowControl?(false) }
+                    if let gen = innerResumeGen { self.emitFlowControl(generation: gen, paused: false) }
                     continuation.resume(returning: chunk)
                 } else if let terminal {
                     lock.unlock()
@@ -192,10 +213,11 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
                     // here would strand the continuation for ever.
                     if paused {
                         paused = false
-                        resume = true
+                        generation &+= 1
+                        innerResumeGen = generation
                     }
                     lock.unlock()
-                    if resume { flowControl?(false) }
+                    if let gen = innerResumeGen { self.emitFlowControl(generation: gen, paused: false) }
                     continuation.resume(throwing: CancellationError())
                 } else {
                     parked = continuation
@@ -210,13 +232,50 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
     /// A consumer that went away must not leave the reader paused for ever.
     private func abandon() {
         var parked: CheckedContinuation<Data?, Error>?
-        var resume = false
+        var resumeGen: UInt64?
         lock.lock()
         parked = self.parked
         self.parked = nil
-        if paused { paused = false; resume = true }
+        if paused {
+            paused = false
+            generation &+= 1
+            resumeGen = generation
+        }
         lock.unlock()
         parked?.resume(throwing: CancellationError())
-        if resume { flowControl?(false) }
+        if let gen = resumeGen { emitFlowControl(generation: gen, paused: false) }
+    }
+
+    /// Delivers a flow-control signal without ever letting a stale signal win.
+    ///
+    /// State changes capture their generation while holding the lock; delivery
+    /// happens after unlocking so the callback cannot deadlock back into the
+    /// stream. If a newer transition exists by delivery time, the stale capture
+    /// is replaced with the newest state instead of being delivered. After each
+    /// delivery the generation is re-checked, so overlapping transitions
+    /// converge on the final state rather than settling on whichever callback
+    /// happened to run last.
+    private func emitFlowControl(generation gen: UInt64, paused value: Bool) {
+        var pendingGen = gen
+        var pendingValue = value
+        while true {
+            let callback: (@Sendable (Bool) -> Void)?
+            lock.lock()
+            if pendingGen != generation {
+                pendingGen = generation
+                pendingValue = paused
+            }
+            callback = flowControl
+            lock.unlock()
+            callback?(pendingValue)
+            lock.lock()
+            if generation == pendingGen {
+                lock.unlock()
+                return
+            }
+            pendingGen = generation
+            pendingValue = paused
+            lock.unlock()
+        }
     }
 }

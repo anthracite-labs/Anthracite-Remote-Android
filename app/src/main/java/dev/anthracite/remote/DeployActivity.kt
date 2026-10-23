@@ -23,6 +23,7 @@ import dev.anthracite.remote.deploy.DeployWizard
 import dev.anthracite.remote.deploy.DeploymentTarget
 import dev.anthracite.remote.deploy.KubePod
 import dev.anthracite.remote.deploy.LiveIdentity
+import dev.anthracite.remote.deploy.ManagedDeployment
 import dev.anthracite.remote.deploy.ManagedDeploymentStore
 import dev.anthracite.remote.deploy.ManagedPlans
 import dev.anthracite.remote.deploy.ManagedReconciliation
@@ -190,16 +191,14 @@ class DeployActivity : AppCompatActivity() {
      *
      * A record is written only when the runtime or cluster reported an immutable
      * identity; without one nothing is persisted, so a later screen cannot offer
-     * an operation based on the name alone.
+     * an operation based on the name alone. Records are keyed by identity, so a
+     * new deployment is added alongside earlier ones instead of replacing them.
      */
     private fun recordCreation(plan: DeployPlan) {
         val profile = host ?: return
         val store = managedStore() ?: return
         val record = ManagedRecords.of(plan, profile.id, profile.fingerprint, System.currentTimeMillis())
         if (record == null) {
-            // A new creation replaces whatever this screen offered before; without
-            // an identity there is nothing to offer, and stale records go away.
-            store.clear()
             managedPlan = null
             return
         }
@@ -209,64 +208,88 @@ class DeployActivity : AppCompatActivity() {
         managedPlan = null
     }
 
-    private fun forgetRecord() {
-        managedStore()?.clear()
+    private fun forgetRecord(plan: DeployPlan?) {
+        val store = managedStore()
+        val identity = when (plan) {
+            is DeployPlan.Container -> plan.createdId
+            is DeployPlan.Workload -> plan.appliedUid
+            else -> null
+        }
+        if (store != null && identity != null) {
+            store.remove(identity)
+        }
         managedPlan = null
     }
 
     /**
      * Rebuilds what this screen may offer after it was recreated.
      *
-     * The record is compared with where the app is now before anything is read,
-     * and the live identity is read before any operation is offered. Only an
-     * identity that equals the recorded one enables the actions; every other
-     * outcome is shown as its own state instead of being treated as "probably
-     * still ours".
+     * Every stored record is reconciled individually against where the app is
+     * now and the live identity read for its own name: only an identity that
+     * equals the recorded one enables the actions, and the first match wins.
+     * Every other outcome is shown as its own state instead of being treated
+     * as "probably still ours".
      */
     private fun restoreManaged() {
         if (busy || created != null) return
         val store = managedStore() ?: return
-        val record = store.load()
-        if (record == null) {
-            managedPlan = null
-            buildActions()
-            return
-        }
+        val records = store.loadAll()
         val target = currentTarget()
-        if (target == null || !ManagedReconciliation.sameTarget(record, target)) {
-            // Another host, runtime, context or namespace: nothing is read here and
-            // nothing is offered, because the record is not evidence about this one.
+        if (records.isEmpty() || target == null) {
             managedPlan = null
             buildActions()
             return
         }
-        val plan = ManagedPlans.of(record)
-        if (plan == null) {
+        // Records for another runtime, context or namespace are not evidence
+        // about this one: nothing is read for them and nothing is offered.
+        val candidates = records
+            .filter { ManagedReconciliation.sameTarget(it, target) }
+            .sortedByDescending { it.createdAtMillis }
+        if (candidates.isEmpty()) {
             managedPlan = null
             buildActions()
-            setStatus(getString(R.string.deploy_managed_unknown, record.name))
             return
         }
         val deploy = creator ?: DeployCreator(SshShell(Workspace.ssh)).also { creator = it }
         lifecycleScope.launch {
-            val live = runCatching {
-                io {
-                    when (plan) {
-                        is DeployPlan.Container -> deploy.observeIdentity(plan)
-                        is DeployPlan.Workload -> deploy.observeIdentity(plan)
-                        is DeployPlan.Native -> LiveIdentity.Unreadable("no identity")
-                    }
+            var matched: DeployPlan? = null
+            var fallback: Pair<ManagedDeployment, ManagedState>? = null
+            for (record in candidates) {
+                val plan = ManagedPlans.of(record)
+                if (plan == null) {
+                    if (fallback == null) fallback = record to ManagedState.UNKNOWN
+                    continue
                 }
-            }.getOrElse { LiveIdentity.Unreadable(it.message.orEmpty()) }
-            val state = ManagedReconciliation.evaluate(record, currentTarget() ?: target, live)
-            managedPlan = if (state == ManagedState.MATCH) plan else null
+                val live = runCatching {
+                    io {
+                        when (plan) {
+                            is DeployPlan.Container -> deploy.observeIdentity(plan)
+                            is DeployPlan.Workload -> deploy.observeIdentity(plan)
+                            is DeployPlan.Native -> LiveIdentity.Unreadable("no identity")
+                        }
+                    }
+                }.getOrElse { LiveIdentity.Unreadable(it.message.orEmpty()) }
+                val state = ManagedReconciliation.evaluate(record, currentTarget() ?: target, live)
+                if (state == ManagedState.MATCH) {
+                    matched = plan
+                    fallback = null
+                    break
+                }
+                if (fallback == null && state != ManagedState.ELSEWHERE) {
+                    fallback = record to state
+                }
+            }
+            managedPlan = matched
             buildActions()
-            when (state) {
-                ManagedState.MATCH -> Unit
-                ManagedState.ELSEWHERE -> Unit
-                ManagedState.REPLACED -> setStatus(getString(R.string.deploy_managed_replaced, record.name))
-                ManagedState.GONE -> setStatus(getString(R.string.deploy_managed_gone, record.name))
-                ManagedState.UNKNOWN -> setStatus(getString(R.string.deploy_managed_unknown, record.name))
+            if (matched == null) {
+                val (record, state) = fallback ?: return@launch
+                when (state) {
+                    ManagedState.MATCH -> Unit
+                    ManagedState.ELSEWHERE -> Unit
+                    ManagedState.REPLACED -> setStatus(getString(R.string.deploy_managed_replaced, record.name))
+                    ManagedState.GONE -> setStatus(getString(R.string.deploy_managed_gone, record.name))
+                    ManagedState.UNKNOWN -> setStatus(getString(R.string.deploy_managed_unknown, record.name))
+                }
             }
         }
     }
@@ -674,7 +697,7 @@ class DeployActivity : AppCompatActivity() {
                 result.onSuccess { exec ->
                     if (exec.exitCode == 0) {
                         created = null
-                        forgetRecord()
+                        forgetRecord(plan)
                         setStatus(getString(R.string.deploy_removed, plan.name))
                         buildActions()
                         refresh()

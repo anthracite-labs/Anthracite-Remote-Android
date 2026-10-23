@@ -678,6 +678,10 @@ struct GitHubScreen: View {
     @State private var selected: IssueSummary?
     @State private var error: String?
     @State private var busy = false
+    /// How many issues to load. The client pages until this many arrive, so the
+    /// default screen is the first 30 and Load More explicitly asks for the next
+    /// 30 instead of implying the first page is the whole list.
+    @State private var limit = 30
 
     var body: some View {
         NavigationStack {
@@ -699,6 +703,10 @@ struct GitHubScreen: View {
                 Section("Open issues") {
                     if issues.isEmpty && !busy {
                         Text("Nothing loaded yet.").foregroundStyle(.secondary)
+                    } else {
+                        Text("Showing \(issues.count) open issues.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     ForEach(issues) { issue in
                         Button {
@@ -710,6 +718,12 @@ struct GitHubScreen: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                        }
+                    }
+                    if !issues.isEmpty && !busy && issues.count >= limit && limit < Self.maxIssues {
+                        Button("Load more") {
+                            limit = min(limit + 30, Self.maxIssues)
+                            Task { await saveAndLoad(save: false) }
                         }
                     }
                 }
@@ -727,6 +741,8 @@ struct GitHubScreen: View {
         }
     }
 
+    private static var maxIssues: Int { 300 }
+
     private func saveAndLoad(save: Bool = true) async {
         error = nil
         guard let ref = RepositoryRef.parse(repository) else {
@@ -734,6 +750,7 @@ struct GitHubScreen: View {
             return
         }
         if save {
+            limit = 30
             model.saveSecret(token, key: "github.token")
             model.saveSecret(repository, key: "github.repository")
         }
@@ -741,7 +758,7 @@ struct GitHubScreen: View {
         defer { busy = false }
         let client = GitHubClient(token: token)
         do {
-            issues = try await client.listIssues(ref, state: "open")
+            issues = try await client.listIssues(ref, state: "open", limit: limit)
         } catch {
             issues = []
             self.error = "\(error)"

@@ -122,10 +122,22 @@ private func openSSHKey(from key: NIOSSHPublicKey) -> HostKey? {
 /// The terminal result is stored before any waiter is resumed, and a waiter that
 /// arrives late is resumed from that stored result — so an error or a key that
 /// arrives before `wait` is never lost.
-private final class KeyCaptureDelegate: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
+///
+/// Cancellation-aware: `awaitKey` registers a task-cancellation handler that
+/// fails the capture with `CancellationError`, so a cancelled scan never leaves
+/// the continuation parked. `resolve` is exactly-once, so key delivery,
+/// timeout, disconnect and cancellation race safely — only the first wins.
+final class KeyCaptureDelegate: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var result: Result<HostKey, Error>?
     private var waiter: CheckedContinuation<HostKey, Error>?
+
+    /// Test hook: true while a consumer is parked in `awaitKey`.
+    var hasWaiter: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return waiter != nil
+    }
 
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
         guard let key = openSSHKey(from: hostKey) else {
@@ -148,11 +160,18 @@ private final class KeyCaptureDelegate: NIOSSHClientServerAuthenticationDelegate
                 throw SSHError.timeout
             }
             do {
-                let key = try await group.next()!
+                guard let key = try await group.next() else { throw CancellationError() }
                 group.cancelAll()
                 return key
             } catch {
                 group.cancelAll()
+                // Cancelling the group triggers `awaitKey`'s cancellation
+                // handler, but fail explicitly as well: the handler can run
+                // before the continuation exists, and an explicit fail covers
+                // runtimes where cancellation races task creation.
+                if error is CancellationError {
+                    self.fail(error)
+                }
                 throw error
             }
         }
@@ -162,16 +181,26 @@ private final class KeyCaptureDelegate: NIOSSHClientServerAuthenticationDelegate
         resolve(.failure(error))
     }
 
+    /// Test hook: delivers a key through the same exactly-once path the
+    /// handshake uses, without needing a live server.
+    func deliver(_ key: HostKey) {
+        resolve(.success(key))
+    }
+
     private func awaitKey() async throws -> HostKey {
-        try await withCheckedThrowingContinuation { continuation in
-            lock.lock()
-            if let result {
-                lock.unlock()
-                continuation.resume(with: result)
-            } else {
-                waiter = continuation
-                lock.unlock()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                if let result {
+                    lock.unlock()
+                    continuation.resume(with: result)
+                } else {
+                    waiter = continuation
+                    lock.unlock()
+                }
             }
+        } onCancel: {
+            self.fail(CancellationError())
         }
     }
 

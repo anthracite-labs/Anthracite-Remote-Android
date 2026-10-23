@@ -2,6 +2,7 @@ package dev.anthracite.remote.deploy
 
 import dev.anthracite.remote.host.PosixShell
 import dev.anthracite.remote.host.Preferences
+import dev.anthracite.remote.json.JsonValue
 import dev.anthracite.remote.json.MiniJson
 
 /**
@@ -236,19 +237,49 @@ internal object ManagedPlans {
 }
 
 /**
- * Persists the single creation this screen offers operations on.
+ * Persists the creations this screen offers operations on, keyed by host.
  *
- * A failed commit restores what was there before, so the on-disk record never
- * points at a deployment the app did not just write.
+ * One host key holds a bounded collection of records — up to
+ * [MAX_RECORDS_PER_HOST], each keyed by the immutable resource identity the
+ * runtime or cluster reported at creation. Recording a second deployment on the
+ * same host therefore adds a record instead of replacing the previous one;
+ * saving a record whose identity is already stored updates it in place. When
+ * the bound is exceeded the oldest other records are evicted, never the record
+ * just saved. Every record is reconciled individually by its own identity.
+ *
+ * A failed commit restores what was there before, so the on-disk collection
+ * never points at a deployment the app did not just write.
  */
 internal class ManagedDeploymentStore(
     private val preferences: Preferences,
     private val key: String = KEY,
 ) {
-    fun load(): ManagedDeployment? = ManagedDeploymentCodec.decode(preferences.string(key))
+    fun loadAll(): List<ManagedDeployment> = ManagedDeploymentCodec.decodeAll(preferences.string(key))
+
+    /** The newest record, for callers that offer operations on one deployment. */
+    fun load(): ManagedDeployment? = loadAll().maxByOrNull { it.createdAtMillis }
 
     fun save(record: ManagedDeployment): Boolean {
-        val encoded = ManagedDeploymentCodec.encode(record) ?: return false
+        if (!record.isValid()) return false
+        val kept = loadAll()
+            .filter { it.identity != record.identity }
+            .sortedBy { it.createdAtMillis }
+            .takeLast(MAX_RECORDS_PER_HOST - 1) + record
+        return write(kept)
+    }
+
+    fun remove(identity: String): Boolean {
+        val remaining = loadAll().filter { it.identity != identity }
+        return write(remaining)
+    }
+
+    fun clear(): Boolean {
+        preferences.remove(key)
+        return preferences.commit()
+    }
+
+    private fun write(records: List<ManagedDeployment>): Boolean {
+        val encoded = ManagedDeploymentCodec.encodeAll(records) ?: return false
         val previous = preferences.string(key)
         preferences.putString(key, encoded)
         if (preferences.commit()) return true
@@ -257,13 +288,11 @@ internal class ManagedDeploymentStore(
         return false
     }
 
-    fun clear(): Boolean {
-        preferences.remove(key)
-        return preferences.commit()
-    }
-
     companion object {
         const val KEY = "deploy.managed.v1"
+
+        /** How many deployment records one host key holds; the oldest are evicted first. */
+        const val MAX_RECORDS_PER_HOST = 8
 
         /**
          * One slot per host, so recording a deployment on one host cannot erase
@@ -288,6 +317,9 @@ internal class ManagedDeploymentStore(
  */
 internal object ManagedDeploymentCodec {
     const val VERSION = 1
+
+    /** A host key holding several records: `{"version":2,"records":[{v1}, …]}`. */
+    const val COLLECTION_VERSION = 2
 
     fun encode(record: ManagedDeployment): String? {
         if (!record.isValid()) return null
@@ -315,12 +347,50 @@ internal object ManagedDeploymentCodec {
         if (text.isNullOrBlank()) return null
         val document = runCatching { MiniJson.parse(text) }.getOrNull()?.asObject() ?: return null
         if (document.int("version") != VERSION) return null
+        return fromObject(document)?.takeIf { it.isValid() }
+    }
+
+    /**
+     * Encodes a bounded collection. Any invalid record refuses the whole write
+     * rather than persisting a prefix.
+     */
+    fun encodeAll(records: List<ManagedDeployment>): String? {
+        if (records.any { !it.isValid() }) return null
+        return buildString {
+            append("{\"version\":").append(COLLECTION_VERSION).append(",\"records\":[")
+            records.forEachIndexed { index, record ->
+                if (index > 0) append(',')
+                append(encode(record) ?: return null)
+            }
+            append("]}")
+        }
+    }
+
+    /**
+     * Decodes a collection, a legacy single record, or nothing. Unknown
+     * versions, unknown kinds and invalid values are dropped, never
+     * reinterpreted; garbage decodes to an empty list.
+     */
+    fun decodeAll(text: String?): List<ManagedDeployment> {
+        if (text.isNullOrBlank()) return emptyList()
+        val document = runCatching { MiniJson.parse(text) }.getOrNull()?.asObject() ?: return emptyList()
+        if (document.int("version") == COLLECTION_VERSION) {
+            val items = document.array("records")?.items ?: return emptyList()
+            return items.mapNotNull { it.asObject()?.let(::fromObject) }
+                .filter { it.isValid() }
+                .take(ManagedDeploymentStore.MAX_RECORDS_PER_HOST)
+        }
+        // Legacy single-record form: one valid record or nothing.
+        return listOfNotNull(decode(text))
+    }
+
+    private fun fromObject(document: JsonValue.Obj): ManagedDeployment? {
         val kind = when (document.string("kind")) {
             ManagedTargetKind.CONTAINER.name -> ManagedTargetKind.CONTAINER
             ManagedTargetKind.WORKLOAD.name -> ManagedTargetKind.WORKLOAD
             else -> return null
         }
-        val record = ManagedDeployment(
+        return ManagedDeployment(
             hostId = document.string("hostId") ?: return null,
             hostFingerprint = document.string("hostFingerprint") ?: return null,
             kind = kind,
@@ -339,7 +409,6 @@ internal object ManagedDeploymentCodec {
             containerPort = document.int("containerPort") ?: 8080,
             createdAtMillis = document.long("createdAtMillis") ?: 0,
         )
-        return record.takeIf { it.isValid() }
     }
 
     private fun quoted(value: String): String = buildString {

@@ -183,6 +183,26 @@ jobs:
       - name: Run the real-git command suite
         run: bash app/src/test/shell/git-commands-test.sh
 
+  # The service CLIs the app drives over SSH accept the flags the app sends.
+  # Only the read-only subset runs here (an isolated tmux server plus client
+  # versions); live daemons, clusters, logout and reboot stay in the manual
+  # real-host plan in docs/evidence/real-host-plan.md.
+  service_integration:
+    name: Service CLI integration (real binaries)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install tmux and the OpenSSH client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tmux openssh-client
+      - name: Run the service smoke suite
+        run: bash app/src/test/shell/service-smoke-test.sh
+
   # Static facts that a compiler cannot check: resource references that do not
   # exist, duplicate string ids, and credential-looking literals in the tree.
   static_checks:

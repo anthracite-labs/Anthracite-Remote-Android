@@ -93,23 +93,6 @@ public enum HostKeyWire {
         guard !material.isEmpty else { throw HostKeyError.malformed }
         return HostKey(algorithm: algorithm, base64: blob.base64EncodedString())
     }
-
-    /// Extracts the host key from an SSH_MSG_KEX_ECDH_REPLY (31) payload: the
-    /// message byte is already removed, so the first field is K_S.
-    public static func hostKeyFromKeyExchangeReply(_ payload: Data) throws -> HostKey {
-        var offset = 0
-        guard let blob = readString(payload, &offset) else { throw HostKeyError.malformed }
-        return try parsePublicKeyBlob(blob)
-    }
-
-    /// Parses the server's cleartext identification line.
-    public static func identification(_ data: Data) -> String? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        for line in text.split(separator: "\r\n", omittingEmptySubsequences: true) {
-            if line.hasPrefix("SSH-") { return String(line) }
-        }
-        return nil
-    }
 }
 
 /// What the app remembers about a server's key.

@@ -26,16 +26,9 @@ final class HostKeyTests: XCTestCase {
         XCTAssertThrowsError(try HostKeyWire.parsePublicKeyBlob(truncated.data))
     }
 
-    func testKeyExchangeReplyCarriesTheKey() throws {
+    func testPublicKeyBlobCarriesTheKey() throws {
         let blob = Data(base64Encoded: base64)!
-        // The reply is `string K_S`, `string Q_S`, `string signature`.
-        var wire = Data()
-        wire.append(UInt8((blob.count >> 24) & 0xff))
-        wire.append(UInt8((blob.count >> 16) & 0xff))
-        wire.append(UInt8((blob.count >> 8) & 0xff))
-        wire.append(UInt8(blob.count & 0xff))
-        wire.append(blob)
-        let parsed = try HostKeyWire.hostKeyFromKeyExchangeReply(wire)
+        let parsed = try HostKeyWire.parsePublicKeyBlob(blob)
         XCTAssertEqual(parsed.fingerprint, fingerprint)
         XCTAssertEqual(parsed.algorithm, "ssh-ed25519")
     }

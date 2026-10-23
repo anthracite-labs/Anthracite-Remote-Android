@@ -323,6 +323,23 @@ class DeployGuardTest {
         assertEquals(1, shell.commands.count { it.contains("delete --raw=") })
     }
 
+    @Test
+    fun `a rollback travels inside the same uid-guarded command as a delete`() {
+        // `kubectl rollout undo` accepts no server-side UID precondition, so the
+        // same-shell pre-check is the only thing narrowing the replace-then-undo
+        // window; the post-rollback re-read then reports what actually happened.
+        // A bare `rollout undo` without the guard must never be sent.
+        val shell = healthy()
+        val result = DeployCreator(shell).workloadRollback(plan())
+
+        assertEquals(0, result.exitCode)
+        val undo = shell.commands.last { it.contains("rollout undo") }
+        assertTrue(undo.startsWith("set -eu; uid=\$(kubectl --context ${PosixShell.quote("prod-cluster")}"))
+        assertTrue(undo.contains("if [ \"\$uid\" != ${PosixShell.quote(uid)} ]"))
+        assertTrue(undo.contains("exit ${DeployPlans.EXIT_IDENTITY_CHANGED}"))
+        assertEquals(1, shell.commands.count { it.contains("rollout undo") })
+    }
+
     // ---------------------------------------------------------------------- apply
 
     @Test
