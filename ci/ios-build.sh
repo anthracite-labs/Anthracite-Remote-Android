@@ -21,6 +21,10 @@ annotate_failures() {
         head -n 12 | while IFS= read -r line; do
             echo "::error title=ios-build::$line"
         done
+    # The lines around a crash carry its explanation and are not "error:" lines.
+    tail -n 12 "$file" | while IFS= read -r line; do
+        echo "::error title=ios-tail::$line"
+    done
 }
 
 # ------------------------------------------------------------------ resolutions
