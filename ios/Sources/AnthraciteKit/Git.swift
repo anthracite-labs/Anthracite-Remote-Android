@@ -11,7 +11,11 @@ public enum Git {
     public static func isValidPath(_ path: String) -> Bool {
         guard path.hasPrefix("/"), path.count <= 4096, path != "/" else { return false }
         if path.contains("\u{0}") { return false }
-        return !path.unicodeScalars.contains { $0.value < 0x20 }
+        guard !path.unicodeScalars.contains(where: { $0.value < 0x20 }) else { return false }
+        // A repository path is a place, not a traversal: `..` components would
+        // let one tap change which repository a command runs in.
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        return !components.contains { $0 == ".." || $0 == "." }
     }
 
     public static func isValidRef(_ ref: String) -> Bool {

@@ -70,6 +70,13 @@ struct SFTPReader {
 
     var isAtEnd: Bool { offset >= data.count }
 
+    mutating func readByte() throws -> UInt8 {
+        guard offset < data.count else { throw SFTPError.protocolViolation("truncated byte") }
+        let value = data[data.startIndex + offset]
+        offset += 1
+        return value
+    }
+
     mutating func readUInt32() throws -> UInt32 {
         guard offset + 4 <= data.count else { throw SFTPError.protocolViolation("truncated uint32") }
         var value: UInt32 = 0

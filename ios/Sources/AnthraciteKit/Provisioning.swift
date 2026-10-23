@@ -686,8 +686,9 @@ public enum ProvisionJobs {
 
     public static func parseCancel(_ stdout: String) -> CancelOutcome {
         for line in stdout.split(separator: "\n") {
-            guard line.hasPrefix("result=") else { continue }
-            return CancelOutcome(rawValue: String(line.dropFirst("result=".count))) ?? .unparseable
+            for prefix in ["cancel_result=", "result="] where line.hasPrefix(prefix) {
+                return CancelOutcome(rawValue: String(line.dropFirst(prefix.count))) ?? .unparseable
+            }
         }
         return .unparseable
     }

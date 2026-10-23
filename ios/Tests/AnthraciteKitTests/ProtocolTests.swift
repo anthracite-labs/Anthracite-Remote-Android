@@ -268,7 +268,7 @@ final class SFTPWireTests: XCTestCase {
         writer.write(uint64: 1 << 40)
         writer.write(string: "hello")
         var reader = SFTPReader(writer.data)
-        XCTAssertEqual(try reader.readUInt32(), 3)
+        XCTAssertEqual(try reader.readByte(), 3)
         XCTAssertEqual(try reader.readUInt32(), 42)
         XCTAssertEqual(try reader.readUInt64(), 1 << 40)
         XCTAssertEqual(try reader.readString(), "hello")
@@ -288,7 +288,7 @@ final class SFTPWireTests: XCTestCase {
         let packet = decoder.next()
         XCTAssertNotNil(packet)
         var reader = SFTPReader(packet!)
-        XCTAssertEqual(try? reader.readUInt32(), UInt32(SFTP.replyData))
+        XCTAssertEqual(try? reader.readByte(), SFTP.replyData)
         XCTAssertEqual(try? reader.readUInt32(), 7)
 
         var bad = SFTPPacketDecoder()

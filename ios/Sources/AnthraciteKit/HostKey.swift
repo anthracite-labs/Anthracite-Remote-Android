@@ -58,7 +58,7 @@ public enum HostKeyWire {
             length = (length << 8) | UInt32(data[data.startIndex + offset + index])
         }
         let start = offset + 4
-        guard length > 0, length < 1 << 20, start + Int(length) <= data.count else { return nil }
+        guard length < 1 << 20, start + Int(length) <= data.count else { return nil }
         offset = start + Int(length)
         return data.subdata(in: (data.startIndex + start)..<(data.startIndex + start + Int(length)))
     }

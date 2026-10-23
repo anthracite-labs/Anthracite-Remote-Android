@@ -76,6 +76,7 @@ final class ProvisioningTests: XCTestCase {
         )
         XCTAssertEqual(refused, .refusedUnknownIdentity)
         XCTAssertEqual(ProvisionJobs.parseCancel("cancel_result=confirmed_stopped\n"), .confirmedStopped)
+        XCTAssertEqual(ProvisionJobs.parseCancel("result=signal_sent\n"), .signalSent)
         XCTAssertEqual(ProvisionJobs.parseCancel(""), .unparseable)
         XCTAssertEqual(ProvisionJobs.parseCancel("result=nonsense\n"), .unparseable)
     }
