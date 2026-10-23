@@ -38,30 +38,56 @@ final class TerminalOutputTests: XCTestCase {
 
     // MARK: The bound
 
-    func testTheQueueStopsGrowingAndAsksTheReaderToStop() {
+    func testTheStreamAsksTheReaderToStopAtTheMarkAndKeepsEveryByte() {
         let reader = Reader()
         let stream = TerminalOutput()
         stream.onFlowControl { reader.record($0) }
 
-        // 1 MiB, far past the 512 KiB high-water mark, with nobody consuming.
+        // A reader that honours the stop signal — what NIO's autoRead does — writes
+        // no more once it has been asked to stop. This is the producer the bound is
+        // about, and the peak queue is measured across it.
         var sent = 0
-        for number in 0..<32 {
+        var peak = 0
+        for number in 0..<64 where !reader.paused {
             let part = chunk(number)
             stream.append(part)
             sent += part.count
+            peak = max(peak, stream.bufferedByteCount)
         }
 
-        XCTAssertGreaterThan(sent, TerminalOutput.highWaterMark)
         XCTAssertTrue(reader.paused, "the reader was never asked to stop")
-        // The bound holds: the queue never grows past the mark plus one chunk.
+        XCTAssertGreaterThan(peak, TerminalOutput.highWaterMark)
         XCTAssertLessThanOrEqual(
-            stream.bufferedByteCount,
+            peak,
             TerminalOutput.highWaterMark + 32 * 1024,
-            "the queue outgrew its bound"
+            "a paused reader was still handed more than one chunk"
         )
-        // The current state is delivered when the hook is connected, then asked to
-        // stop once — not once per chunk.
+        // Nothing was discarded on the way: every byte handed over is still queued.
+        XCTAssertEqual(stream.bufferedByteCount, sent)
+        // Asked once, not once per chunk, with the current state delivered first.
         XCTAssertEqual(reader.states, [false, true], "the reader was told the same thing repeatedly")
+    }
+
+    func testABlockingProducerKeepsItsBytesRatherThanLosingThem() async throws {
+        let stream = TerminalOutput()
+        // A producer that ignores the stop signal cannot be stopped by a consumer
+        // that is not reading. The stream says so by keeping what it was given
+        // rather than dropping it: a hard cap here would mean silent data loss.
+        for number in 0..<32 { stream.append(chunk(number)) }
+        XCTAssertTrue(stream.isPaused)
+        XCTAssertEqual(stream.bufferedByteCount, 32 * 32 * 1024)
+
+        let parts = (0..<32).map { chunk($0) }
+        // Ending the stream first: the bytes already queued are still delivered, and
+        // the drain below must not park waiting for more.
+        stream.finish()
+        var received = Data()
+        var iterator = stream.makeAsyncIterator()
+        while let part = try? await iterator.next() {
+            received.append(part)
+        }
+        XCTAssertEqual(received, parts.reduce(Data()) { $0 + $1 })
+        XCTAssertFalse(stream.isPaused, "the reader was not restarted after draining")
     }
 
     func testConsumingBelowTheLowWaterMarkStartsTheReaderAgain() async throws {
@@ -230,11 +256,9 @@ final class TerminalOutputTests: XCTestCase {
         }
 
         XCTAssertTrue(reader.paused, "the handler kept reading past the bound")
-        XCTAssertLessThanOrEqual(
-            collector.output.bufferedByteCount,
-            TerminalOutput.highWaterMark + 32 * 1024,
-            "the queue outgrew its bound inside the handler"
-        )
+        // Everything the handler was handed is still there: the stop signal is asked
+        // for, nothing is dropped to enforce it.
+        XCTAssertEqual(collector.output.bufferedByteCount, 40 * 32 * 1024)
 
         // Draining below the low-water mark restarts the reader through the same
         // hook the channel uses.

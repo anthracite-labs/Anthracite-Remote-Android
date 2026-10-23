@@ -8,12 +8,16 @@ import NIOCore
 /// buffers without limit, so a slow consumer meant unbounded growth — and, under
 /// sustained output, the app being killed.
 ///
-/// This stream carries a **bounded** queue and never drops or reorders a byte. When
-/// the queue passes the high-water mark it asks the reader to stop reading; when the
-/// consumer has drained it below the low-water mark it asks the reader to start
-/// again. On an SSH channel that is real flow control: the window closes and the
-/// remote program blocks in `write`, exactly as it does when a real terminal stops
-/// reading.
+/// This stream never drops or reorders a byte. When the queue passes the high-water
+/// mark it asks the reader to stop reading; when the consumer has drained it back to
+/// the low-water mark it asks the reader to start again. On an SSH channel that is
+/// real flow control: the window closes and the remote program blocks in `write`,
+/// exactly as it does when a real terminal stops reading.
+///
+/// The bound is therefore cooperative, and the code says so rather than implying a
+/// hard cap it cannot keep: what has already been read is kept, never discarded, so
+/// a producer that ignores the stop signal can still grow the queue. The high-water
+/// mark plus one inbound read is what a reader that honours it reaches.
 ///
 /// One consumer at a time, matching the single terminal reader.
 public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
