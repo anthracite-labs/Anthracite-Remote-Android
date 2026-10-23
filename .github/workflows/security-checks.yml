@@ -39,7 +39,15 @@ jobs:
           curl -fsSL --retry 3             https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz             -o /tmp/actionlint.tar.gz
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c -
           tar -xzf /tmp/actionlint.tar.gz actionlint
-          ./actionlint -oneline
+          # Workflow logs are not always retrievable from the API, so the findings
+          # are also emitted as annotations.
+          if ! ./actionlint -oneline >/tmp/actionlint.log 2>&1; then
+            head -n 8 /tmp/actionlint.log | while IFS= read -r line; do
+              echo "::error title=actionlint::$line"
+            done
+            tail -n 40 /tmp/actionlint.log
+            exit 1
+          fi
       - name: Review Actions security with zizmor
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
         with:

@@ -183,7 +183,11 @@ extension URLRequest {
         }
         return data
     }
+}
 
+/// The pagination tests drive the client through a paged stub, so their helpers
+/// belong to the test case, not to `URLRequest`.
+extension GitHubTests {
     /// Answers each request from `pages`, keyed by the `page` query parameter (the
     /// first request has none). Unknown pages answer an empty array with no `Link`.
     private func respondByPage(_ pages: [Int: (String, [String: String])]) {
