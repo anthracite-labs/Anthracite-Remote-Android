@@ -19,6 +19,7 @@ import dev.anthracite.remote.host.HostProbe
 import dev.anthracite.remote.host.JobState
 import dev.anthracite.remote.host.JobStatus
 import dev.anthracite.remote.host.LogRedactor
+import dev.anthracite.remote.host.ManualInstallers
 import dev.anthracite.remote.host.PlanAction
 import dev.anthracite.remote.host.PlanDecision
 import dev.anthracite.remote.host.ProvisionCatalog
@@ -144,6 +145,39 @@ class BootstrapActivity : AppCompatActivity() {
         addActionButton(this, actions, getString(R.string.bootstrap_open_terminal), getString(R.string.bootstrap_open_terminal)) {
             startActivity(Intent(this, TerminalActivity::class.java))
         }
+        addActionButton(this, actions, getString(R.string.bootstrap_manual_tools), getString(R.string.bootstrap_manual_tools)) {
+            showManualInstallers()
+        }
+    }
+
+    /**
+     * Coding-agent CLIs are installed by the user from the vendor's own
+     * instructions. Anthracite never runs an unverified remote installer, and it
+     * never inspects what the CLI does once it is running.
+     */
+    private fun showManualInstallers() {
+        val entries = ManualInstallers.entries
+        AlertDialog.Builder(this)
+            .setTitle(R.string.bootstrap_manual_tools)
+            .setItems(entries.map { it.label }.toTypedArray()) { _, which ->
+                val entry = entries.getOrNull(which) ?: return@setItems
+                AlertDialog.Builder(this)
+                    .setTitle(entry.label)
+                    .setMessage(
+                        buildString {
+                            append(entry.description).append("\n\n")
+                            append(entry.instructions).append("\n\n")
+                            append(getString(R.string.bootstrap_manual_because, entry.manualBecause))
+                        },
+                    )
+                    .setPositiveButton(R.string.close, null)
+                    .setNeutralButton(R.string.bootstrap_open_terminal) { _, _ ->
+                        startActivity(Intent(this, TerminalActivity::class.java))
+                    }
+                    .show()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun loadFacts(force: Boolean) {

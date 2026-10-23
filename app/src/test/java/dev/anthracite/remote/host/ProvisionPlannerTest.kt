@@ -90,6 +90,28 @@ class ProvisionPlannerTest {
     }
 
     @Test
+    fun `every preset references only catalogued tools`() {
+        for (profile in ProvisionCatalog.profiles) {
+            assertTrue("${profile.id} has no tools", profile.toolIds.isNotEmpty())
+            assertEquals(profile.toolIds.distinct(), profile.toolIds)
+            for (id in profile.toolIds) {
+                assertNotNull("${profile.id} references unknown tool $id", ProvisionCatalog.tool(id))
+            }
+        }
+    }
+
+    @Test
+    fun `coding-agent CLIs are instructions, never native plans`() {
+        assertTrue(ManualInstallers.entries.isNotEmpty())
+        for (entry in ManualInstallers.entries) {
+            assertTrue(entry.instructions.isNotBlank())
+            assertTrue(entry.manualBecause.isNotBlank())
+            // Nothing in the manual list may also be a silently executable catalog entry.
+            assertEquals(null, ProvisionCatalog.tool(entry.id))
+        }
+    }
+
+    @Test
     fun `an oversized selection is truncated with a warning instead of growing`() {
         val ids = (1..ProvisionPlanner.MAX_TOOLS + 5).map { "tool$it" }
         val plan = ProvisionPlanner.plan(facts(), request(*ids.toTypedArray()))

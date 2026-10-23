@@ -387,6 +387,8 @@
     <string name="bootstrap_subtitle">%1$s · guided provisioning</string>
     <string name="bootstrap_host_line">%1$s · %2$s · %3$s</string>
     <string name="bootstrap_no_manager">no supported package manager</string>
+    <string name="bootstrap_manual_tools">Agent CLIs (manual install)</string>
+    <string name="bootstrap_manual_because">Anthracite shows these instructions instead of running them because %1$s</string>
     <string name="bootstrap_choose_profile">Profile</string>
     <string name="bootstrap_choose_tools">Tools</string>
     <string name="bootstrap_replan">Recompute plan</string>

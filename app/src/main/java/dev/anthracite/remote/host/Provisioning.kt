@@ -24,6 +24,8 @@ internal data class CatalogTool(
         RUNTIME("Runtimes"),
         BUILD("Build tools"),
         UTILITY("Utilities"),
+        NETWORKING("Networking"),
+        DATABASE("Databases"),
     }
 
     fun packagesFor(manager: PackageManagerKind): List<String> = packages[manager].orEmpty()
@@ -41,7 +43,7 @@ internal data class CatalogProfile(val id: String, val label: String, val descri
  * the supported families.
  */
 internal object ProvisionCatalog {
-    const val VERSION = "2026-10-22.1"
+    const val VERSION = "2026-10-23.1"
 
     val tools: List<CatalogTool> = listOf(
         tool(
@@ -188,6 +190,94 @@ internal object ProvisionCatalog {
                 PackageManagerKind.APK to listOf("gcc"),
             ),
         ),
+        tool(
+            id = "wget", label = "wget", description = "Non-interactive downloader", category = CatalogTool.Category.NETWORKING,
+            executable = "wget",
+            packages = mapOf(
+                PackageManagerKind.APT to listOf("wget"),
+                PackageManagerKind.DNF to listOf("wget"),
+                PackageManagerKind.ZYPPER to listOf("wget"),
+                PackageManagerKind.PACMAN to listOf("wget"),
+                PackageManagerKind.APK to listOf("wget"),
+            ),
+        ),
+        tool(
+            id = "less", label = "less", description = "Pager for long output", category = CatalogTool.Category.TERMINAL,
+            executable = "less",
+            packages = mapOf(
+                PackageManagerKind.APT to listOf("less"),
+                PackageManagerKind.DNF to listOf("less"),
+                PackageManagerKind.ZYPPER to listOf("less"),
+                PackageManagerKind.PACMAN to listOf("less"),
+                PackageManagerKind.APK to listOf("less"),
+            ),
+        ),
+        tool(
+            id = "tree", label = "tree", description = "Directory tree viewer", category = CatalogTool.Category.FILES,
+            executable = "tree",
+            packages = mapOf(
+                PackageManagerKind.APT to listOf("tree"),
+                PackageManagerKind.DNF to listOf("tree"),
+                PackageManagerKind.ZYPPER to listOf("tree"),
+                PackageManagerKind.PACMAN to listOf("tree"),
+                PackageManagerKind.APK to listOf("tree"),
+            ),
+        ),
+        tool(
+            id = "pip", label = "Python pip", description = "Python package installer", category = CatalogTool.Category.RUNTIME,
+            executable = "pip3",
+            packages = mapOf(
+                PackageManagerKind.APT to listOf("python3-pip"),
+                PackageManagerKind.DNF to listOf("python3-pip"),
+                PackageManagerKind.ZYPPER to listOf("python3-pip"),
+                PackageManagerKind.PACMAN to listOf("python-pip"),
+                PackageManagerKind.APK to listOf("py3-pip"),
+            ),
+        ),
+        tool(
+            id = "go", label = "Go", description = "Go toolchain", category = CatalogTool.Category.BUILD,
+            executable = "go",
+            packages = mapOf(
+                PackageManagerKind.APT to listOf("golang-go"),
+                PackageManagerKind.DNF to listOf("golang"),
+                PackageManagerKind.ZYPPER to listOf("go"),
+                PackageManagerKind.PACMAN to listOf("go"),
+                PackageManagerKind.APK to listOf("go"),
+            ),
+        ),
+        tool(
+            id = "rust", label = "Rust", description = "Rust compiler and Cargo", category = CatalogTool.Category.BUILD,
+            executable = "cargo",
+            packages = mapOf(
+                PackageManagerKind.APT to listOf("rustc", "cargo"),
+                PackageManagerKind.DNF to listOf("rust", "cargo"),
+                PackageManagerKind.ZYPPER to listOf("rust", "cargo"),
+                PackageManagerKind.PACMAN to listOf("rust"),
+                PackageManagerKind.APK to listOf("rust", "cargo"),
+            ),
+        ),
+        tool(
+            id = "sqlite", label = "SQLite", description = "SQLite command-line shell", category = CatalogTool.Category.DATABASE,
+            executable = "sqlite3",
+            packages = mapOf(
+                PackageManagerKind.APT to listOf("sqlite3"),
+                PackageManagerKind.DNF to listOf("sqlite"),
+                PackageManagerKind.ZYPPER to listOf("sqlite3"),
+                PackageManagerKind.PACMAN to listOf("sqlite"),
+                PackageManagerKind.APK to listOf("sqlite"),
+            ),
+        ),
+        tool(
+            id = "postgres-client", label = "PostgreSQL client", description = "psql and pg_dump", category = CatalogTool.Category.DATABASE,
+            executable = "psql",
+            packages = mapOf(
+                PackageManagerKind.APT to listOf("postgresql-client"),
+                PackageManagerKind.DNF to listOf("postgresql"),
+                PackageManagerKind.ZYPPER to listOf("postgresql"),
+                PackageManagerKind.PACMAN to listOf("postgresql"),
+                PackageManagerKind.APK to listOf("postgresql-client"),
+            ),
+        ),
     )
 
     val profiles: List<CatalogProfile> = listOf(
@@ -208,6 +298,24 @@ internal object ProvisionCatalog {
             label = "Terminal extras",
             description = "htop, vim, ripgrep and rsync.",
             toolIds = listOf("htop", "vim", "ripgrep", "rsync"),
+        ),
+        CatalogProfile(
+            id = "compiled",
+            label = "Compiled languages",
+            description = "GCC, make, Go and Rust with Cargo.",
+            toolIds = listOf("gcc", "make", "go", "rust"),
+        ),
+        CatalogProfile(
+            id = "data",
+            label = "Database clients",
+            description = "SQLite shell and the PostgreSQL client tools.",
+            toolIds = listOf("sqlite", "postgres-client"),
+        ),
+        CatalogProfile(
+            id = "minimal",
+            label = "Smallest useful host",
+            description = "Git and tmux only: version control and a session that survives a dropped connection.",
+            toolIds = listOf("git", "tmux"),
         ),
     )
 
@@ -288,6 +396,64 @@ internal data class CapabilityAssessment(
     val evidence: DistributionEvidence?,
     val detail: String,
 )
+
+/**
+ * Tools whose vendors do not publish a pinned, verifiable artifact for every
+ * supported distribution. Anthracite shows the vendor's own instructions and
+ * runs nothing: an unverified `curl | sh` is exactly what this app must not do,
+ * and a curated *instructions* list is not a command allowlist.
+ */
+internal data class ManualInstaller(
+    val id: String,
+    val label: String,
+    val description: String,
+    val instructions: String,
+    val manualBecause: String,
+)
+
+internal object ManualInstallers {
+    val entries: List<ManualInstaller> = listOf(
+        ManualInstaller(
+            id = "opencode",
+            label = "OpenCode CLI",
+            description = "Terminal coding agent. The existing OpenCode WebUI journey is unaffected.",
+            instructions = "Install OpenCode with the vendor's documented installer for your platform, " +
+                "then run `opencode` in any Anthracite terminal tab. Review the download and its checksum " +
+                "before running it.",
+            manualBecause = "The vendor distributes a moving installer script; Anthracite does not execute " +
+                "remote scripts and cannot pin that artifact per distribution.",
+        ),
+        ManualInstaller(
+            id = "claude-code",
+            label = "Claude Code CLI",
+            description = "Terminal coding agent from Anthropic.",
+            instructions = "Install Claude Code with the vendor's documented package or npm command, sign in " +
+                "interactively inside a terminal tab, then run `claude`.",
+            manualBecause = "Authentication is interactive and the vendor's distribution policy is not a " +
+                "native package; running it unattended would either fail or store a credential Anthracite " +
+                "must not hold.",
+        ),
+        ManualInstaller(
+            id = "codex",
+            label = "Codex CLI",
+            description = "Terminal coding agent from OpenAI.",
+            instructions = "Install Codex CLI with the vendor's documented command for Node.js or your " +
+                "platform, then run `codex` in a terminal tab.",
+            manualBecause = "No distribution package is available and the vendor's installer is unpinned.",
+        ),
+        ManualInstaller(
+            id = "gemini",
+            label = "Gemini CLI",
+            description = "Terminal coding agent from Google.",
+            instructions = "Install Gemini CLI with the vendor's documented npm command, then run `gemini` " +
+                "in a terminal tab and complete the sign-in there.",
+            manualBecause = "Node.js distribution and interactive sign-in only; there is no verified native " +
+                "package or pinned artifact Anthracite could install safely.",
+        ),
+    )
+
+    fun entry(id: String): ManualInstaller? = entries.firstOrNull { it.id == id }
+}
 
 /** Verified support tiers. Only [VERIFIED_HOST] skips the acknowledgement. */
 internal enum class SupportTier(val label: String) {
