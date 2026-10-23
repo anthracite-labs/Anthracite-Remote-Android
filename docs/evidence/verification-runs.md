@@ -5,6 +5,30 @@ retrievable from the API, so each temporary workflow publishes its result as a
 check-run annotation (`::notice`/`::error`) as well; those annotations were read
 back with `gh api .../check-runs/<id>/annotations`.
 
+## Permanent CI on the cleaned commit
+
+The temporary workflows were deleted, and the permanent workflows then ran on the
+cleaned SHA `c94d392`. All 47 checks passed, including the checks that the
+temporary workflows were never allowed to replace:
+
+| Workflow | Run | Notable jobs |
+| --- | --- | --- |
+| Android CI | [39890589082](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39890589082) | compile and every JUnit shard, lint, APK inspection, installer validation, static checks |
+| Android instrumented | [39890589037](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39890589037) | emulator (API 35) |
+| Security checks | [39890589125](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39890589125) | ShellCheck, installer validation, workflow validation, dependency review |
+| CodeQL | [39890589136](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39890589136) | actions and java-kotlin analysis |
+| iOS CI | [39890589019](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39890589019) | Swift package tests, simulator build, simulator UI tests |
+| SonarCloud | PR #8 analysis | quality gate passed |
+
+Running the permanent CI on the cleaned SHA was worth doing: it executed test
+classes the temporary workflow had never listed, and it found two real defects
+(`DeployPlanTest`'s managed-name rule accepted a bare `anthracite-` prefix;
+`GitHubApiTest` asserted the wrong state for its own input). Both are fixed in
+`9232fcf`. SonarCloud also rejected the branch twice for duplication on new code
+(3.7%, then 3.6%, limit 3%); the duplicated lines were the test assertions and the
+catalogue's per-manager maps, both now expressed once, and the gate passes on its
+own terms rather than being relaxed.
+
 ## Run index
 
 | What | Workflow | Run | Commit | Result |
