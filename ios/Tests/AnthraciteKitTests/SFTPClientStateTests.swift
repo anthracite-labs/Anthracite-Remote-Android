@@ -55,7 +55,11 @@ final class TestSFTPPeer: SFTPTransport, @unchecked Sendable {
         lock.lock()
         frames.append(data)
         lock.unlock()
-        handler?(self, data)
+        // The client writes complete frames; the server side works on bodies. The
+        // four-byte length is framing, and handing it over made every request look
+        // like an unknown packet type.
+        guard data.count > 4 else { return }
+        handler?(self, Data(data.dropFirst(4)))
     }
 
     func close() async {
@@ -118,6 +122,10 @@ actor FakeSFTPServer {
     private var handles: [String: String] = [:]
     private var nextHandle = 1
 
+    /// How many packets reached the server. A transport that stops delivering
+    /// leaves this at zero, which is a different defect from a client that hangs.
+    private var handled = 0
+
     init(peer: TestSFTPPeer) {
         self.peer = peer
     }
@@ -157,10 +165,13 @@ actor FakeSFTPServer {
 
     // MARK: Server
 
+    var handledCount: Int { handled }
+
     /// [body] is the packet the client sent, without its length prefix: the
     /// transport carries bodies, and `TestSFTPPeer` keeps the raw frames only to
     /// read the request ids back.
     func handle(_ body: Data) async {
+        handled += 1
         var reader = SFTPReader(body)
         guard let type = try? reader.readByte() else { return }
         if type == SFTP.packetInit {
@@ -372,6 +383,8 @@ final class SFTPClientStateTests: XCTestCase {
         XCTAssertEqual(String(decoding: a, as: UTF8.self), "alpha")
         XCTAssertEqual(String(decoding: b, as: UTF8.self), "beta")
         XCTAssertEqual(fixture.peer.handshakeCount, 1, "a second caller sent a second INIT")
+        let handled = await fixture.server.handledCount
+        XCTAssertGreaterThanOrEqual(handled, 3, "INIT, OPEN and READ should have reached the server")
     }
 
     func testASilentServerTimesOutTheHandshakeInsteadOfHanging() async throws {
