@@ -23,13 +23,22 @@ internal object DeployPlans {
     const val MAX_PORTS = 8
     const val MAX_ENV = 16
 
+    private val MANAGED_NAME = Regex("^anthracite-[a-z0-9][a-z0-9-]*$")
+
     fun newName(random: SecureRandom = SecureRandom()): String {
         val bytes = ByteArray(4).also(random::nextBytes)
         return PREFIX + bytes.joinToString("") { byte -> "%02x".format(byte) }
     }
 
+    /**
+     * A managed name is the prefix **plus a real name**. `"anthracite-"` alone is
+     * not ours: it is what a half-typed or truncated value looks like, and
+     * treating it as ours would let cleanup target something this app never made.
+     */
     fun isManagedName(value: String): Boolean =
-        value.startsWith(PREFIX) && PosixShell.isContainerId(value) && value.length <= 64
+        value.length in (PREFIX.length + 1)..64 &&
+            MANAGED_NAME.matches(value) &&
+            PosixShell.isContainerId(value)
 
     fun isOwnedResource(name: String, reportedLabel: String?): Boolean =
         isManagedName(name) && reportedLabel == "1"
