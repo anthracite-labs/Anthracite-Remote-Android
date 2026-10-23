@@ -75,7 +75,7 @@ final class AppModel: ObservableObject {
         reload()
     }
 
-    private static func defaultStore() -> SecretStore {
+    private nonisolated static func defaultStore() -> SecretStore {
         #if canImport(Security)
         if ProcessInfo.processInfo.arguments.contains("-useMemoryStore") {
             return MemorySecretStore()

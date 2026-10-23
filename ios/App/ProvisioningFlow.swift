@@ -192,7 +192,7 @@ final class ProvisioningViewModel: ObservableObject {
     private func remoteHome() async throws -> String {
         guard let model else { throw SSHError.connectionFailed("Not connected.") }
         if let home = facts?.home, home.hasPrefix("/") { return home }
-        let result = try await model.exec("printf '%s' \"\$HOME\"")
+        let result = try await model.exec("printf '%s' \"$HOME\"")
         let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard home.hasPrefix("/"), !home.contains("'") else {
             throw NSError(
