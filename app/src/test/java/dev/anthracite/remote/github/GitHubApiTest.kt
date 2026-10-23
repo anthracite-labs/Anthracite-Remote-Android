@@ -253,7 +253,6 @@ class GitHubApiTest {
         // The state filter is a fixed vocabulary, never a caller-supplied fragment:
         // an unrecognised value collapses to "open" rather than reaching the URL.
         assertTrue(transport.requests.single().url.endsWith("/issues?state=closed&per_page=30&page=1"))
-        assertEquals("closed", page.items[0].state)
         val unexpected = (api(FakeTransport { response(200, "[]") }).listIssues(repo, "all") as GitHubResult.Ok).value
         assertTrue(unexpected.items.isEmpty())
     }

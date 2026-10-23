@@ -10,36 +10,13 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 KIT_DIR="$HERE/../../main/assets/host"
+. "$HERE/kit_test_lib.sh"
 RUNNER="$KIT_DIR/anthracite-provision-run.sh"
 STATUS="$KIT_DIR/anthracite-provision-status.sh"
 SHELL_UNDER_TEST=${SHELL_UNDER_TEST:-sh}
 
-pass=0
-fail=0
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-
-check() {
-    local label=$1 expected=$2 actual=$3
-    if [[ "$expected" == "$actual" ]]; then
-        pass=$((pass + 1))
-        printf 'ok   %s\n' "$label"
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n     expected: %s\n     actual:   %s\n' "$label" "$expected" "$actual"
-    fi
-}
-
-check_contains() {
-    local label=$1 needle=$2 haystack=$3
-    if [[ "$haystack" == *"$needle"* ]]; then
-        pass=$((pass + 1))
-        printf 'ok   %s\n' "$label"
-    else
-        fail=$((fail + 1))
-        printf 'FAIL %s\n     missing: %s\n     in: %s\n' "$label" "$needle" "$haystack"
-    fi
-}
 
 # --------------------------------------------------------------- fake tooling
 
@@ -442,5 +419,4 @@ kill "$canary_pid" 2>/dev/null
 check_contains "a reused pid has unverified identity" "identity=unverified" "$reused_status"
 check_contains "a reused pid reports mismatched ticks" "start_ticks_match=no" "$reused_status"
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-[[ "$fail" -eq 0 ]]
+summary
