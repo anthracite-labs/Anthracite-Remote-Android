@@ -333,7 +333,7 @@
     <string name="deploy_volumes">Volumes (optional)</string>
     <string name="deploy_volumes_hint">One host-path:container-path[:ro] per line. Paths must be absolute.</string>
     <string name="deploy_env">Environment (optional)</string>
-    <string name="deploy_env_hint">One KEY=value per line. Values are sent as a single argument.</string>
+    <string name="deploy_env_hint">One KEY=value per line. Values are treated as secrets: they are written to a 0600 file on the host and never shown again or passed as an argument.</string>
     <string name="deploy_native_directory">Working directory</string>
     <string name="deploy_native_directory_hint">An absolute path on the host, for example /home/you/project</string>
     <string name="deploy_native_executable">Executable</string>
@@ -341,19 +341,26 @@
     <string name="deploy_native_arguments">Arguments (optional)</string>
     <string name="deploy_native_arguments_hint">Space-separated. Each argument is quoted separately.</string>
     <string name="deploy_workload_kind">Workload kind</string>
-    <string name="deploy_workload_manifest">Manifest</string>
-    <string name="deploy_workload_manifest_hint">One %3$s document named %2$s for context %1$s. Secret, Namespace and cluster-scoped resources are refused.</string>
+    <string name="deploy_workload_image">Container image</string>
+    <string name="deploy_workload_image_hint">The image for the %2$s named %1$s, for example nginx:1.27</string>
+    <string name="deploy_workload_replicas">Replicas</string>
+    <string name="deploy_workload_replicas_hint">1 to %1$d. Leave empty for 1.</string>
+    <string name="deploy_workload_port">Container port</string>
+    <string name="deploy_workload_port_hint">The port the container listens on. Leave empty for 8080.</string>
     <string name="deploy_plan_title">Review deployment</string>
     <string name="deploy_plan_review">%1$s will be created. These are the exact commands:</string>
+    <string name="deploy_plan_manifest">Manifest, generated from the fields you entered:</string>
+    <string name="deploy_plan_environment">Environment, values never displayed:</string>
     <string name="deploy_plan_run">Run</string>
     <string name="deploy_plan_running">Running the reviewed commands…</string>
     <string name="deploy_create_invalid">That deployment is not valid. Nothing was run.</string>
     <string name="deploy_created">%1$s is running on the host.</string>
     <string name="deploy_created_pending">%1$s was applied, but the rollout is not complete: %2$s</string>
+    <string name="deploy_created_unverified">%1$s was applied, but the cluster did not confirm its identity. It cannot be rolled back or removed from here.</string>
     <string name="deploy_created_inspect">Logs of the created deployment</string>
     <string name="deploy_created_remove">Remove the created deployment</string>
     <string name="deploy_remove_container_confirm">Stop and remove the %2$s container %1$s? The host must still report the anthracite.managed=1 label, otherwise nothing is removed.</string>
-    <string name="deploy_remove_workload_confirm">Delete %1$s %2$s from context %3$s, namespace %4$s? Only that one resource is deleted.</string>
+    <string name="deploy_remove_workload_confirm">Delete %1$s %2$s from context %3$s, namespace %4$s? The context, your permissions and the object identity are re-read first, and nothing is deleted unless all three match.</string>
     <string name="deploy_remove_native_confirm">Stop the user unit %1$s? The unit itself is collected afterwards.</string>
     <string name="deploy_remove_refused">The host does not confirm this container carries the Anthracite label, so it was not removed.</string>
     <string name="deploy_removed">%1$s was removed from the host.</string>

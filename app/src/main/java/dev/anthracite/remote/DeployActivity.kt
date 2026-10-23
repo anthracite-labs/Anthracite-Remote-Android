@@ -15,9 +15,13 @@ import dev.anthracite.remote.deploy.ContainerSummary
 import dev.anthracite.remote.deploy.DeployClient
 import dev.anthracite.remote.deploy.DeployCommands
 import dev.anthracite.remote.deploy.DeployCreator
+import dev.anthracite.remote.deploy.DeployOutcome
 import dev.anthracite.remote.deploy.DeployPlan
+import dev.anthracite.remote.deploy.DeployPlanReview
 import dev.anthracite.remote.deploy.DeployPlans
+import dev.anthracite.remote.deploy.DeployWizard
 import dev.anthracite.remote.deploy.KubePod
+import dev.anthracite.remote.deploy.SshShell
 import dev.anthracite.remote.deploy.WorkloadKind
 import dev.anthracite.remote.host.HostProfile
 import dev.anthracite.remote.ui.Row
@@ -68,8 +72,10 @@ class DeployActivity : AppCompatActivity() {
     private var wizardDirectory = ""
     private var wizardExecutable = ""
     private var wizardArguments = ""
-    private var wizardManifest = ""
+    private var wizardReplicas = ""
+    private var wizardContainerPort = ""
     private var wizardKind = WorkloadKind.DEPLOYMENT
+    private var wizard: DeployWizard? = null
 
     private enum class Mode { CONTAINERS, PODS }
 
@@ -181,13 +187,17 @@ class DeployActivity : AppCompatActivity() {
         choose(this, getString(R.string.deploy_create), options) { index ->
             when (index) {
                 0 -> {
+                    wizard = DeployWizard()
                     wizardImage = ""
                     wizardPorts = ""
                     wizardVolumes = ""
                     wizardEnv = ""
                     promptContainerImage()
                 }
-                1 -> promptWorkloadKind()
+                1 -> {
+                    wizard = DeployWizard()
+                    promptWorkloadKind()
+                }
                 else -> {
                     wizardDirectory = ""
                     wizardExecutable = ""
@@ -228,14 +238,14 @@ class DeployActivity : AppCompatActivity() {
     private fun promptContainerEnv() {
         promptText(this, getString(R.string.deploy_env), getString(R.string.deploy_env_hint)) { value ->
             wizardEnv = value
+            val form = wizard ?: DeployWizard().also { wizard = it }
             val plan = runCatching {
-                DeployPlan.Container(
-                    name = DeployPlans.newName(),
+                form.container(
                     runtime = runtime,
                     image = wizardImage,
-                    ports = DeployPlans.parsePorts(wizardPorts),
-                    volumes = DeployPlans.parseVolumes(wizardVolumes),
-                    environment = DeployPlans.parseEnvironment(wizardEnv),
+                    ports = wizardPorts,
+                    volumes = wizardVolumes,
+                    environment = wizardEnv,
                 )
             }.getOrElse {
                 setStatus(it.message ?: getString(R.string.deploy_create_invalid))
@@ -249,11 +259,42 @@ class DeployActivity : AppCompatActivity() {
         val kinds = WorkloadKind.values().toList()
         choose(this, getString(R.string.deploy_workload_kind), kinds.map { it.apiValue }) { index ->
             wizardKind = kinds.getOrElse(index) { WorkloadKind.DEPLOYMENT }
-            ensureKubeContextThenManifest()
+            promptWorkloadImage()
         }
     }
 
-    private fun ensureKubeContextThenManifest() {
+    /**
+     * The manifest is generated from these three fields, never pasted. The name
+     * exists before the first prompt, so every hint and the review screen name the
+     * same object that will be applied.
+     */
+    private fun promptWorkloadImage() {
+        val form = wizard ?: return
+        promptText(
+            this,
+            getString(R.string.deploy_workload_image),
+            getString(R.string.deploy_workload_image_hint, form.name, wizardKind.apiValue),
+            initial = "nginx:1.27",
+        ) { value ->
+            wizardImage = value.trim()
+            if (wizardImage.isEmpty()) return@promptText
+            promptWorkloadReplicas()
+        }
+    }
+
+    private fun promptWorkloadReplicas() {
+        promptText(
+            this,
+            getString(R.string.deploy_workload_replicas),
+            getString(R.string.deploy_workload_replicas_hint, DeployPlans.MAX_REPLICAS),
+            initial = "1",
+        ) { value ->
+            wizardReplicas = value
+            promptWorkloadContainerPort()
+        }
+    }
+
+    private fun promptWorkloadContainerPort() {
         val active = kubeContext
         if (active == null) {
             setStatus(getString(R.string.deploy_no_context))
@@ -262,17 +303,20 @@ class DeployActivity : AppCompatActivity() {
         }
         promptText(
             this,
-            getString(R.string.deploy_workload_manifest),
-            getString(R.string.deploy_workload_manifest_hint, active, namespace, wizardKind.apiValue),
+            getString(R.string.deploy_workload_port),
+            getString(R.string.deploy_workload_port_hint),
+            initial = "8080",
         ) { value ->
-            wizardManifest = value
+            wizardContainerPort = value
+            val form = wizard ?: DeployWizard().also { wizard = it }
             val plan = runCatching {
-                DeployPlan.Workload(
-                    name = DeployPlans.newName(),
+                form.workload(
+                    kind = wizardKind,
                     context = active,
                     namespace = namespace,
-                    kind = wizardKind,
-                    manifest = wizardManifest,
+                    image = wizardImage,
+                    replicas = wizardReplicas,
+                    containerPort = wizardContainerPort,
                 )
             }.getOrElse {
                 setStatus(it.message ?: getString(R.string.deploy_create_invalid))
@@ -330,13 +374,12 @@ class DeployActivity : AppCompatActivity() {
     }
 
     private fun confirmPlan(plan: DeployPlan) {
-        val detail = buildString {
-            append(getString(R.string.deploy_plan_review, plan.name))
-            append("\n\n")
-            append(plan.commands().joinToString("\n"))
-            append("\n\n")
-            append(plan.warnings.joinToString("\n"))
-        }
+        val detail = DeployPlanReview.detail(
+            plan = plan,
+            review = getString(R.string.deploy_plan_review, plan.name),
+            manifestHeader = getString(R.string.deploy_plan_manifest),
+            environmentHeader = getString(R.string.deploy_plan_environment),
+        )
         confirm(
             this,
             getString(R.string.deploy_plan_title),
@@ -346,7 +389,7 @@ class DeployActivity : AppCompatActivity() {
     }
 
     private fun runPlan(plan: DeployPlan) {
-        val deploy = creator ?: DeployCreator(Workspace.ssh).also { creator = it }
+        val deploy = creator ?: DeployCreator(SshShell(Workspace.ssh)).also { creator = it }
         if (busy) return
         setBusy(true)
         setStatus(getString(R.string.deploy_plan_running))
@@ -356,20 +399,39 @@ class DeployActivity : AppCompatActivity() {
                     when (plan) {
                         is DeployPlan.Container -> {
                             val pull = deploy.containerPull(plan)
-                            if (pull.exitCode != 0) pull else deploy.containerRun(plan)
+                            DeployOutcome(if (pull.exitCode != 0) pull else deploy.containerRun(plan))
                         }
                         is DeployPlan.Workload -> deploy.workloadApply(plan)
-                        is DeployPlan.Native -> deploy.nativeStart(plan)
+                        is DeployPlan.Native -> DeployOutcome(deploy.nativeStart(plan))
                     }
                 }
             }
             setBusy(false)
-            result.onSuccess { exec ->
+            result.onSuccess { outcome ->
+                val exec = outcome.result
+                if (exec.exitCode == 0 && plan is DeployPlan.Workload) {
+                    // Only an object whose identity the cluster confirmed may be
+                    // rolled back or deleted later: no UID, no cleanup offered.
+                    val uid = outcome.appliedUid
+                    if (uid == null) {
+                        created = null
+                        setStatus(getString(R.string.deploy_created_unverified, plan.name))
+                        buildActions()
+                        refresh()
+                        return@onSuccess
+                    }
+                    val confirmed = plan.withAppliedUid(uid)
+                    created = confirmed
+                    setStatus(getString(R.string.deploy_created, plan.name))
+                    buildActions()
+                    reportRollout(deploy, confirmed)
+                    return@onSuccess
+                }
                 if (exec.exitCode == 0) {
                     created = plan
                     setStatus(getString(R.string.deploy_created, plan.name))
                     buildActions()
-                    if (plan is DeployPlan.Workload) reportRollout(deploy, plan) else refresh()
+                    refresh()
                 } else {
                     setStatus(
                         getString(
@@ -402,7 +464,7 @@ class DeployActivity : AppCompatActivity() {
 
     private fun inspectCreated() {
         val plan = created ?: return
-        val creatorClient = creator ?: DeployCreator(Workspace.ssh).also { creator = it }
+        val creatorClient = creator ?: DeployCreator(SshShell(Workspace.ssh)).also { creator = it }
         val deploy = client ?: DeployClient(Workspace.ssh).also { client = it }
         if (busy) return
         setBusy(true)
@@ -429,7 +491,7 @@ class DeployActivity : AppCompatActivity() {
 
     private fun removeCreated() {
         val plan = created ?: return
-        val deploy = creator ?: DeployCreator(Workspace.ssh).also { creator = it }
+        val deploy = creator ?: DeployCreator(SshShell(Workspace.ssh)).also { creator = it }
         val warning = when (plan) {
             is DeployPlan.Container ->
                 getString(R.string.deploy_remove_container_confirm, plan.name, runtime.label)

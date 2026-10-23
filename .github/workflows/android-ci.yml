@@ -230,8 +230,10 @@ jobs:
           - test_class: ReconnectGateTest
           - test_class: SshSessionTest
           - test_class: SecretStoreTest
+          - test_class: DeployGuardTest
           - test_class: DeployParserTest
           - test_class: DeployPlanTest
+          - test_class: DeployWizardTest
           - test_class: GitHubApiTest
           - test_class: GitParserTest
           - test_class: HostFactsParserTest

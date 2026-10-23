@@ -323,8 +323,15 @@ struct TerminalTabView: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         Task {
-                            sessions = (try? await model.tmuxSessions()) ?? []
-                            showingSessions = true
+                            do {
+                                sessions = try await model.tmuxSessions()
+                                showingSessions = true
+                            } catch {
+                                model.banner = Banner(
+                                    text: "The host's tmux sessions could not be read: \(error)",
+                                    isError: true
+                                )
+                            }
                         }
                     } label: {
                         Label("Sessions", systemImage: "rectangle.stack")

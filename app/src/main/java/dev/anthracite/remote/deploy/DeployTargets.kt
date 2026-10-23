@@ -31,6 +31,18 @@ internal data class ContainerSummary(
 
 internal data class KubeContextInfo(val name: String, val current: Boolean)
 
+/** What a creation produced: the last command result and the identity, if confirmed. */
+internal data class DeployOutcome(val result: ExecResult, val appliedUid: String? = null)
+
+/** The outcome of a guard check, with the text a screen may show verbatim. */
+internal data class WorkloadPreflight(
+    val verdict: WorkloadMutationVerdict,
+    val detail: String,
+    val identity: WorkloadIdentity?,
+) {
+    val allowed: Boolean get() = verdict == WorkloadMutationVerdict.ALLOWED
+}
+
 internal data class KubePod(
     val name: String,
     val namespace: String,
@@ -293,41 +305,70 @@ internal class DeployClient(private val ssh: SshClient) {
         ssh.exec(DeployCommands.kubeDeletePod(context, namespace, pod), timeoutMs = 60_000)
 }
 
+/** The only host capability a deployment needs, so the guards are testable. */
+internal fun interface RemoteShell {
+    fun exec(command: String, stdin: ByteArray?, timeoutMs: Long): ExecResult
+}
+
+internal class SshShell(private val ssh: SshClient) : RemoteShell {
+    override fun exec(command: String, stdin: ByteArray?, timeoutMs: Long): ExecResult =
+        ssh.exec(command, stdin, timeoutMs)
+}
+
 /**
  * Creating and controlling deployments the user approved.
  *
  * Every mutation goes through a [DeployPlan], which has already validated every
  * value. Deleting a container is only offered after the host reports the
- * `anthracite.managed=1` label on that exact name, and a Kubernetes mutation
- * re-reads the active context and checks RBAC immediately before it runs.
+ * `anthracite.managed=1` label on that exact name. A Kubernetes mutation re-reads
+ * the active context, checks RBAC for the exact verb and re-reads the live
+ * object's UID immediately before it runs.
  */
-internal class DeployCreator(private val ssh: SshClient) {
+internal class DeployCreator(private val shell: RemoteShell) {
     fun nativeStart(plan: DeployPlan.Native): ExecResult =
-        ssh.exec(plan.commands().single(), timeoutMs = 30_000)
+        shell.exec(plan.commands().single(), null, 30_000)
 
     fun nativeStatus(plan: DeployPlan.Native): String =
-        ssh.exec(plan.statusCommand(), timeoutMs = 20_000).stdout.trim()
+        shell.exec(plan.statusCommand(), null, 20_000).stdout.trim()
 
     fun nativeLogs(plan: DeployPlan.Native): String =
-        ssh.exec(plan.logsCommand(), timeoutMs = 30_000).text
+        shell.exec(plan.logsCommand(), null, 30_000).text
 
     fun nativeStop(plan: DeployPlan.Native): ExecResult =
-        ssh.exec(plan.stopCommand(), timeoutMs = 30_000)
+        shell.exec(plan.stopCommand(), null, 30_000)
 
     fun containerPull(plan: DeployPlan.Container): ExecResult =
-        ssh.exec(plan.commands().first(), timeoutMs = 600_000)
+        shell.exec(plan.commands().first(), null, 600_000)
 
-    fun containerRun(plan: DeployPlan.Container): ExecResult =
-        ssh.exec(plan.runCommand(), timeoutMs = 180_000)
+    /**
+     * Writes the environment file (mode 0600) through stdin, starts the container
+     * from it and removes the file afterwards.
+     *
+     * No environment value is ever an argument: values cannot reach `ps`, this
+     * app's review screen, or the host's shell history. The cost is that anyone
+     * with the runtime socket can still read them with `inspect`, which the plan's
+     * warnings state.
+     */
+    fun containerRun(plan: DeployPlan.Container): ExecResult {
+        if (plan.environment.isEmpty()) return shell.exec(plan.runCommand(), null, 180_000)
+        val written = shell.exec(plan.envFileCommand(), plan.envFileBytes(), 30_000)
+        if (written.exitCode != 0) return written
+        return try {
+            shell.exec(plan.runCommand(), null, 180_000)
+        } finally {
+            shell.exec(plan.envFileRemoveCommand(), null, 20_000)
+        }
+    }
 
     /** Reads the ownership label; null means the container does not carry it. */
     fun containerLabel(runtime: DeployCommands.Runtime, name: String): String? {
         require(DeployPlans.isManagedName(name)) { "invalid container name" }
         val binary = if (runtime == DeployCommands.Runtime.PODMAN) "podman" else "docker"
-        val result = ssh.exec(
+        val result = shell.exec(
             "$binary inspect --format '{{index .Config.Labels \"${DeployPlans.MANAGED_LABEL}\"}}' " +
                 "${PosixShell.quote(name)} 2>/dev/null || true",
-            timeoutMs = 20_000,
+            null,
+            20_000,
         )
         return result.stdout.trim().ifBlank { null }
     }
@@ -336,34 +377,95 @@ internal class DeployCreator(private val ssh: SshClient) {
     fun removeOwnedContainer(runtime: DeployCommands.Runtime, name: String): ExecResult? {
         if (!DeployPlans.isOwnedResource(name, containerLabel(runtime, name))) return null
         val binary = if (runtime == DeployCommands.Runtime.PODMAN) "podman" else "docker"
-        return ssh.exec("$binary rm --force ${PosixShell.quote(name)}", timeoutMs = 60_000)
+        return shell.exec("$binary rm --force ${PosixShell.quote(name)}", null, 60_000)
     }
 
     /**
-     * Re-reads the active context and RBAC authority, then applies the manifest
-     * from stdin. A context that changed since the preview refuses the mutation.
+     * Re-reads the active context and RBAC authority, then applies the generated
+     * manifest from stdin and records the UID the cluster assigned.
+     *
+     * Nothing about the apply is inferred: the caller only gets a UID back when
+     * the object that now exists is labelled as one this app created. Without a
+     * UID no later rollback or delete is offered at all.
      */
-    fun workloadApply(plan: DeployPlan.Workload): ExecResult {
-        val active = ssh.exec(plan.contextCommand(), timeoutMs = 20_000).stdout.trim()
-        if (active != plan.context) {
-            return ExecResult(64, "", "the active kubectl context is now '$active', not '${plan.context}'")
+    fun workloadApply(plan: DeployPlan.Workload): DeployOutcome {
+        val contextResult = shell.exec(plan.contextCommand(), null, 20_000)
+        val active = contextResult.stdout.trim()
+        if (contextResult.exitCode != 0 || active != plan.context) {
+            return DeployOutcome(
+                ExecResult(
+                    64,
+                    "",
+                    "the active kubectl context is '${active.ifBlank { "unknown" }}', not '${plan.context}'",
+                ),
+                null,
+            )
         }
-        val allowed = ssh.exec(plan.permissionCommand(), timeoutMs = 20_000).stdout.trim().lowercase()
-        if (allowed != "yes") {
-            return ExecResult(64, "", "RBAC does not allow patching ${plan.kind.resource} in ${plan.namespace}")
+        val canI = shell.exec(plan.permissionCommand("patch"), null, 20_000)
+        if (WorkloadGuard.authority(plan, active, canI.stdout) != WorkloadMutationVerdict.ALLOWED) {
+            return DeployOutcome(
+                ExecResult(64, "", "RBAC does not allow creating or patching ${plan.kind.resource} in ${plan.namespace}"),
+                null,
+            )
         }
-        return ssh.exec(plan.applyCommand(), stdin = plan.manifest.toByteArray(Charsets.UTF_8), timeoutMs = 120_000)
+        val applied = shell.exec(plan.applyCommand(), plan.manifest().toByteArray(Charsets.UTF_8), 120_000)
+        if (applied.exitCode != 0) return DeployOutcome(applied, null)
+        val identity = readIdentity(plan) ?: return DeployOutcome(applied, null)
+        if (!DeployPlans.isOwnedResource(plan.name, identity.managedLabel)) {
+            return DeployOutcome(applied, null)
+        }
+        return DeployOutcome(applied, identity.uid)
     }
 
     fun workloadRollout(plan: DeployPlan.Workload): ExecResult =
-        ssh.exec(plan.rolloutCommand(), timeoutMs = 180_000)
+        shell.exec(plan.rolloutCommand(), null, 180_000)
 
     fun workloadLogs(plan: DeployPlan.Workload): String =
-        ssh.exec(plan.logsCommand(), timeoutMs = 30_000).text
+        shell.exec(plan.logsCommand(), null, 30_000).text
+
+    /**
+     * The check that every destructive Kubernetes action runs through: current
+     * context, RBAC for the exact verb, then the live object's label and UID.
+     * Any read that fails, or any answer that is not an explicit "yes", refuses.
+     */
+    fun workloadPreflight(plan: DeployPlan.Workload, verb: String): WorkloadPreflight {
+        val contextResult = shell.exec(plan.contextCommand(), null, 20_000)
+        val active = contextResult.stdout.trim()
+        if (contextResult.exitCode != 0 || active != plan.context) {
+            return refused(WorkloadMutationVerdict.REFUSED_CONTEXT_CHANGED)
+        }
+        val canI = shell.exec(plan.permissionCommand(verb), null, 20_000)
+        if (WorkloadGuard.authority(plan, active, canI.stdout) != WorkloadMutationVerdict.ALLOWED) {
+            return refused(WorkloadMutationVerdict.REFUSED_RBAC)
+        }
+        val identity = readIdentity(plan) ?: return refused(WorkloadMutationVerdict.REFUSED_NOT_FOUND)
+        val verdict = WorkloadGuard.identity(plan, identity)
+        return WorkloadPreflight(verdict, WorkloadGuard.explanation(verdict), identity)
+    }
 
     fun workloadRollback(plan: DeployPlan.Workload): ExecResult =
-        ssh.exec(plan.rollbackCommand(), timeoutMs = 120_000)
+        guardedMutation(plan, "patch", plan.rollbackCommand(), 120_000)
 
     fun workloadDelete(plan: DeployPlan.Workload): ExecResult =
-        ssh.exec(plan.deleteCommand(), timeoutMs = 60_000)
+        guardedMutation(plan, "delete", plan.deleteCommand(), 60_000)
+
+    private fun guardedMutation(
+        plan: DeployPlan.Workload,
+        verb: String,
+        command: String,
+        timeoutMs: Long,
+    ): ExecResult {
+        val preflight = workloadPreflight(plan, verb)
+        if (!preflight.allowed) return ExecResult(64, "", preflight.detail)
+        return shell.exec(command, null, timeoutMs)
+    }
+
+    private fun readIdentity(plan: DeployPlan.Workload): WorkloadIdentity? {
+        val read = shell.exec(plan.identityCommand(), null, 20_000)
+        if (read.exitCode != 0) return null
+        return WorkloadGuard.parseIdentity(read.stdout)
+    }
+
+    private fun refused(verdict: WorkloadMutationVerdict): WorkloadPreflight =
+        WorkloadPreflight(verdict, WorkloadGuard.explanation(verdict), null)
 }

@@ -1,6 +1,7 @@
 package dev.anthracite.remote.deploy
 
 import dev.anthracite.remote.host.PosixShell
+import dev.anthracite.remote.json.MiniJson
 import java.security.SecureRandom
 
 /**
@@ -18,10 +19,20 @@ import java.security.SecureRandom
 internal object DeployPlans {
     const val MANAGED_LABEL = "anthracite.managed"
     const val PREFIX = "anthracite-"
-    const val MAX_MANIFEST_BYTES = 64 * 1024
     const val MAX_VOLUMES = 8
     const val MAX_PORTS = 8
     const val MAX_ENV = 16
+    const val MAX_REPLICAS = 10
+
+    /** Verbs this app will ever use against a workload it created. */
+    val WORKLOAD_VERBS = setOf("get", "patch", "delete")
+
+    /** Kubernetes object UIDs are UUIDs; anything else is not an identity. */
+    fun isKubernetesUid(value: String): Boolean =
+        value.length == 36 && KUBERNETES_UID.matches(value)
+
+    private val KUBERNETES_UID =
+        Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
     private val MANAGED_NAME = Regex("^anthracite-[a-z0-9][a-z0-9-]*$")
 
@@ -204,12 +215,40 @@ internal sealed class DeployPlan {
                 runtime.warning,
                 "The container is labelled ${DeployPlans.MANAGED_LABEL}=1. Only a container that " +
                     "still carries this name and label is stopped or removed later.",
+                "Environment values are written to a 0600 file on the host and passed with " +
+                    "--env-file, so they never appear in this screen or in a process list. Anyone who " +
+                    "can use the container runtime's socket can still read them from `${binary} inspect`.",
             )
 
-        override fun commands(): List<String> = listOf(
-            binary + " pull " + PosixShell.quote(image),
-            runCommand(),
-        )
+        override fun commands(): List<String> = buildList {
+            add(binary + " pull " + PosixShell.quote(image))
+            if (environment.isNotEmpty()) add(envFileCommand())
+            add(runCommand())
+            if (environment.isNotEmpty()) add(envFileRemoveCommand())
+        }
+
+        /**
+         * The environment file the runtime reads instead of `--env KEY=value`.
+         *
+         * A value passed as an argument is visible in `ps` on the host, in the
+         * shell history of anything that echoes the command and in this app's own
+         * review screen. Values are therefore written once, with mode 0600, and
+         * removed straight after the container starts.
+         */
+        fun envFilePath(): String = "\"\$HOME/.anthracite/deploy/$name.env\""
+
+        fun envFileCommand(): String =
+            "umask 077; mkdir -p \"\$HOME/.anthracite/deploy\" && cat > ${envFilePath()}"
+
+        fun envFileRemoveCommand(): String = "rm -f ${envFilePath()}"
+
+        /** The exact bytes the container will receive, as `docker --env-file` reads them. */
+        fun envFileBytes(): ByteArray =
+            environment.joinToString("") { variable -> "${variable.key}=${variable.value}\n" }
+                .toByteArray(Charsets.UTF_8)
+
+        /** What the reviewer may see: names in full, values never. */
+        fun environmentPreview(): List<String> = environment.map { variable -> "${variable.key}=***" }
 
         fun runCommand(): String = buildString {
             append(binary).append(" run --detach --name ").append(PosixShell.quote(name))
@@ -220,65 +259,117 @@ internal sealed class DeployPlan {
             for (volume in volumes) {
                 append(" --volume ").append(PosixShell.quote(volume.toString()))
             }
-            for (variable in environment) {
-                // The value is quoted as one `KEY=value` token: it is never bare.
-                append(" --env ").append(PosixShell.quote("${variable.key}=${variable.value}"))
+            if (environment.isNotEmpty()) {
+                // Only the path is an argument: no value ever reaches argv.
+                append(" --env-file ").append(envFilePath())
             }
             append(' ').append(PosixShell.quote(image))
         }
     }
 
     /**
-     * One reviewed workload manifest applied to one confirmed context and
-     * namespace. Cluster-scoped kinds are refused, because they cannot be cleaned
-     * up by name without risking something this app did not create.
+     * One reviewed workload, applied to one confirmed context and namespace.
+     *
+     * The manifest is **generated from typed fields**, never typed by the user and
+     * never parsed back out of free text: there is exactly one document, exactly
+     * one resource, the name is the generated one, and the ownership label is
+     * always present because it is written here. Cluster-scoped kinds are refused
+     * outright, because they cannot be cleaned up by name without risking
+     * something this app did not create.
+     *
+     * [appliedUid] is the object identity the cluster reported after the apply.
+     * Every later mutation re-reads it: a Deployment that was deleted and
+     * re-created by someone else has the same name and would otherwise look like
+     * ours.
      */
     data class Workload(
         override val name: String,
         val context: String,
         val namespace: String,
         val kind: WorkloadKind,
-        val manifest: String,
+        val image: String,
+        val replicas: Int = 1,
+        val containerPort: Int = 8080,
+        val appliedUid: String? = null,
     ) : DeployPlan() {
         init {
             require(DeployPlans.isManagedName(name)) { "invalid workload name" }
             require(DeployCommands.isKubeContext(context)) { "invalid Kubernetes context" }
             require(PosixShell.isKubernetesName(namespace)) { "invalid namespace" }
-            require(manifest.toByteArray(Charsets.UTF_8).size <= DeployPlans.MAX_MANIFEST_BYTES) {
-                "the manifest is larger than ${DeployPlans.MAX_MANIFEST_BYTES} bytes"
+            require(PosixShell.isImageReference(image)) { "invalid image reference" }
+            require(replicas in 1..DeployPlans.MAX_REPLICAS) {
+                "replicas must be between 1 and ${DeployPlans.MAX_REPLICAS}"
             }
-            require(!manifest.contains('\u0000')) { "the manifest contains NUL" }
-            require(!manifest.contains("\n---")) { "a manifest must contain exactly one document" }
-            require(!manifest.trimStart().startsWith("---")) { "a manifest must contain one document" }
-            val declaredKind = valueOf(manifest, "kind")
-            require(declaredKind != null) { "the manifest has no kind" }
-            require(declaredKind == kind.apiValue) {
-                "the manifest kind is $declaredKind, not ${kind.apiValue}"
-            }
-            val metadataName = metadataNameOf(manifest)
-            require(metadataName == name) {
-                "the manifest's metadata.name is ${metadataName ?: "missing"}, not $name"
+            require(containerPort in 1..65535) { "container port is out of range" }
+            if (appliedUid != null) {
+                require(DeployPlans.isKubernetesUid(appliedUid)) { "invalid Kubernetes UID" }
             }
         }
 
+        /** The same plan, now carrying the identity the cluster assigned. */
+        fun withAppliedUid(uid: String): Workload = copy(appliedUid = uid)
+
         override val warnings: List<String> = listOf(
-            "Applies to context ${context}, namespace ${namespace}; both are re-checked on the host " +
-                "immediately before the mutation. Only ${kind.apiValue}/$name is rolled back or deleted.",
-            "No Secret, Namespace or cluster-scoped resource is accepted here.",
+            "Applies to context $context, namespace $namespace. Both are re-read on the host " +
+                "immediately before every mutation, and only ${kind.apiValue}/$name is rolled back or deleted.",
+            "The object carries ${DeployPlans.MANAGED_LABEL}=1 and its cluster UID is recorded when it " +
+                "is created. Rollback and delete refuse to run if the object was replaced.",
+            "No Secret, Namespace or cluster-scoped resource is created here, and no other resource " +
+                "is ever touched.",
         )
 
         override fun commands(): List<String> = listOf(applyCommand(), rolloutCommand())
+
+        /** Exactly one document, generated from the validated fields above. */
+        fun manifest(): String = buildString {
+            append("apiVersion: apps/v1\n")
+            append("kind: ").append(kind.apiValue).append('\n')
+            append("metadata:\n")
+            append("  name: ").append(name).append('\n')
+            append("  namespace: ").append(namespace).append('\n')
+            append("  labels:\n")
+            append("    ").append(DeployPlans.MANAGED_LABEL).append(": \"1\"\n")
+            append("spec:\n")
+            if (kind == WorkloadKind.STATEFULSET) {
+                // apps/v1 StatefulSet requires a governing service name.
+                append("  serviceName: ").append(name).append('\n')
+            }
+            append("  replicas: ").append(replicas).append('\n')
+            append("  selector:\n")
+            append("    matchLabels:\n")
+            append("      app: ").append(name).append('\n')
+            append("  template:\n")
+            append("    metadata:\n")
+            append("      labels:\n")
+            append("        app: ").append(name).append('\n')
+            append("    spec:\n")
+            append("      containers:\n")
+            append("        - name: app\n")
+            append("          image: ").append(image).append('\n')
+            append("          ports:\n")
+            append("            - containerPort: ").append(containerPort).append('\n')
+        }
 
         private fun kubectl(action: String): String =
             "kubectl --context ${PosixShell.quote(context)} --namespace ${PosixShell.quote(namespace)} $action"
 
         fun contextCommand(): String = "kubectl config current-context"
 
-        fun permissionCommand(): String =
-            kubectl("auth can-i patch ${kind.resource}")
+        /** The verb the caller is about to use, checked against this exact resource. */
+        fun permissionCommand(verb: String): String {
+            require(verb in DeployPlans.WORKLOAD_VERBS) { "unsupported kubectl verb" }
+            return kubectl("auth can-i $verb ${kind.resource}")
+        }
 
         /** The manifest arrives on stdin: nothing from it is parsed by a shell. */
         fun applyCommand(): String = kubectl("apply -f -")
+
+        /**
+         * The object as the cluster holds it, including its immutable UID and its
+         * ownership label. Read-only, and parsed structurally: the label key
+         * contains dots, which a jsonpath would have to escape.
+         */
+        fun identityCommand(): String = kubectl("get ${kind.resource}/${PosixShell.quote(name)} -o json")
 
         fun rolloutCommand(): String =
             kubectl("rollout status ${kind.resource}/${PosixShell.quote(name)} --timeout=120s")
@@ -290,16 +381,117 @@ internal sealed class DeployPlan {
 
         fun deleteCommand(): String =
             kubectl("delete ${kind.resource}/${PosixShell.quote(name)} --ignore-not-found --wait=false")
-
-        private companion object {
-            fun valueOf(manifest: String, key: String): String? =
-                Regex("(?m)^$key:[ \\t]*([A-Za-z]+)[ \\t]*$").find(manifest)?.groupValues?.get(1)
-
-            fun metadataNameOf(manifest: String): String? =
-                Regex("(?m)^metadata:[ \\t]*\\n(?:[ \\t]+[A-Za-z0-9._/-]+:.*\\n)*?[ \\t]+name:[ \\t]*([A-Za-z0-9._-]+)[ \\t]*$")
-                    .find(manifest)?.groupValues?.get(1)
-        }
     }
+}
+
+/** An object identity as the cluster reports it. */
+internal data class WorkloadIdentity(val uid: String, val managedLabel: String?)
+
+/** Why a rollback or delete was allowed or refused. Every value fails closed. */
+internal enum class WorkloadMutationVerdict {
+    ALLOWED,
+    REFUSED_NO_RECORDED_IDENTITY,
+    REFUSED_CONTEXT_CHANGED,
+    REFUSED_NOT_FOUND,
+    REFUSED_NOT_OURS,
+    REFUSED_UID_CHANGED,
+    REFUSED_RBAC,
+}
+
+/** What a guarded mutation will do. Nothing here talks to a host. */
+internal object WorkloadGuard {
+    /**
+     * The identity half of the check: is the object in front of us the exact one
+     * this app created? A missing read, a missing label or a different UID all
+     * refuse; there is no "probably ours".
+     */
+    fun identity(
+        plan: DeployPlan.Workload,
+        observed: WorkloadIdentity?,
+    ): WorkloadMutationVerdict {
+        val expectedUid = plan.appliedUid ?: return WorkloadMutationVerdict.REFUSED_NO_RECORDED_IDENTITY
+        if (observed == null) return WorkloadMutationVerdict.REFUSED_NOT_FOUND
+        if (!DeployPlans.isOwnedResource(plan.name, observed.managedLabel)) {
+            return WorkloadMutationVerdict.REFUSED_NOT_OURS
+        }
+        if (observed.uid != expectedUid) return WorkloadMutationVerdict.REFUSED_UID_CHANGED
+        return WorkloadMutationVerdict.ALLOWED
+    }
+
+    /**
+     * The authority half: the active context must still be the one that was
+     * reviewed, and RBAC must allow the exact verb about to be used. `can-i`
+     * prints "yes"/"no"; anything else is treated as a refusal.
+     */
+    fun authority(
+        plan: DeployPlan.Workload,
+        activeContext: String,
+        canIOutput: String,
+    ): WorkloadMutationVerdict {
+        if (activeContext.trim() != plan.context) return WorkloadMutationVerdict.REFUSED_CONTEXT_CHANGED
+        if (canIOutput.trim().lowercase() != "yes") return WorkloadMutationVerdict.REFUSED_RBAC
+        return WorkloadMutationVerdict.ALLOWED
+    }
+
+    fun explanation(verdict: WorkloadMutationVerdict): String = when (verdict) {
+        WorkloadMutationVerdict.ALLOWED -> "The object is the one this app created."
+        WorkloadMutationVerdict.REFUSED_NO_RECORDED_IDENTITY ->
+            "This deployment has no recorded cluster identity, so nothing is changed."
+        WorkloadMutationVerdict.REFUSED_CONTEXT_CHANGED ->
+            "The active kubectl context changed since this deployment was reviewed."
+        WorkloadMutationVerdict.REFUSED_NOT_FOUND ->
+            "The object is no longer on the cluster, so nothing is changed."
+        WorkloadMutationVerdict.REFUSED_NOT_OURS ->
+            "The object on the cluster is not labelled as one this app created, so it is left alone."
+        WorkloadMutationVerdict.REFUSED_UID_CHANGED ->
+            "The object was replaced after it was created, so it is not the one that was reviewed."
+        WorkloadMutationVerdict.REFUSED_RBAC ->
+            "The cluster does not allow this action for your credentials."
+    }
+
+    /**
+     * Reads the object reported by [DeployPlan.Workload.identityCommand].
+     *
+     * Anything that is not a Kubernetes UID in a readable document is null: an
+     * unreadable answer is never evidence about which object is in front of us.
+     */
+    fun parseIdentity(stdout: String): WorkloadIdentity? {
+        val document = runCatching { MiniJson.parse(stdout) }.getOrNull()?.asObject() ?: return null
+        val metadata = document.obj("metadata") ?: return null
+        val uid = metadata.string("uid") ?: return null
+        if (!DeployPlans.isKubernetesUid(uid)) return null
+        val label = metadata.obj("labels")?.string(DeployPlans.MANAGED_LABEL)
+        return WorkloadIdentity(uid, label)
+    }
+}
+
+/**
+ * The exact text shown before a plan runs.
+ *
+ * Pure so a test can assert that no environment value reaches it: the reviewer
+ * sees the commands, the generated manifest and the warnings, and never a value.
+ */
+internal object DeployPlanReview {
+    fun detail(plan: DeployPlan, review: String, manifestHeader: String, environmentHeader: String): String =
+        buildString {
+            append(review)
+            append("\n\n")
+            append(plan.commands().joinToString("\n"))
+            if (plan is DeployPlan.Workload) {
+                append("\n\n")
+                append(manifestHeader)
+                append("\n")
+                append(plan.manifest())
+            }
+            if (plan is DeployPlan.Container && plan.environment.isNotEmpty()) {
+                append("\n\n")
+                append(environmentHeader)
+                append("\n")
+                append(plan.environmentPreview().joinToString("\n"))
+            }
+            append("\n\n")
+            append(plan.warnings.joinToString("\n"))
+        }
 }
 
 /** Workload kinds with a rollout status this screen can report honestly. */

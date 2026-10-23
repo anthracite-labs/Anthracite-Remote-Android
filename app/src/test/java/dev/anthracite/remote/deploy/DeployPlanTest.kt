@@ -8,8 +8,9 @@ import org.junit.Test
 /**
  * Deployment creation is only as safe as the values that reach the host command.
  * These tests exercise that grammar directly: hostile names, images, ports,
- * volumes, environment values and manifests must be refused before a plan exists,
- * and an accepted plan must render exactly the commands that were previewed.
+ * volumes and environment values must be refused before a plan exists, an
+ * accepted plan must render exactly the commands that were previewed, and no
+ * environment value may appear in anything the user or the host can see.
  */
 class DeployPlanTest {
     private fun rejected(block: () -> Unit): Boolean = try {
@@ -29,34 +30,15 @@ class DeployPlanTest {
         runtime: DeployCommands.Runtime = DeployCommands.Runtime.DOCKER,
     ) = DeployPlan.Container(name, runtime, image, ports, volumes, environment)
 
-    private val manifest = """
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata:
-          name: anthracite-1a2b3c4d
-          labels:
-            app.kubernetes.io/managed-by: anthracite
-        spec:
-          replicas: 1
-          selector:
-            matchLabels:
-              app: anthracite-1a2b3c4d
-          template:
-            metadata:
-              labels:
-                app: anthracite-1a2b3c4d
-            spec:
-              containers:
-                - name: app
-                  image: nginx:1.27
-    """.trimIndent()
-
     private fun workload(
-        body: String = manifest,
         kind: WorkloadKind = WorkloadKind.DEPLOYMENT,
         context: String = "prod-cluster",
         namespace: String = "demo",
-    ) = DeployPlan.Workload(name, context, namespace, kind, body)
+        image: String = "nginx:1.27",
+        replicas: Int = 1,
+        containerPort: Int = 8080,
+        appliedUid: String? = null,
+    ) = DeployPlan.Workload(name, context, namespace, kind, image, replicas, containerPort, appliedUid)
 
     // ---------------------------------------------------------------- ownership
 
@@ -88,16 +70,50 @@ class DeployPlanTest {
             environment = listOf(EnvVar("GREETING", "hello world")),
         )
         val commands = plan.commands()
-        assertEquals(listOf("docker pull nginx:1.27", plan.runCommand()), commands)
+        assertEquals(
+            listOf(
+                "docker pull nginx:1.27",
+                plan.envFileCommand(),
+                plan.runCommand(),
+                plan.envFileRemoveCommand(),
+            ),
+            commands,
+        )
         val run = plan.runCommand()
         assertTrue(run.startsWith("docker run --detach --name anthracite-1a2b3c4d"))
         assertTrue(run.contains("--label anthracite.managed=1"))
         assertTrue(run.contains("--publish 8080:80"))
         assertTrue(run.contains("--volume /srv/data:/var/lib/data:ro"))
-        // A value with a space stays one token: it cannot become another flag.
-        assertTrue(run.contains("--env 'GREETING=hello world'"))
+        // The value is not an argument: the runtime reads a 0600 file instead.
+        assertTrue(run.contains("--env-file \"\$HOME/.anthracite/deploy/anthracite-1a2b3c4d.env\""))
+        assertFalse(run.contains("GREETING"))
         assertTrue(run.endsWith(" nginx:1.27"))
         assertTrue(plan.warnings.any { it.contains("root") })
+        assertTrue(plan.warnings.any { it.contains("inspect") })
+    }
+
+    @Test
+    fun `an environment value is never printed, never an argument and reaches a 0600 file`() {
+        val secret = "s3cr3t-token-value"
+        val plan = container(environment = listOf(EnvVar("TOKEN", secret)))
+        // The review surface the Activity renders: commands, preview, warnings.
+        val review = DeployPlanReview.detail(plan, "review", "manifest", "environment")
+        assertFalse(review.contains(secret))
+        assertTrue(review.contains("TOKEN=***"))
+        assertFalse(plan.commands().any { it.contains(secret) })
+        assertEquals("TOKEN=***", plan.environmentPreview().single())
+        assertEquals("TOKEN=$secret\n", String(plan.envFileBytes()))
+        // The file is created with a private umask and removed by path only.
+        assertTrue(plan.envFileCommand().startsWith("umask 077; mkdir -p"))
+        assertTrue(plan.envFileRemoveCommand().startsWith("rm -f \""))
+        assertFalse(plan.envFileRemoveCommand().contains(secret))
+    }
+
+    @Test
+    fun `a plan without environment has no file steps`() {
+        val plan = container()
+        assertEquals(listOf("docker pull nginx:1.27", plan.runCommand()), plan.commands())
+        assertFalse(plan.runCommand().contains("--env"))
     }
 
     @Test
@@ -172,7 +188,9 @@ class DeployPlanTest {
         assertTrue(plan.rollbackCommand().contains("rollout undo deployment/anthracite-1a2b3c4d"))
         assertTrue(plan.rolloutCommand().contains("rollout status deployment/anthracite-1a2b3c4d"))
         assertEquals("kubectl config current-context", plan.contextCommand())
-        assertTrue(plan.permissionCommand().endsWith("auth can-i patch deployment"))
+        assertTrue(plan.permissionCommand("patch").endsWith("auth can-i patch deployment"))
+        assertTrue(plan.permissionCommand("delete").endsWith("auth can-i delete deployment"))
+        assertTrue(rejected { plan.permissionCommand("create") })
     }
 
     @Test
@@ -180,45 +198,46 @@ class DeployPlanTest {
         for (bad in listOf("prod; rm -rf /", "", "prod cluster", "-n", "a/b")) {
             assertTrue("context '$bad' should have been refused", rejected { workload(context = bad) })
         }
-        for (bad in listOf("demo; id", "", "Demo", "a/b", "-") ) {
+        for (bad in listOf("demo; id", "", "Demo", "a/b", "-")) {
             assertTrue("namespace '$bad' should have been refused", rejected { workload(namespace = bad) })
         }
     }
 
     @Test
-    fun `cluster-scoped and misnamed manifests are refused`() {
-        val secret = """
-            apiVersion: v1
-            kind: Secret
-            metadata:
-              name: anthracite-1a2b3c4d
-        """.trimIndent()
-        assertTrue(rejected { workload(body = secret) })
+    fun `the manifest is generated as exactly one owned resource`() {
+        val plan = workload(kind = WorkloadKind.STATEFULSET, replicas = 3, containerPort = 9090)
+        val manifest = plan.manifest()
+        assertEquals(1, Regex("^kind: ", RegexOption.MULTILINE).findAll(manifest).count())
+        assertEquals(1, Regex("^---", RegexOption.MULTILINE).findAll(manifest).count())
+        assertTrue(manifest.contains("kind: StatefulSet"))
+        assertTrue(manifest.contains("  name: anthracite-1a2b3c4d\n"))
+        assertTrue(manifest.contains("  namespace: demo\n"))
+        assertTrue(manifest.contains("    anthracite.managed: \"1\"\n"))
+        assertTrue(manifest.contains("  replicas: 3\n"))
+        assertTrue(manifest.contains("            - containerPort: 9090\n"))
+        assertTrue(manifest.contains("  serviceName: anthracite-1a2b3c4d\n"))
+        // Every line is generated from a validated field: no free text survives.
+        assertFalse(manifest.contains("%"))
+    }
 
-        val namespace = """
-            apiVersion: v1
-            kind: Namespace
-            metadata:
-              name: anthracite-1a2b3c4d
-        """.trimIndent()
-        assertTrue(rejected { workload(body = namespace) })
-
-        val wrongName = manifest.replace("name: anthracite-1a2b3c4d", "name: production-api")
-        assertTrue(rejected { workload(body = wrongName) })
-
-        val twoDocuments = manifest + "\n---\n" + manifest
-        assertTrue(rejected { workload(body = twoDocuments) })
-
-        val missingKind = manifest.replace("kind: Deployment\n", "")
-        assertTrue(rejected { workload(body = missingKind) })
-
-        // A StatefulSet manifest is not accepted as a Deployment plan.
-        val stateful = manifest.replace("kind: Deployment", "kind: StatefulSet")
-        assertTrue(rejected { workload(body = stateful) })
-        assertTrue(!rejected { workload(body = stateful, kind = WorkloadKind.STATEFULSET) })
-
-        val huge = manifest + "\n# " + "x".repeat(DeployPlans.MAX_MANIFEST_BYTES)
-        assertTrue(rejected { workload(body = huge) })
+    @Test
+    fun `hostile workload fields are refused before a manifest exists`() {
+        for (bad in listOf(
+            "nginx:1.27\nkind: Secret",
+            "nginx; rm -rf /",
+            "nginx:1.27 && id",
+            "\$(reboot)",
+            "",
+        )) {
+            assertTrue("image '$bad' should have been refused", rejected { workload(image = bad) })
+        }
+        assertTrue(rejected { workload(replicas = 0) })
+        assertTrue(rejected { workload(replicas = DeployPlans.MAX_REPLICAS + 1) })
+        assertTrue(rejected { workload(containerPort = 0) })
+        assertTrue(rejected { workload(containerPort = 65_536) })
+        // An identity is a UUID or nothing: a forged one is refused outright.
+        assertTrue(rejected { workload(appliedUid = "not-a-uid") })
+        assertTrue(rejected { workload(appliedUid = "00000000-0000-0000-0000-00000000000") })
     }
 
     // -------------------------------------------------------------------- native
@@ -268,6 +287,6 @@ class DeployPlanTest {
     fun `a deployment name outside the managed grammar is refused by every plan`() {
         assertTrue(rejected { DeployPlan.Container("nginx", DeployCommands.Runtime.DOCKER, "nginx:1.27") })
         assertTrue(rejected { DeployPlan.Native("app", "/home/ada", "./run.sh", emptyList()) })
-        assertTrue(rejected { DeployPlan.Workload("app", "ctx", "demo", WorkloadKind.DEPLOYMENT, manifest) })
+        assertTrue(rejected { DeployPlan.Workload("app", "ctx", "demo", WorkloadKind.DEPLOYMENT, "nginx:1.27") })
     }
 }

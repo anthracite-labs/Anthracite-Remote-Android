@@ -267,7 +267,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Stopping is verified: `has-session` decides, not a return code alone.
+    /// Stopping is verified twice: the listing must still show this exact name
+    /// and id before anything is killed, and `has-session` afterwards must prove
+    /// the session is gone. A nonzero exit that is not one of tmux's own
+    /// "nothing here" answers proves nothing, and is reported as unknown.
     func stop(tmuxSession: TmuxSession) async {
         guard let connection else { return }
         do {
@@ -281,23 +284,51 @@ final class AppModel: ObservableObject {
             }
             if let check = Tmux.hasSessionCommand(tmuxSession) {
                 let result = try await connection.exec(check)
-                banner = Banner(
-                    text: result.exitCode == 0
-                        ? "The session is still running. Nothing is claimed stopped."
-                        : "The session is gone; the host confirmed it with has-session.",
-                    isError: result.exitCode == 0
-                )
+                switch Tmux.hasSessionPresence(
+                    exitCode: result.exitCode,
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    id: tmuxSession.id
+                ) {
+                case .present:
+                    banner = Banner(text: "The session is still running. Nothing is claimed stopped.", isError: true)
+                case .absent:
+                    banner = Banner(text: "The session is gone; the host confirmed it with has-session.", isError: false)
+                case .unknown:
+                    banner = Banner(
+                        text: "The host did not answer clearly, so whether the session stopped is unknown. "
+                            + "Check it before assuming it is gone.",
+                        isError: true
+                    )
+                }
             }
         } catch {
             banner = Banner(text: describe(error), isError: true)
         }
     }
 
+    /// A listing that cannot be read is an error, never an empty host.
     func tmuxSessions() async throws -> [TmuxSession] {
         guard let connection else { return [] }
         let result = try await connection.exec(Tmux.listCommand())
-        if result.exitCode != 0 && result.stderr.contains("no server running") { return [] }
-        return Tmux.parseSessions(result.stdout)
+        if result.exitCode != 0 {
+            if Tmux.reportsNoSessions(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr) {
+                return []
+            }
+            throw SSHError.connectionFailed(
+                "The host did not list its tmux sessions: "
+                    + (result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "exit \(result.exitCode)"
+                        : String(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200)))
+            )
+        }
+        let listing = Tmux.parseListing(result.stdout)
+        if listing.unparsed != 0 || !result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw SSHError.connectionFailed(
+                "The host's tmux listing could not be read completely, so nothing is assumed about its sessions."
+            )
+        }
+        return listing.sessions
     }
 
     // MARK: - Remote commands
