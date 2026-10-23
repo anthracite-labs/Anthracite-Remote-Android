@@ -1,16 +1,18 @@
-name: _temp ios
+name: iOS CI
+
 on:
+  pull_request:
+    branches: [main]
   push:
-    branches: [arena/097f72d0-anthracite-remote-android]
-    paths:
-      - 'ios/**'
-      - 'ci/ios-build.sh'
-      - '.github/workflows/_temp-anthracite-ios.yml'
+    branches: [main]
+  workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   ios:
-    name: iOS (Swift package + simulator)
+    name: Swift package and simulator
     runs-on: macos-15
     timeout-minutes: 40
     steps:

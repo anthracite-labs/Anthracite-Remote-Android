@@ -75,7 +75,19 @@ disposable distribution containers — see
 Kubernetes cluster has been used yet, so those paths stay unverified and the app
 says so.
 
-There is **no iOS client** in this repository yet: decision 10B is not delivered.
+A native **iOS client** lives in `ios/` (SwiftUI plus the tested `AnthraciteKit`
+package): the same host-key pinning, PTY terminal with tabs, SFTP browsing, host
+Git, GitHub issues and pull requests, deployments and guided provisioning. It is
+built and exercised on a macOS simulator runner; see
+`docs/evidence/ios.md` for exactly what that does and does not prove. Android is
+still the more complete client.
+
+## iOS build
+
+```sh
+brew install xcodegen
+sh ci/ios-build.sh     # swift test, simulator build, simulator UI tests
+```
 
 ## Persistence limitation
 

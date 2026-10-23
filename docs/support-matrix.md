@@ -85,8 +85,27 @@ image a claim came from, on which date, from which run.
 
 ## iOS
 
-No iOS client exists in this repository yet. It is therefore **not implemented**,
-not "in progress": Android capabilities above apply to Android only.
+A native Swift/SwiftUI client lives in `ios/`: a `AnthraciteKit` Swift package plus
+an app target. It is built and tested on a macOS runner
+([run 39886906949](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39886906949)),
+including a simulator launch test.
+
+| Behaviour | Status |
+| --- | --- |
+| Host-key fingerprint in `ssh-keygen -lf` form, first-use approval, refusal on change | unit tested |
+| Pinned key compared again on the real handshake (equality against the approved key) | implemented; no live-server run yet |
+| Password and unencrypted Ed25519 auth, secrets in a this-device-only Keychain item | implemented, storage tested; no live-server run |
+| Encrypted private keys, RSA host keys | **not supported**, refused with a message |
+| PTY shell, resize, byte streaming, multiple tabs | implemented; compile-tested; no live-server run |
+| VT emulation: CSI/SGR/alt screen/scroll regions/wide glyphs, OSC 52 blocked, OSC 8 `https` only | unit tested |
+| Key encoding: Ctrl/Alt, arrows in both cursor modes, F1–F12, bracketed paste | unit tested |
+| SFTP v3: list, stat, read, atomic write, mkdir, rename, symlink-safe delete, 8 MB and 5000-entry caps | wire format unit tested; no live-server run |
+| tmux: parse, attach by id, name+id identity, stop verified with `has-session` | unit tested |
+| Host Git: status v2, log, stage/unstage, commit via stdin, fetch, `--ff-only` pull, `--force-with-lease` | command/parse unit tested; no live-server run |
+| GitHub: issues list/detail/comments/create/close, checks, SHA-pinned merge | stubbed-transport tests; no live API call |
+| Deployments: container list/logs/ownership-checked removal, Kubernetes apply with per-mutation RBAC check, native `systemd-run --user` | command construction unit tested; no live daemon or cluster |
+| Guided provisioning: same reviewed host scripts as Android, plan digest, detached runner, host-side compare-and-signal cancel | plan/cancel logic unit tested; no real-host run |
+| IME, VoiceOver, hardware keyboard, re-creation after process death | **untested** (no physical device) |
 
 ## Deliberately out of scope
 
