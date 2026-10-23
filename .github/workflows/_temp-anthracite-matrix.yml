@@ -62,13 +62,21 @@ jobs:
             fi
           '
       - name: Real install, failure, cancellation and cleanup
+        id: matrix_run
+        continue-on-error: true
         run: |
-          set -euo pipefail
           docker run --rm \
             -v "$PWD:/w" -w /w \
             -e KIT_DIR=app/src/main/assets/host \
             "${{ matrix.image }}" \
             sh ci/container-install-test.sh "${{ matrix.os_id }}" 2>&1 | tee "matrix-${{ matrix.os_id }}.log"
+          exit "${PIPESTATUS[0]}"
+      - name: Annotate the failure
+        if: steps.matrix_run.outcome == 'failure'
+        run: |
+          grep -nE 'MATRIX-FAIL|== |error|Error|refus' "matrix-${{ matrix.os_id }}.log" | tail -n 15 \
+            | sed 's/%/%25/g' | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+          exit 1
       - name: Record the evidence line
         if: success()
         run: |
