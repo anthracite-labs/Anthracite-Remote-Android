@@ -1,0 +1,92 @@
+name: _temp-anthracite-matrix
+# TEMPORARY distribution matrix for guided provisioning.
+#
+# Runs the real host-kit runner against six disposable containers (real package
+# managers, real installs) and records the resolved image digest of each run.
+# Delete this file before the branch is proposed for merge; the evidence it
+# produces is kept in docs/evidence/ and in the support matrix.
+
+on:
+  push:
+    branches:
+      - arena/097f72d0-anthracite-remote-android
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - image: debian:12
+            os_id: debian
+          - image: ubuntu:24.04
+            os_id: ubuntu
+          - image: fedora:42
+            os_id: fedora
+          - image: archlinux:latest
+            os_id: arch
+          - image: opensuse/tumbleweed:latest
+            os_id: opensuse-tumbleweed
+          - image: alpine:3.21
+            os_id: alpine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pull image and record its digest
+        id: image
+        run: |
+          set -euo pipefail
+          docker pull "${{ matrix.image }}"
+          digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "${{ matrix.image }}")
+          echo "digest=$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Prepare the fixture inside the image
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/w" -w /w "${{ matrix.image }}" sh -c '
+            if command -v pacman >/dev/null 2>&1; then
+              pacman-key --init
+              pacman-key --populate archlinux
+            fi
+            if command -v zypper >/dev/null 2>&1; then
+              zypper --non-interactive --gpg-auto-import-keys refresh || true
+            fi
+          '
+      - name: Real install, failure, cancellation and cleanup
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/w" -w /w \
+            -e KIT_DIR=app/src/main/assets/host \
+            "${{ matrix.image }}" \
+            sh ci/container-install-test.sh "${{ matrix.os_id }}" 2>&1 | tee "matrix-${{ matrix.os_id }}.log"
+      - name: Record the evidence line
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            printf 'image=%s\n' "${{ matrix.image }}"
+            printf 'os_id=%s\n' "${{ matrix.os_id }}"
+            printf 'digest=%s\n' "${{ steps.image.outputs.digest }}"
+            printf 'run=%s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          } > "evidence-${{ matrix.os_id }}.txt"
+          cat "evidence-${{ matrix.os_id }}.txt"
+      - name: Upload matrix log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: matrix-${{ matrix.os_id }}-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            matrix-${{ matrix.os_id }}.log
+            evidence-${{ matrix.os_id }}.txt

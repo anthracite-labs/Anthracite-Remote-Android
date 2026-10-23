@@ -843,6 +843,12 @@ internal data class CancelResult(
     val verification: String?,
 ) {
     val identityProven: Boolean get() = verification != null
+
+    /** A signal was delivered to a verified runner; it may still be alive. */
+    val signalWasSent: Boolean get() = outcome.signalWasSent
+
+    /** The host observed the process exit; not merely "a kill call returned 0". */
+    val stopped: Boolean get() = outcome.stopped
 }
 
 /**

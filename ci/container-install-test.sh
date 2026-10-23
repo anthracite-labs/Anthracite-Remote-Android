@@ -84,7 +84,7 @@ step "priming package metadata"
 case "$MANAGER" in
     apt-get) apt-get update -qq ;;
     dnf) dnf -q -y makecache ;;
-    zypper) zypper --non-interactive --quiet refresh ;;
+    zypper) zypper --non-interactive --quiet --gpg-auto-import-keys refresh ;;
     pacman) pacman -Sy --noconfirm --quiet >/dev/null ;;
     apk) apk update --quiet ;;
 esac
