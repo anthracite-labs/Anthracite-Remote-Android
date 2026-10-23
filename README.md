@@ -42,19 +42,30 @@ workspace for the same Linux machine, reached from **Manage → Host workspace**
   repository and number before it runs.
 * **Deployments** — list, logs, start/stop/restart a host-reported container,
   delete one named pod, **and create**: a container from an existing image
-  (ports, volumes, environment; labelled `anthracite.managed=1`), a reviewed
-  Kubernetes Deployment/StatefulSet in one confirmed context and namespace, or a
-  native program as a `systemd --user` unit. Creation shows the exact commands
-  first; removal only ever targets the resource this app created, and a container
-  is removed only while the host still reports its label. Docker socket access is
-  root-equivalent and the screen says so.
+  (ports, volumes, environment; labelled `anthracite.managed=1`), a Kubernetes
+  Deployment/StatefulSet described by typed fields (image, replicas, container
+  port) in one confirmed context and namespace, or a native program as a
+  `systemd --user` unit. The name and the manifest are generated before the form
+  is shown, so the object you review is the object that is applied. Creation
+  shows the exact commands first. Removal only ever targets the resource this app
+  created: a container while the host still reports its label, a workload only
+  after the active context, your permission for the exact verb, and the object's
+  label and immutable Kubernetes UID have all been re-read, and any unreadable
+  answer refuses. Container environment values are treated as secrets: they are
+  written to a `0600` file on the host through stdin and read with
+  `--env-file`, so they are never in an argument, in this screen, or in `ps`;
+  anyone who can reach the container runtime's socket can still read them with
+  `inspect`, and the screen says so. Docker socket access is root-equivalent and
+  the screen says so too.
 * **Set up tools** — guided provisioning from a shipped catalogue of native
   packages, with presets and per-tool selection. The phone uploads a reviewed host
   script plus a plan digest; the host re-verifies both before running anything. No
   `curl | sh`, no downloaded artifacts, no stored `sudo` password. Coding-agent
-  CLIs (OpenCode, Claude Code, Codex, Gemini) are listed as **manual**
-  instructions, because their vendors publish no pin-verifiable artifact for every
-  distribution; nothing is executed for them.
+  CLIs (OpenCode, Claude Code, Codex, Gemini) are deliberately **manual**
+  instructions: one-click selection covers the shipped native packages, and vendor
+  agent CLIs are outside the bootstrapping contract, because their vendors publish
+  no pin-verifiable artifact for every distribution. Nothing is executed for them,
+  and this is the scope decision, not a missing feature.
 
 ### What the terminal does not promise
 

@@ -80,8 +80,10 @@ image a claim came from, on which date, from which run.
 | GitHub device flow + PAT, rate-limit and 401 handling | unit tested against a mock transport; live API untested |
 | GitHub issues: list, detail, comments, open/close, create | mocked-transport tests only; no live API write test |
 | GitHub PR: list, diff, reviews, checks, SHA-pinned merge | mocked-transport tests; live merge untested |
-| Container/CPU deployment creation, logs, ownership-checked removal | plan/command unit tests; no live daemon in CI |
-| Kubernetes workload apply/rollout/rollback/delete | plan/command unit tests; no live cluster in CI, RBAC re-checked at run time |
+| Container creation, logs, ownership-checked removal | plan/command unit tests, including that no environment value is an argument or appears in the review text; no live daemon in CI |
+| Environment values for created containers | written to a `0600` file on the host through stdin and passed with `--env-file`; unit tested; anyone with the runtime socket can still read them with `inspect`, which the screen states |
+| Kubernetes workload apply/rollout/rollback/delete | typed manifest generator (`Deployment`/`StatefulSet` only) plus a run-time guard: active context, RBAC for the exact verb, and the object's label and immutable UID, all re-read immediately before the mutation; unit tested against a fake host; **no live cluster in CI** |
+| Kubernetes object identity | the UID is recorded after a confirmed apply; without it no rollback or delete is offered: unit tested; a real API server was never contacted |
 
 ## iOS
 
@@ -96,6 +98,7 @@ including a simulator launch test.
 | Pinned key compared again on the real handshake (equality against the approved key) | implemented; no live-server run yet |
 | Password and unencrypted Ed25519 auth, secrets in a this-device-only Keychain item | implemented, storage tested; no live-server run |
 | Encrypted private keys, RSA host keys | **not supported**, refused with a message |
+| tmux presence (`present`/`absent`/`unknown`) and stop verification | unit tested, including permission-denied, connection-refused and malformed listings; an unreadable listing is an error, never an empty host; no live tmux server contacted |
 | PTY shell, resize, byte streaming, multiple tabs | implemented; compile-tested; no live-server run |
 | VT emulation: CSI/SGR/alt screen/scroll regions/wide glyphs, OSC 52 blocked, OSC 8 `https` only | unit tested |
 | Key encoding: Ctrl/Alt, arrows in both cursor modes, F1–F12, bracketed paste | unit tested |

@@ -29,6 +29,34 @@ classes the temporary workflow had never listed, and it found two real defects
 catalogue's per-manager maps, both now expressed once, and the gate passes on its
 own terms rather than being relaxed.
 
+## Permanent CI after the review remediation
+
+The external review of PR #8 asked for the destructive-Kubernetes, manifest,
+environment-value and tmux-presence defects to be fixed with tests. The fixes are
+in `ca040b5` and `48690bd`; the permanent workflows ran on `48690bd` and all checks
+passed:
+
+| Workflow | Run | Notable jobs |
+| --- | --- | --- |
+| Android CI | [39894828697](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39894828697) | compile, lint, APK inspection, static checks, every JUnit shard including the new `DeployGuardTest` and `DeployWizardTest` |
+| Android instrumented | [39894828696](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39894828696) | emulator (API 35) |
+| Security checks | [39894828731](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39894828731) | ShellCheck, installer and workflow validation, dependency review |
+| CodeQL | [39894828702](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39894828702) | actions and java-kotlin analysis |
+| iOS CI | [39894828736](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39894828736) | Swift package tests (including `TmuxPresenceTests.swift`), simulator build, simulator UI tests |
+
+The first run of the remediation, `39894393722`, failed and is kept here on
+purpose: `DeployGuardTest` required a plan with no recorded UID to send no command
+at all, and the guard was still reading the context first; a blank label parsed as
+`""` instead of absent; and `DeployPlanTest` asserted a `---` separator count that
+was the opposite of its own claim. All three were defects in the new work, and all
+three are fixed in `48690bd`.
+
+What these runs prove: the new guard, the typed manifest generator, the
+environment-file path and the tmux presence tri-state compile and pass their unit
+tests on the merge commit. What they do **not** prove is in the section below:
+no kubectl, no container runtime and no tmux server was contacted, so the rules
+about what a real cluster returns are still untested against a cluster.
+
 ## Run index
 
 | What | Workflow | Run | Commit | Result |
