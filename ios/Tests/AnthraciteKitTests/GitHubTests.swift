@@ -183,6 +183,160 @@ extension URLRequest {
         }
         return data
     }
+
+    /// Answers each request from `pages`, keyed by the `page` query parameter (the
+    /// first request has none). Unknown pages answer an empty array with no `Link`.
+    private func respondByPage(_ pages: [Int: (String, [String: String])]) {
+        StubURLProtocol.handler = { [weak self] request in
+            self?.requests.append(request)
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let page = components?.queryItems?.first { $0.name == "page" }?.value.flatMap(Int.init) ?? 1
+            guard let (json, headers) = pages[page] else {
+                return (200, [:], Data("[]".utf8))
+            }
+            return (200, headers, Data(json.utf8))
+        }
+    }
+
+    private func nextLink(_ page: Int) -> [String: String] {
+        ["Link": "<https://api.github.com/repos/anthracite-labs/Anthracite-Remote-Android/issues?per_page=2&page=\(page)>; rel=\"next\", <https://api.github.com/x?page=1>; rel=\"first\""]
+    }
+
+    private func issueJSON(_ numbers: [Int]) -> String {
+        let items = numbers.map {
+            "{\"number\":\($0),\"title\":\"Issue \($0)\",\"state\":\"open\",\"user\":{\"login\":\"u\"}}"
+        }
+        return "[" + items.joined(separator: ",") + "]"
+    }
+
+    // MARK: - Pagination
+
+    func testIssueListingFollowsLinkHeadersAcrossPages() async throws {
+        respondByPage([
+            1: (issueJSON([1, 2]), nextLink(2)),
+            2: (issueJSON([3, 4]), ["Link": "<https://api.github.com/x?page=3>; rel=\"next\""]),
+            3: (issueJSON([5]), [:]),
+        ])
+        let issues = try await client.listIssues(repository, limit: 100)
+
+        XCTAssertEqual(issues.map(\.number), [1, 2, 3, 4, 5])
+        XCTAssertEqual(requests.count, 3)
+        // Every page keeps the pinning headers.
+        for request in requests {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer github_pat_1234567890")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-GitHub-Api-Version"), "2022-11-28")
+        }
+    }
+
+    func testAnEmptyPageEndsTheListing() async throws {
+        respondByPage([
+            1: ("[]", nextLink(2)),
+            2: ("[]", [:]),
+        ])
+        XCTAssertEqual(try await client.listIssues(repository, limit: 10), [])
+        XCTAssertEqual(requests.count, 2)
+    }
+
+    func testAForeignOrMalformedLinkIsNotFollowed() async throws {
+        for link in [
+            "<https://evil.example.com/repos/x/y/issues?page=2>; rel=\"next\"",
+            "<http://api.github.com/repos/x/y/issues?page=2>; rel=\"next\"",
+            "<https://api.github.com@evil.example.com/x?page=2>; rel=\"next\"",
+            "<https://api.github.com:8443/x?page=2>; rel=\"next\"",
+            "not a link at all",
+            "<https://api.github.com/x?page=2>; rel=\"last\"",
+        ] {
+            requests = []
+            respondByPage([1: (issueJSON([1]), ["Link": link])])
+            let issues = try await client.listIssues(repository, limit: 100)
+            XCTAssertEqual(issues.map(\.number), [1], "followed \(link)")
+            XCTAssertEqual(requests.count, 1, "followed \(link)")
+        }
+    }
+
+    func testDuplicateEntriesAcrossPagesAreReturnedOnce() async throws {
+        respondByPage([
+            1: (issueJSON([1, 2]), nextLink(2)),
+            2: (issueJSON([2, 3]), [:]),
+        ])
+        XCTAssertEqual(try await client.listIssues(repository, limit: 100).map(\.number), [1, 2, 3])
+    }
+
+    func testAPageLimitIsReportedNotSilentlyTruncated() async {
+        // Every page claims another one is waiting: a loop with no end.
+        StubURLProtocol.handler = { [weak self] request in
+            self?.requests.append(request)
+            return (200, ["Link": "<https://api.github.com/loop?page=1>; rel=\"next\""], Data((self?.issueJSON([1]) ?? "[]").utf8))
+        }
+        do {
+            _ = try await client.listIssues(repository, limit: 100)
+            XCTFail("an endless listing must be reported")
+        } catch let error as GitHubError {
+            guard case .incompleteCollection = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+        XCTAssertEqual(requests.count, GitHubClient.maximumPages)
+    }
+
+    func testRateLimitingOnALaterPageIsReported() async {
+        StubURLProtocol.handler = { [weak self] request in
+            self?.requests.append(request)
+            let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value
+            if page == "2" {
+                return (403, ["X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1700000000"], Data("{}".utf8))
+            }
+            return (200, ["Link": "<https://api.github.com/x?page=2>; rel=\"next\""], Data((self?.issueJSON([1]) ?? "[]").utf8))
+        }
+        do {
+            _ = try await client.listIssues(repository, limit: 100)
+            XCTFail("a rate limit must be reported")
+        } catch let error as GitHubError {
+            XCTAssertEqual(error, .rateLimited(resetAt: "1700000000"))
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testAnUnauthorizedLaterPageIsReported() async {
+        StubURLProtocol.handler = { [weak self] request in
+            self?.requests.append(request)
+            let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value
+            if page == "2" { return (401, [:], Data()) }
+            return (200, ["Link": "<https://api.github.com/x?page=2>; rel=\"next\""], Data((self?.issueJSON([1]) ?? "[]").utf8))
+        }
+        do {
+            _ = try await client.listIssues(repository, limit: 100)
+            XCTFail("an unauthorized response must be reported")
+        } catch let error as GitHubError {
+            XCTAssertEqual(error, .unauthorized)
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testDisablingTheConnectionIsNotReportedAsComplete() async throws {
+        // A page fails at the transport level: the listing must throw, not return
+        // the first page as though it were everything.
+        StubURLProtocol.handler = { [weak self] request in
+            self?.requests.append(request)
+            let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value
+            if page == "2" { throw GitHubError.transport("connection reset") }
+            return (200, ["Link": "<https://api.github.com/x?page=2>; rel=\"next\""], Data((self?.issueJSON([1]) ?? "[]").utf8))
+        }
+        do {
+            _ = try await client.listIssues(repository, limit: 100)
+            XCTFail("an incomplete listing must not be returned")
+        } catch let error as GitHubError {
+            XCTAssertEqual(error, .transport("connection reset"))
+        }
+    }
+
 }
 
 /// Awaits a throwing expression and asserts it threw. `XCTAssertThrowsError`
