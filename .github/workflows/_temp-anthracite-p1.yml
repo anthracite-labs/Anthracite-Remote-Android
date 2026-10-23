@@ -78,17 +78,55 @@ jobs:
           log-accepted-android-sdk-licenses: false
           packages: platform-tools platforms;android-37.0 build-tools;37.0.0
       - name: Compile main and unit-test sources
+        id: compile
+        continue-on-error: true
         run: |
+          mkdir -p ci-diagnostics
           ./gradlew --console=plain \
-            :app:compileDebugKotlin :app:compileDebugUnitTestKotlin :app:processDebugResources
+            :app:compileDebugKotlin :app:compileDebugUnitTestKotlin :app:processDebugResources \
+            > ci-diagnostics/compile.log 2>&1
+      - name: Collect distinct errors
+        if: always()
+        run: bash ci/collect-build-errors.sh ci-diagnostics/compile.log ci-diagnostics
+      - name: Annotations batch 1
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 1
+      - name: Annotations batch 2
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 2
+      - name: Annotations batch 3
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 3
+      - name: Annotations batch 4
+        if: always()
+        run: bash ci/annotate-slice.sh ci-diagnostics 4
+      - name: Mark compile failure
+        if: always()
+        env:
+          COMPILE_RESULT: ${{ steps.compile.outcome }}
+        run: test "$COMPILE_RESULT" = success
       - name: P1 unit tests
+        id: tests
+        continue-on-error: true
         run: |
+          mkdir -p ci-diagnostics
           ./gradlew --console=plain :app:testDebugUnitTest \
             --tests '*ProvisionJobsTest' \
             --tests '*ProvisionPlannerTest' \
             --tests '*HostFactsParserTest' \
             --tests '*HostStoreTest' \
-            --tests '*PosixShellTest'
+            --tests '*PosixShellTest' 2>&1 | tee ci-diagnostics/unit.log
+      - name: Annotate test failures
+        if: always()
+        run: |
+          grep -E "^(FAILED|[A-Za-z0-9_.]+ > .* FAILED)" ci-diagnostics/unit.log 2>/dev/null \
+            | head -n 10 | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+          exit 0
+      - name: Mark test failure
+        if: always()
+        env:
+          TEST_RESULT: ${{ steps.tests.outcome }}
+        run: test "$TEST_RESULT" = success
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

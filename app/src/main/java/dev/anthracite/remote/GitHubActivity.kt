@@ -18,6 +18,10 @@ import dev.anthracite.remote.github.GitHubIdentity
 import dev.anthracite.remote.github.GitHubResult
 import dev.anthracite.remote.github.GitHubTokenException
 import dev.anthracite.remote.github.GitHubTokenStore
+import dev.anthracite.remote.github.IssueComment
+import dev.anthracite.remote.github.IssueDetail
+import dev.anthracite.remote.github.IssueState
+import dev.anthracite.remote.github.IssueSummary
 import dev.anthracite.remote.github.MergeMethod
 import dev.anthracite.remote.github.PullDetail
 import dev.anthracite.remote.github.PullSummary
@@ -46,7 +50,8 @@ import kotlinx.coroutines.launch
  * and nothing here can touch a host.
  */
 class GitHubActivity : AppCompatActivity() {
-    private enum class Mode { REPOS, PULLS, DETAIL }
+    private enum class Mode { REPOS, PULLS, ISSUES, ISSUE_DETAIL, DETAIL }
+    private enum class RepoView { PULLS, ISSUES }
 
     private lateinit var adapter: RowAdapter
     private lateinit var subtitle: TextView
@@ -66,6 +71,11 @@ class GitHubActivity : AppCompatActivity() {
     private var repo: RepoSummary? = null
     private var pull: PullDetail? = null
     private var pulls: List<PullSummary> = emptyList()
+    private var issues: List<IssueSummary> = emptyList()
+    private var issue: IssueDetail? = null
+    private var issueComments: List<IssueComment> = emptyList()
+    private var issueStateFilter = "open"
+    private var issueNextPage: Int? = null
     private var pollJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -151,10 +161,38 @@ class GitHubActivity : AppCompatActivity() {
             when (mode) {
                 Mode.REPOS -> loadRepositories()
                 Mode.PULLS -> repo?.let { loadPulls(it) }
+                Mode.ISSUES -> repo?.let { loadIssues(it) }
+                Mode.ISSUE_DETAIL -> {
+                    val target = currentRepoRef()
+                    val number = issue?.number
+                    if (target != null && number != null) loadIssueDetail(target, number)
+                }
                 Mode.DETAIL -> {
                     val target = currentRepoRef()
                     val detail = pull
                     if (target != null && detail != null) loadDetail(target, detail.summary.number)
+                }
+            }
+        }
+        if (mode == Mode.ISSUES) {
+            addActionButton(this, actions, getString(R.string.github_issue_new), getString(R.string.github_issue_new)) {
+                repo?.let { promptNewIssue(it) }
+            }
+            addActionButton(
+                this,
+                actions,
+                getString(R.string.github_issue_filter, issueStateFilter),
+                getString(R.string.github_issue_filter, issueStateFilter),
+            ) {
+                val options = listOf("open", "closed")
+                choose(this, getString(R.string.github_issue_filter_title), options) { index ->
+                    issueStateFilter = options[index]
+                    repo?.let { loadIssues(it) }
+                }
+            }
+            issueNextPage?.let { next ->
+                addActionButton(this, actions, getString(R.string.github_more), getString(R.string.github_more)) {
+                    repo?.let { loadIssues(it, page = next, append = true) }
                 }
             }
         }
@@ -330,6 +368,194 @@ class GitHubActivity : AppCompatActivity() {
         }
     }
 
+    private fun chooseRepoView(target: RepoSummary) {
+        val views = listOf(RepoView.PULLS, RepoView.ISSUES)
+        val labels = listOf(getString(R.string.github_open_pulls), getString(R.string.github_open_issues_action))
+        choose(this, getString(R.string.github_choose_view, target.fullName), labels) { index ->
+            when (views[index]) {
+                RepoView.PULLS -> loadPulls(target)
+                RepoView.ISSUES -> {
+                    issueStateFilter = "open"
+                    loadIssues(target)
+                }
+            }
+        }
+    }
+
+    private fun loadIssues(target: RepoSummary, page: Int = 1, append: Boolean = false) {
+        repo = target
+        mode = Mode.ISSUES
+        progress.visibility = View.VISIBLE
+        lifecycleScope.launch {
+            val result = runCatching { io { api.listIssues(RepoRef(target.owner, target.name), issueStateFilter, page) } }
+            progress.visibility = View.GONE
+            handle(result.getOrNull(), result.exceptionOrNull()) { loaded ->
+                // The list endpoint also returns pull requests; they are not issues
+                // for this screen, and a row that opened a pull by mistake would be
+                // worse than hiding it.
+                val visible = loaded.items.filterNot { it.isPullRequest }
+                issues = if (append) issues + visible else visible
+                issueNextPage = loaded.nextPage
+                adapter.submit(
+                    issues.map { item ->
+                        Row(
+                            title = "#${item.number} ${item.title}",
+                            subtitle = buildString {
+                                append(item.state)
+                                append(" · ").append(item.author)
+                                append(" · ").append(getString(R.string.github_issue_comments, item.comments))
+                            },
+                            tag = item,
+                        )
+                    },
+                )
+                emptyView.visibility = if (issues.isEmpty()) View.VISIBLE else View.GONE
+                emptyView.text = getString(R.string.github_no_issues)
+                subtitle.text = getString(R.string.github_issues_in, target.fullName)
+                renderActions(signedIn = true)
+                showStatus(getString(R.string.github_issue_count, issues.size))
+            }
+        }
+    }
+
+    private fun loadIssueDetail(target: RepoRef, number: Int) {
+        mode = Mode.ISSUE_DETAIL
+        progress.visibility = View.VISIBLE
+        lifecycleScope.launch {
+            val detail = runCatching { io { api.issueDetail(target, number) } }
+            val comments = runCatching { io { api.listIssueComments(target, number) } }
+            progress.visibility = View.GONE
+            handle(detail.getOrNull(), detail.exceptionOrNull()) { loaded ->
+                issue = loaded
+                issueComments = when (val page = comments.getOrNull()) {
+                    is GitHubResult.Ok -> page.value.items
+                    else -> emptyList()
+                }
+                subtitle.text = getString(R.string.github_issue_title, target.toString(), loaded.number)
+                val rows = buildList {
+                    add(
+                        Row(
+                            title = loaded.title,
+                            subtitle = buildString {
+                                append(loaded.state)
+                                append(" · ").append(loaded.author)
+                                if (loaded.labels.isNotEmpty()) {
+                                    append(" · ").append(loaded.labels.joinToString(", "))
+                                }
+                            },
+                            body = loaded.body.take(BODY_CHARS),
+                        ),
+                    )
+                    add(Row(getString(R.string.github_issue_comment), getString(R.string.github_issue_comment_hint)))
+                    add(
+                        Row(
+                            if (loaded.state == "open") getString(R.string.github_issue_close) else getString(R.string.github_issue_reopen),
+                            getString(R.string.github_issue_state_hint),
+                        ),
+                    )
+                    if (issueComments.isNotEmpty()) {
+                        add(Row(getString(R.string.github_issue_comments_title, issueComments.size), ""))
+                        for (comment in issueComments) {
+                            add(
+                                Row(
+                                    title = comment.author,
+                                    subtitle = comment.createdAt?.take(10).orEmpty(),
+                                    body = comment.body.take(COMMENT_CHARS),
+                                ),
+                            )
+                        }
+                    }
+                }
+                adapter.submit(rows)
+                emptyView.visibility = View.GONE
+                renderActions(signedIn = true)
+                showStatus(
+                    if (comments.getOrNull() is GitHubResult.Ok) {
+                        getString(R.string.github_issue_loaded)
+                    } else {
+                        getString(R.string.github_issue_comments_unavailable)
+                    },
+                )
+            }
+        }
+    }
+
+    private fun promptNewIssue(target: RepoSummary) {
+        promptText(
+            this,
+            getString(R.string.github_issue_new_title),
+            getString(R.string.github_issue_new_title_hint),
+        ) { title ->
+            val safeTitle = title.trim()
+            if (safeTitle.isEmpty()) return@promptText
+            promptText(
+                this,
+                getString(R.string.github_issue_new),
+                getString(R.string.github_issue_new_body, target.fullName),
+            ) { body ->
+                confirm(
+                    this,
+                    getString(R.string.github_issue_new),
+                    getString(R.string.github_issue_new_confirm, target.fullName, safeTitle),
+                    getString(R.string.github_issue_new_action),
+                ) {
+                    progress.visibility = View.VISIBLE
+                    lifecycleScope.launch {
+                        val result = runCatching { io { api.createIssue(RepoRef(target.owner, target.name), safeTitle, body) } }
+                        progress.visibility = View.GONE
+                        handle(result.getOrNull(), result.exceptionOrNull()) { number ->
+                            showStatus(getString(R.string.github_issue_created, number))
+                            loadIssues(target)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun promptIssueComment() {
+        val current = issue ?: return
+        val target = currentRepoRef() ?: return
+        promptText(
+            this,
+            getString(R.string.github_issue_comment),
+            getString(R.string.github_issue_comment_detail, current.number),
+        ) { body ->
+            if (body.isBlank()) return@promptText
+            progress.visibility = View.VISIBLE
+            lifecycleScope.launch {
+                val result = runCatching { io { api.commentOnIssue(target, current.number, body) } }
+                progress.visibility = View.GONE
+                handle(result.getOrNull(), result.exceptionOrNull()) { url ->
+                    showStatus(getString(R.string.github_comment_posted, url))
+                    loadIssueDetail(target, current.number)
+                }
+            }
+        }
+    }
+
+    private fun promptIssueState() {
+        val current = issue ?: return
+        val target = currentRepoRef() ?: return
+        val next = if (current.state == "open") IssueState.CLOSED else IssueState.OPEN
+        confirm(
+            this,
+            getString(R.string.github_issue_change_state),
+            getString(R.string.github_issue_change_state_detail, target.toString(), current.number, next.label),
+            next.label,
+        ) {
+            progress.visibility = View.VISIBLE
+            lifecycleScope.launch {
+                val result = runCatching { io { api.setIssueState(target, current.number, next) } }
+                progress.visibility = View.GONE
+                handle(result.getOrNull(), result.exceptionOrNull()) { state ->
+                    showStatus(getString(R.string.github_issue_state_changed, state))
+                    loadIssueDetail(target, current.number)
+                }
+            }
+        }
+    }
+
     private fun loadPulls(target: RepoSummary) {
         repo = target
         mode = Mode.PULLS
@@ -408,12 +634,22 @@ class GitHubActivity : AppCompatActivity() {
         when (mode) {
             Mode.REPOS -> {
                 val item = runCatching { adapter.getItem(position).tag as RepoSummary }.getOrNull() ?: return
-                loadPulls(item)
+                repo = item
+                chooseRepoView(item)
             }
             Mode.PULLS -> {
                 val item = pulls.getOrNull(position) ?: return
                 val target = currentRepoRef() ?: return
                 loadDetail(target, item.number)
+            }
+            Mode.ISSUES -> {
+                val item = issues.getOrNull(position) ?: return
+                val target = currentRepoRef() ?: return
+                loadIssueDetail(target, item.number)
+            }
+            Mode.ISSUE_DETAIL -> when (position) {
+                1 -> promptIssueComment()
+                2 -> promptIssueState()
             }
             Mode.DETAIL -> when (position) {
                 1 -> showDiff()
@@ -583,5 +819,6 @@ class GitHubActivity : AppCompatActivity() {
         const val BODY_CHARS = 4000
         const val UNCONFIGURED_CLIENT_ID = "unconfigured"
         const val DIFF_CHARS = 40_000
+        const val COMMENT_CHARS = 2_000
     }
 }

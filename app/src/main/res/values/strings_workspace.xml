@@ -249,6 +249,36 @@
     <string name="github_not_found">GitHub did not find that resource, or the token cannot see it.</string>
     <string name="github_failed">The GitHub request failed.</string>
     <string name="github_token_unreadable">The saved GitHub token could not be decrypted on this phone, so it was removed. Sign in again.</string>
+    <string name="github_open_pulls">Pull requests</string>
+    <string name="github_open_issues_action">Issues</string>
+    <string name="github_choose_view">%1$s</string>
+    <string name="github_more">Load more</string>
+    <string name="github_no_issues">No issues with this filter.</string>
+    <string name="github_issues_in">Issues in %1$s</string>
+    <string name="github_issue_count">%1$d issues.</string>
+    <string name="github_issue_comments">%1$d comments</string>
+    <string name="github_issue_title">%1$s · issue #%2$d</string>
+    <string name="github_issue_comment">Comment on this issue</string>
+    <string name="github_issue_comment_hint">Posts a comment as your GitHub account.</string>
+    <string name="github_issue_comment_detail">Comment on issue #%1$d.</string>
+    <string name="github_issue_comments_title">Comments (%1$d)</string>
+    <string name="github_issue_close">Close this issue</string>
+    <string name="github_issue_reopen">Reopen this issue</string>
+    <string name="github_issue_state_hint">Changes only the state of this issue; nothing else is touched.</string>
+    <string name="github_issue_loaded">Issue loaded.</string>
+    <string name="github_issue_comments_unavailable">The issue loaded, but its comments did not. Try refresh.</string>
+    <string name="github_issue_new">New issue</string>
+    <string name="github_issue_new_title">Title</string>
+    <string name="github_issue_new_title_hint">A single line. The body can be added next.</string>
+    <string name="github_issue_new_body">Describe the issue for %1$s. Markdown is sent unchanged.</string>
+    <string name="github_issue_new_confirm">Create this issue in %1$s?\n\n%2$s</string>
+    <string name="github_issue_new_action">Create issue</string>
+    <string name="github_issue_created">Issue #%1$d created.</string>
+    <string name="github_issue_change_state">Change issue state</string>
+    <string name="github_issue_change_state_detail">%1$s issue #%2$d: %3$s.</string>
+    <string name="github_issue_state_changed">Issue state is now %1$s.</string>
+    <string name="github_issue_filter">Filter: %1$s</string>
+    <string name="github_issue_filter_title">Show issues</string>
     <string name="github_token_store_failed">The token was accepted by GitHub but could not be stored securely on this phone, so it was not kept.</string>
 
     <!-- Containers and Kubernetes -->
