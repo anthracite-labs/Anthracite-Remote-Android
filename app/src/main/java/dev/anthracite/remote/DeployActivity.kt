@@ -402,7 +402,8 @@ class DeployActivity : AppCompatActivity() {
 
     private fun inspectCreated() {
         val plan = created ?: return
-        val deploy = creator ?: DeployCreator(Workspace.ssh).also { creator = it }
+        val creatorClient = creator ?: DeployCreator(Workspace.ssh).also { creator = it }
+        val deploy = client ?: DeployClient(Workspace.ssh).also { client = it }
         if (busy) return
         setBusy(true)
         lifecycleScope.launch {
@@ -410,8 +411,8 @@ class DeployActivity : AppCompatActivity() {
                 io {
                     when (plan) {
                         is DeployPlan.Container -> deploy.logs(runtime, plan.name)
-                        is DeployPlan.Workload -> deploy.workloadLogs(plan)
-                        is DeployPlan.Native -> deploy.nativeLogs(plan)
+                        is DeployPlan.Workload -> creatorClient.workloadLogs(plan)
+                        is DeployPlan.Native -> creatorClient.nativeLogs(plan)
                     }
                 }
             }

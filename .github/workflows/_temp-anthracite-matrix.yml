@@ -74,8 +74,12 @@ jobs:
       - name: Annotate the failure
         if: steps.matrix_run.outcome == 'failure'
         run: |
-          tail -n 18 "matrix-${{ matrix.os_id }}.log" \
-            | sed 's/%/%25/g' | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+          log="matrix-${{ matrix.os_id }}.log"
+          {
+            grep -E 'MATRIX-FAIL' "$log" || true
+            tail -n 8 "$log"
+          } | sed 's/%/%25/g' | head -n 10 \
+            | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
           exit 1
       - name: Record the evidence line
         if: success()
