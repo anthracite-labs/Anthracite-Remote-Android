@@ -237,7 +237,8 @@ extension GitHubTests {
             1: ("[]", nextLink(2)),
             2: ("[]", [:]),
         ])
-        XCTAssertEqual(try await client.listIssues(repository, limit: 10), [])
+        let issues = try await client.listIssues(repository, limit: 10)
+        XCTAssertEqual(issues, [])
         XCTAssertEqual(requests.count, 2)
     }
 
@@ -263,7 +264,8 @@ extension GitHubTests {
             1: (issueJSON([1, 2]), nextLink(2)),
             2: (issueJSON([2, 3]), [:]),
         ])
-        XCTAssertEqual(try await client.listIssues(repository, limit: 100).map(\.number), [1, 2, 3])
+        let numbers = try await client.listIssues(repository, limit: 100).map(\.number)
+        XCTAssertEqual(numbers, [1, 2, 3])
     }
 
     func testAPageLimitIsReportedNotSilentlyTruncated() async {

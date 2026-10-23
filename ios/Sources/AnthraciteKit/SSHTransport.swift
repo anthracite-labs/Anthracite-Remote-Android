@@ -599,27 +599,34 @@ final class ShellCollector: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = SSHChannelData
 
     private let lock = NSLock()
-    private var exitCode: Int?
-    private var stderrBuffer = Data()
+    private var exit: Int?
 
     /// Terminal output with a bounded queue, so a consumer that falls behind stops
     /// the channel's reads instead of growing memory without limit.
     let output = TerminalOutput()
 
+    /// The exit status the peer reported, once it has.
+    var exitStatus: Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return exit
+    }
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let channelData = unwrapInboundIn(data)
         guard case .byteBuffer(var buffer) = channelData.data else { return }
         let bytes = buffer.readBytes(length: buffer.readableBytes) ?? []
-        if channelData.type == .stdErr {
-            lock.lock(); stderrBuffer.append(contentsOf: bytes); lock.unlock()
-            return
-        }
+        // A PTY session merges stderr into the terminal stream on the server side,
+        // so `.stdErr` is only seen without one. It goes into the same bounded
+        // stream rather than a private buffer: dropping it would lose bytes, and a
+        // second unbounded buffer would be the very thing this class exists to
+        // avoid. Order within each stream is preserved.
         output.append(Data(bytes))
     }
 
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
         if let status = event as? SSHChannelRequestEvent.ExitStatus {
-            lock.lock(); exitCode = status.exitStatus; lock.unlock()
+            lock.lock(); exit = status.exitStatus; lock.unlock()
         }
         context.fireUserInboundEventTriggered(event)
     }
@@ -645,6 +652,9 @@ public final class ShellSession: @unchecked Sendable {
     }
 
     public var output: TerminalOutput { collector.output }
+
+    /// The exit status the peer reported for this shell, once it has ended.
+    public var exitStatus: Int? { collector.exitStatus }
 
     public func write(_ data: Data) async throws {
         guard !data.isEmpty, data.count <= 1 << 20 else { return }
