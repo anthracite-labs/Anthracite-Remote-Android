@@ -144,8 +144,14 @@ xcodebuild test -project AnthraciteRemote.xcodeproj -scheme AnthraciteRemote \
     -derivedDataPath /tmp/dd \
     -resultBundlePath /tmp/ios-uitests.xcresult \
     >/tmp/xcodebuild-test.log 2>&1 || {
-        grep -E "(Test Case .* failed|error:)" /tmp/xcodebuild-test.log | head -n 10 | while IFS= read -r line; do
+        grep -E "(Test Case .* failed|error:|\*\* TEST FAILED \*\*|Failed to boot|Unable to boot)" \
+            /tmp/xcodebuild-test.log | head -n 10 | while IFS= read -r line; do
             echo "::error title=ios-uitests::$line"
+        done
+        # The reason a UI test failed is often on a line the grep above does not
+        # match; a bounded tail of the log is annotated as well.
+        tail -n 8 /tmp/xcodebuild-test.log | while IFS= read -r line; do
+            echo "::error title=ios-uitests-tail::$line"
         done
         tail -n 60 /tmp/xcodebuild-test.log
         exit 1
