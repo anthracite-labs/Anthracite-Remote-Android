@@ -110,7 +110,10 @@ class DeployContainerIdentityTest {
         assertTrue(command.contains("d????------"))
         assertTrue(command.contains("exit ${DeployPlans.EXIT_INSECURE_PATH}"))
         // noclobber: an existing file or a symlink is an error, not a truncation.
-        assertTrue(command.endsWith("set -C; cat > \"\$f\""))
+        // The redirect is exclusive, and a half-written file is removed by the
+        // same command that created it.
+        assertTrue(command.contains("set -C; if ! cat > \"\$f\""))
+        assertTrue(command.contains("then rm -f \"\$f\""))
         assertTrue(command.startsWith("umask 077; "))
     }
 
@@ -125,12 +128,14 @@ class DeployContainerIdentityTest {
     }
 
     @Test
-    fun `the file is removed even when the write fails`() {
+    fun `no removal is sent when the write itself failed`() {
+        // The write command removes its own partial file and refuses without
+        // touching a pre-existing one. A removal from here could therefore only
+        // hit a file this run did not create, so none is sent.
         val target = plan()
         val shell = FakeShell {
             when {
                 it == target.envFileCommand() -> ExecResult(DeployPlans.EXIT_INSECURE_PATH, "", "refused")
-                it.startsWith("rm -f") -> ExecResult(0, "", "")
                 else -> ExecResult(0, "", "")
             }
         }
@@ -138,8 +143,23 @@ class DeployContainerIdentityTest {
 
         assertEquals(DeployPlans.EXIT_INSECURE_PATH, outcome.result.exitCode)
         assertNull(outcome.identity)
-        assertTrue(shell.commands.any { it.startsWith("rm -f") })
+        assertFalse(shell.commands.any { it.contains("rm -f") })
         assertFalse(shell.commands.any { it.contains("docker run") })
+    }
+
+    @Test
+    fun `a failed container start still removes the file this run wrote`() {
+        val target = plan()
+        val shell = FakeShell {
+            when {
+                it.contains("docker run") -> ExecResult(125, "", "the runtime refused")
+                else -> ExecResult(0, "", "")
+            }
+        }
+        val outcome = DeployCreator(shell).containerRun(target)
+
+        assertEquals(125, outcome.result.exitCode)
+        assertTrue(shell.commands.any { it.startsWith("rm -f") })
     }
 
     @Test

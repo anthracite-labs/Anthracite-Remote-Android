@@ -31,6 +31,9 @@ internal object DeployPlans {
     /** The private directory or file could not be created safely. */
     const val EXIT_INSECURE_PATH = 73
 
+    /** The directory was safe but the values could not be written. */
+    const val EXIT_ENV_WRITE_FAILED = 74
+
     /** A per-plan token: unique file names, never a guessable fixed path. */
     fun newToken(random: SecureRandom = SecureRandom()): String {
         val bytes = ByteArray(8).also(random::nextBytes)
@@ -274,29 +277,53 @@ internal sealed class DeployPlan {
          * Creates the file exclusively and writes the values to it.
          *
          * `umask 077` protects the *creation* of a file; it says nothing about a
-         * path that already exists. Two additional rules matter:
+         * path that already exists. The checks below therefore run in this order,
+         * each failing closed with its own status:
          *
-         * * the directory must not be a symlink and must not be readable or
-         *   writable by group or other — a pre-planted `~/.anthracite/deploy`
-         *   pointing elsewhere would otherwise redirect a secret;
-         * * `set -C` (noclobber) makes the redirect `O_CREAT|O_EXCL`, which fails
-         *   on an existing file *and* on a symlink instead of truncating or
-         *   following it.
+         * * the directory must not be a symlink, must be a real directory, must be
+         *   owned by the connected user and must be exactly `0700` — a pre-planted
+         *   `~/.anthracite/deploy` pointing elsewhere, or one other users can
+         *   read, would otherwise expose the values;
+         * * an existing target is refused and left untouched: this command must
+         *   never truncate a file it did not create;
+         * * `set -C` (noclobber) makes the redirect `O_CREAT|O_EXCL`, so the
+         *   create itself cannot follow a symlink or clobber a file even if one
+         *   appears between the check and the write;
+         * * if the write fails half-way, the partial file is removed here, so the
+         *   caller never has to guess whether a file it sees is its own.
+         *
+         * Permissions are read with `stat`, trying the GNU and then the BSD form,
+         * and compared as a number. An earlier version compared a ten-character
+         * `ls -ld` string against an eleven-character pattern, which rejected
+         * every correct directory.
          */
         fun envFileCommand(): String = buildString {
             append("umask 077; ")
             append("d=\"\$HOME/.anthracite/deploy\"; ")
             append("f=").append(envFilePath()).append("; ")
+            append("stat_owner() { stat -c %u \"\$1\" 2>/dev/null || stat -f %u \"\$1\" 2>/dev/null; }; ")
+            append("stat_mode() { stat -c %a \"\$1\" 2>/dev/null || stat -f %Lp \"\$1\" 2>/dev/null; }; ")
             append("if [ -L \"\$d\" ]; then echo 'Anthracite refused: the deployment directory is a symbolic link.' >&2; exit ")
             append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
-            append("mkdir -p \"\$d\" || exit ").append(DeployPlans.EXIT_INSECURE_PATH).append("; ")
+            append("mkdir -p \"\$d\" 2>/dev/null || { echo 'Anthracite refused: the deployment directory could not be created.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; }; ")
             append("if [ -L \"\$d\" ] || [ ! -d \"\$d\" ]; then echo 'Anthracite refused: the deployment directory is not a plain directory.' >&2; exit ")
             append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
-            append("case \"\$(ls -ld \"\$d\" | cut -c1-10)\" in ")
-            append("d????------) : ;; ")
-            append("*) echo 'Anthracite refused: the deployment directory is accessible to other users.' >&2; exit ")
-            append(DeployPlans.EXIT_INSECURE_PATH).append(" ;; esac; ")
-            append("set -C; cat > \"\$f\"")
+            append("o=\$(stat_owner \"\$d\"); m=\$(stat_mode \"\$d\"); ")
+            append("if [ -z \"\$o\" ] || [ -z \"\$m\" ]; then echo 'Anthracite refused: the deployment directory permissions could not be verified.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
+            append("if [ \"\$o\" != \"\$(id -u)\" ]; then echo 'Anthracite refused: the deployment directory is owned by another user.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
+            append("if [ \"\$m\" != 700 ]; then echo \"Anthracite refused: the deployment directory must be 0700 (found 0\$m).\" >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
+            append("if [ -e \"\$f\" ] || [ -L \"\$f\" ]; then echo 'Anthracite refused: the environment file already exists and was left untouched.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
+            append("set -C; if ! cat > \"\$f\"; then rm -f \"\$f\"; echo 'Anthracite refused: the environment file could not be written.' >&2; exit ")
+            append(DeployPlans.EXIT_ENV_WRITE_FAILED).append("; fi; ")
+            append("if [ -L \"\$f\" ] || [ ! -f \"\$f\" ]; then rm -f \"\$f\"; echo 'Anthracite refused: the environment file is not a plain file.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
+            append("fm=\$(stat_mode \"\$f\"); if [ \"\$fm\" != 600 ]; then rm -f \"\$f\"; echo \"Anthracite refused: the environment file is not private (found 0\$fm).\" >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; fi")
         }
 
         fun envFileRemoveCommand(): String = "rm -f ${envFilePath()}"

@@ -360,14 +360,21 @@ internal class DeployCreator(private val shell: RemoteShell) {
         val started = if (plan.environment.isEmpty()) {
             shell.exec(plan.runCommand(), null, 180_000)
         } else {
-            // The file name carries a per-plan token, so it can only be ours: the
-            // cleanup below is safe on every path, including a write that failed
-            // half-way and left a partial file behind.
+            var weWroteTheFile = false
             try {
                 val written = shell.exec(plan.envFileCommand(), plan.envFileBytes(), 30_000)
-                if (written.exitCode != 0) written else shell.exec(plan.runCommand(), null, 180_000)
+                if (written.exitCode != 0) {
+                    // The write command removes its own partial file, and refuses
+                    // without touching a pre-existing one. Either way nothing here
+                    // belongs to this run, so no removal is sent: this app never
+                    // deletes a file it did not create.
+                    written
+                } else {
+                    weWroteTheFile = true
+                    shell.exec(plan.runCommand(), null, 180_000)
+                }
             } finally {
-                shell.exec(plan.envFileRemoveCommand(), null, 20_000)
+                if (weWroteTheFile) shell.exec(plan.envFileRemoveCommand(), null, 20_000)
             }
         }
         if (started.exitCode != 0) return DeployOutcome(started)

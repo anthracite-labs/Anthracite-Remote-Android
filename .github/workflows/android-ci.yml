@@ -231,6 +231,7 @@ jobs:
           - test_class: SshSessionTest
           - test_class: SecretStoreTest
           - test_class: DeployContainerIdentityTest
+          - test_class: DeployEnvFileShellTest
           - test_class: DeployGuardTest
           - test_class: DeployParserTest
           - test_class: DeployPlanTest
