@@ -107,7 +107,7 @@
     <string name="files_renamed">Renamed on the host.</string>
     <string name="files_deleted">Deleted on the host.</string>
     <string name="files_delete_file">Delete the file %1$s? This cannot be undone from this phone.</string>
-    <string name="files_delete_tree">Delete the folder %1$s and everything inside it? Symbolic links are removed as links and never followed.</string>
+    <string name="files_delete_tree">Delete the folder %1$s and everything inside it? Symbolic links are removed as links and never followed. Each entry is removed separately, so this is not one atomic step; if the folder changes while it is being removed, the delete stops.</string>
     <string name="files_delete_confirm">Delete</string>
     <string name="files_write_failed">The host did not accept the write.</string>
 

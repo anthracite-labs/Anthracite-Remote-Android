@@ -230,6 +230,13 @@ internal class SftpBrowser(private val ssh: SshClient) {
      * Every entry is `lstat`-ed first: a symlink is deleted as a link and never
      * followed, so a hostile tree cannot redirect the delete outside the chosen
      * directory. The depth and entry caps bound the work.
+     *
+     * This is **not** an atomic operation and cannot be made one here: SFTP v3
+     * (what this transport speaks) has no handle-relative remove, no `openat`,
+     * and no conditional delete. The protocol offers nothing that would let the
+     * server refuse to act on a path that changed since it was inspected. What
+     * the code does instead is refuse to keep going when the tree stops looking
+     * like the tree that was listed — see [deleteTree].
      */
     fun delete(path: String, recursive: Boolean) {
         require(RemotePath.isValid(path)) { "invalid remote path" }
@@ -256,6 +263,22 @@ internal class SftpBrowser(private val ssh: SshClient) {
             count++
             if (count > MAX_ENTRIES) throw RemoteFileException("Directory has too many entries to delete safely")
             if (entry.directory && !entry.symlink) {
+                // The listing is a snapshot, and another process on the host can
+                // replace this entry with a symlink to somewhere else before the
+                // recursion reopens it — `ls` follows the link, and the delete would
+                // then work outside the chosen directory. Re-read the entry with
+                // `lstat` immediately before descending and stop if it is no longer
+                // the plain directory that was listed.
+                //
+                // This narrows the window; it does not close it. No SFTP v3 request
+                // can be made conditional on what was read, so the honest statement
+                // is "we stop when we can tell", never "this cannot be redirected".
+                val current = stat(entry.path, followLinks = false)
+                if (current == null || !current.directory || current.symlink) {
+                    throw RemoteFileException(
+                        "A directory changed while it was being deleted; nothing further was removed",
+                    )
+                }
                 deleteTree(entry.path, depth + 1)
             } else {
                 withSftp { it.rm(entry.path) }
