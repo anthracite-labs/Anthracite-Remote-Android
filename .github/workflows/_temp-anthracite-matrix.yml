@@ -74,7 +74,7 @@ jobs:
       - name: Annotate the failure
         if: steps.matrix_run.outcome == 'failure'
         run: |
-          grep -nE 'MATRIX-FAIL|== |error|Error|refus' "matrix-${{ matrix.os_id }}.log" | tail -n 15 \
+          tail -n 18 "matrix-${{ matrix.os_id }}.log" \
             | sed 's/%/%25/g' | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
           exit 1
       - name: Record the evidence line

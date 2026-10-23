@@ -115,7 +115,9 @@ jobs:
             --tests '*ProvisionPlannerTest' \
             --tests '*HostFactsParserTest' \
             --tests '*HostStoreTest' \
-            --tests '*PosixShellTest' 2>&1 | tee ci-diagnostics/unit.log
+            --tests '*PosixShellTest' \
+            --tests '*DeployPlanTest' \
+            --tests '*GitHubApiTest' 2>&1 | tee ci-diagnostics/unit.log
       - name: Annotate test failures
         if: always()
         run: |

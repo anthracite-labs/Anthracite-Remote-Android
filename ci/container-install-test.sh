@@ -34,6 +34,12 @@ PKG=${PKG:-less}
 
 fail() {
     echo "MATRIX-FAIL: $*" >&2
+    for file in "${WORK:-/tmp}/install.run.log" "${JOB:-/nonexistent}/result" "${JOB:-/nonexistent}/job.log"; do
+        if [ -f "$file" ]; then
+            echo "--- $file (tail)"
+            tail -n 15 "$file" 2>/dev/null || true
+        fi
+    done
     exit 1
 }
 

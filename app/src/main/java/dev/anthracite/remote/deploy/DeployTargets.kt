@@ -292,3 +292,78 @@ internal class DeployClient(private val ssh: SshClient) {
     fun deletePod(context: String, namespace: String, pod: String): ExecResult =
         ssh.exec(DeployCommands.kubeDeletePod(context, namespace, pod), timeoutMs = 60_000)
 }
+
+/**
+ * Creating and controlling deployments the user approved.
+ *
+ * Every mutation goes through a [DeployPlan], which has already validated every
+ * value. Deleting a container is only offered after the host reports the
+ * `anthracite.managed=1` label on that exact name, and a Kubernetes mutation
+ * re-reads the active context and checks RBAC immediately before it runs.
+ */
+internal class DeployCreator(private val ssh: SshClient) {
+    fun nativeStart(plan: DeployPlan.Native): ExecResult =
+        ssh.exec(plan.commands().single(), timeoutMs = 30_000)
+
+    fun nativeStatus(plan: DeployPlan.Native): String =
+        ssh.exec(plan.statusCommand(), timeoutMs = 20_000).stdout.trim()
+
+    fun nativeLogs(plan: DeployPlan.Native): String =
+        ssh.exec(plan.logsCommand(), timeoutMs = 30_000).text
+
+    fun nativeStop(plan: DeployPlan.Native): ExecResult =
+        ssh.exec(plan.stopCommand(), timeoutMs = 30_000)
+
+    fun containerPull(plan: DeployPlan.Container): ExecResult =
+        ssh.exec(plan.commands().first(), timeoutMs = 600_000)
+
+    fun containerRun(plan: DeployPlan.Container): ExecResult =
+        ssh.exec(plan.runCommand(), timeoutMs = 180_000)
+
+    /** Reads the ownership label; null means the container does not carry it. */
+    fun containerLabel(runtime: DeployCommands.Runtime, name: String): String? {
+        require(DeployPlans.isManagedName(name)) { "invalid container name" }
+        val binary = if (runtime == DeployCommands.Runtime.PODMAN) "podman" else "docker"
+        val result = ssh.exec(
+            "$binary inspect --format '{{index .Config.Labels \"${DeployPlans.MANAGED_LABEL}\"}}' " +
+                "${PosixShell.quote(name)} 2>/dev/null || true",
+            timeoutMs = 20_000,
+        )
+        return result.stdout.trim().ifBlank { null }
+    }
+
+    /** Null when the host does not confirm the label, so nothing is removed. */
+    fun removeOwnedContainer(runtime: DeployCommands.Runtime, name: String): ExecResult? {
+        if (!DeployPlans.isOwnedResource(name, containerLabel(runtime, name))) return null
+        val binary = if (runtime == DeployCommands.Runtime.PODMAN) "podman" else "docker"
+        return ssh.exec("$binary rm --force ${PosixShell.quote(name)}", timeoutMs = 60_000)
+    }
+
+    /**
+     * Re-reads the active context and RBAC authority, then applies the manifest
+     * from stdin. A context that changed since the preview refuses the mutation.
+     */
+    fun workloadApply(plan: DeployPlan.Workload): ExecResult {
+        val active = ssh.exec(plan.contextCommand(), timeoutMs = 20_000).stdout.trim()
+        if (active != plan.context) {
+            return ExecResult(64, "", "the active kubectl context is now '$active', not '${plan.context}'")
+        }
+        val allowed = ssh.exec(plan.permissionCommand(), timeoutMs = 20_000).stdout.trim().lowercase()
+        if (allowed != "yes") {
+            return ExecResult(64, "", "RBAC does not allow patching ${plan.kind.resource} in ${plan.namespace}")
+        }
+        return ssh.exec(plan.applyCommand(), stdin = plan.manifest.toByteArray(Charsets.UTF_8), timeoutMs = 120_000)
+    }
+
+    fun workloadRollout(plan: DeployPlan.Workload): ExecResult =
+        ssh.exec(plan.rolloutCommand(), timeoutMs = 180_000)
+
+    fun workloadLogs(plan: DeployPlan.Workload): String =
+        ssh.exec(plan.logsCommand(), timeoutMs = 30_000).text
+
+    fun workloadRollback(plan: DeployPlan.Workload): ExecResult =
+        ssh.exec(plan.rollbackCommand(), timeoutMs = 120_000)
+
+    fun workloadDelete(plan: DeployPlan.Workload): ExecResult =
+        ssh.exec(plan.deleteCommand(), timeoutMs = 60_000)
+}

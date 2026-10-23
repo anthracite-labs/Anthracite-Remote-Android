@@ -41,8 +41,10 @@ internal object DeployPlans {
         return entries.map { entry ->
             val parts = entry.split(':')
             require(parts.size == 2) { "a port mapping must be host:container, for example 8080:80" }
-            val host = parts[0].toIntOrNull() ?: error("invalid host port: ${parts[0]}")
-            val container = parts[1].toIntOrNull() ?: error("invalid container port: ${parts[1]}")
+            val host = parts[0].toIntOrNull()
+                ?: throw IllegalArgumentException("invalid host port: ${parts[0]}")
+            val container = parts[1].toIntOrNull()
+                ?: throw IllegalArgumentException("invalid container port: ${parts[1]}")
             PortMapping(host, container)
         }
     }
@@ -240,7 +242,7 @@ internal sealed class DeployPlan {
             require(!manifest.contains("\n---")) { "a manifest must contain exactly one document" }
             require(!manifest.trimStart().startsWith("---")) { "a manifest must contain one document" }
             val declaredKind = valueOf(manifest, "kind")
-                ?: error("the manifest has no kind")
+            require(declaredKind != null) { "the manifest has no kind" }
             require(declaredKind == kind.apiValue) {
                 "the manifest kind is $declaredKind, not ${kind.apiValue}"
             }
