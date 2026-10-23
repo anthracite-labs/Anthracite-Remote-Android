@@ -439,11 +439,25 @@ public actor SFTPClient {
         for continuation in waiters.values { continuation.resume(with: result) }
     }
 
-    /// The connection is usable. Only a handshake that finished may say so: if the
-    /// stream already died, that earlier verdict stands.
+    /// The connection is usable — but only if it is still usable right now.
+    ///
+    /// A greeting being parsed and the byte stream ending can land on the actor in
+    /// either order. If the loss got there first, the verdict is already terminal
+    /// and this callback must not overrule it: the waiters are told the failure
+    /// instead of "usable", because a caller released with success would go on to
+    /// write a request into a connection that cannot answer it.
     private func handshakeSucceeded() async {
-        if case .starting = state { state = .open }
-        releaseWaiters(.success(()))
+        switch state {
+        case .starting:
+            state = .open
+            releaseWaiters(.success(()))
+        case .failed(let error):
+            releaseWaiters(.failure(error))
+        case .idle, .open:
+            // Unreachable here — one handshake, one task — and in `.open` a waiter
+            // is answered immediately instead of registering. Nothing to release.
+            break
+        }
     }
 
     /// The handshake itself failed — timeout, wrong version, disconnect, a fatal
@@ -567,6 +581,17 @@ public actor SFTPClient {
         let transport = self.transport
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                // The connection can die between `start()` returning and this
+                // registration: the caller is back on the actor, but the read loop
+                // may already have run `connectionLost`. Registering anyway would
+                // leave the request waiting for a deadline that nothing can meet, so
+                // the terminal error is reported here instead. Checking and
+                // registering happen in one actor turn, so no loss can slip between
+                // them; a loss after this point is caught by `failAll`.
+                if case .failed(let error) = state {
+                    continuation.resume(throwing: error)
+                    return
+                }
                 pending[id] = continuation
                 timers[id] = Task { [weak self] in
                     // A cancelled timer has no work left: the waiter was resolved
