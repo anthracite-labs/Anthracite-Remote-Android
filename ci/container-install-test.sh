@@ -108,7 +108,9 @@ package_present() {
 write_plan() { # $1 job dir, $2 manager id, $3 steps content
     job=$1
     mkdir -p "$job"
-    printf '%s' "$3" >"$job/steps"
+    # The caller's command substitution strips the trailing newline; the runner
+    # requires the file to end with one, exactly like the phone writes it.
+    printf '%s\n' "$3" >"$job/steps"
     if command -v sha256sum >/dev/null 2>&1; then
         hash=$(sha256sum "$job/steps" | awk '{print $1}')
     else

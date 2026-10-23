@@ -322,6 +322,41 @@
     <string name="deploy_delete_requested">Deletion of %1$s was requested. Kubernetes deletes it asynchronously.</string>
 
     <!-- Deployments: loading, permissions and actions -->
+    <string name="deploy_create">New deployment</string>
+    <string name="deploy_create_container">Container from an image</string>
+    <string name="deploy_create_workload">Kubernetes workload</string>
+    <string name="deploy_create_native">Native program (user unit)</string>
+    <string name="deploy_image">Image</string>
+    <string name="deploy_image_hint">An existing image reference, for example nginx:1.27 or ghcr.io/owner/app@sha256:…</string>
+    <string name="deploy_ports">Published ports (optional)</string>
+    <string name="deploy_ports_hint">host:container pairs separated by commas, for example 8080:80</string>
+    <string name="deploy_volumes">Volumes (optional)</string>
+    <string name="deploy_volumes_hint">One host-path:container-path[:ro] per line. Paths must be absolute.</string>
+    <string name="deploy_env">Environment (optional)</string>
+    <string name="deploy_env_hint">One KEY=value per line. Values are sent as a single argument.</string>
+    <string name="deploy_native_directory">Working directory</string>
+    <string name="deploy_native_directory_hint">An absolute path on the host, for example /home/you/project</string>
+    <string name="deploy_native_executable">Executable</string>
+    <string name="deploy_native_executable_hint">For example ./run.sh or /usr/bin/python3</string>
+    <string name="deploy_native_arguments">Arguments (optional)</string>
+    <string name="deploy_native_arguments_hint">Space-separated. Each argument is quoted separately.</string>
+    <string name="deploy_workload_kind">Workload kind</string>
+    <string name="deploy_workload_manifest">Manifest</string>
+    <string name="deploy_workload_manifest_hint">One %3$s document named %2$s for context %1$s. Secret, Namespace and cluster-scoped resources are refused.</string>
+    <string name="deploy_plan_title">Review deployment</string>
+    <string name="deploy_plan_review">%1$s will be created. These are the exact commands:</string>
+    <string name="deploy_plan_run">Run</string>
+    <string name="deploy_plan_running">Running the reviewed commands…</string>
+    <string name="deploy_create_invalid">That deployment is not valid. Nothing was run.</string>
+    <string name="deploy_created">%1$s is running on the host.</string>
+    <string name="deploy_created_pending">%1$s was applied, but the rollout is not complete: %2$s</string>
+    <string name="deploy_created_inspect">Logs of the created deployment</string>
+    <string name="deploy_created_remove">Remove the created deployment</string>
+    <string name="deploy_remove_container_confirm">Stop and remove the %2$s container %1$s? The host must still report the anthracite.managed=1 label, otherwise nothing is removed.</string>
+    <string name="deploy_remove_workload_confirm">Delete %1$s %2$s from context %3$s, namespace %4$s? Only that one resource is deleted.</string>
+    <string name="deploy_remove_native_confirm">Stop the user unit %1$s? The unit itself is collected afterwards.</string>
+    <string name="deploy_remove_refused">The host does not confirm this container carries the Anthracite label, so it was not removed.</string>
+    <string name="deploy_removed">%1$s was removed from the host.</string>
     <string name="deploy_refresh">Refresh</string>
     <string name="deploy_loading">Reading what the host reports…</string>
     <string name="deploy_load_failed">The host could not be read.</string>
