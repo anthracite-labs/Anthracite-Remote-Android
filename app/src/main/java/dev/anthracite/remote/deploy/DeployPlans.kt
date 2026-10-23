@@ -461,8 +461,10 @@ internal sealed class DeployPlan {
             "Creation is create-only: if anything already has this name the cluster refuses, and " +
                 "nothing that already exists is adopted or modified. The object carries " +
                 "${DeployPlans.MANAGED_LABEL}=1 and its cluster UID is recorded when it is created; " +
-                "rollback re-reads that UID on the host immediately before acting, and delete sends " +
-                "it as a precondition the cluster itself checks inside the delete request.",
+                "rollback re-reads that UID on the host immediately before acting and checks it " +
+                "again afterwards, and delete sends it as a precondition the cluster itself checks " +
+                "inside the delete request. A rollback has no server-side precondition: it is " +
+                "narrowed and verified, not atomic.",
             "No Secret, Namespace or cluster-scoped resource is created here, and no other resource " +
                 "is ever touched.",
         )

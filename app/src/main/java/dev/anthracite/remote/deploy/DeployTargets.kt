@@ -489,8 +489,36 @@ internal class DeployCreator(private val shell: RemoteShell) {
         return WorkloadPreflight(verdict, WorkloadGuard.explanation(verdict), identity)
     }
 
-    fun workloadRollback(plan: DeployPlan.Workload): ExecResult =
-        guardedMutation(plan, "patch", { _ -> plan.rollbackCommand() }, 120_000)
+    /**
+     * `kubectl rollout undo`, guarded and then verified.
+     *
+     * The API server offers no precondition for a rollout: unlike a delete, the
+     * undo cannot carry the reviewed UID, so between the guard's UID read and the
+     * undo the object could be replaced — the window is small and it is real. This
+     * does not claim otherwise. What it does is **detect** it: the identity is read
+     * again afterwards, and a rollback that landed on a different object is
+     * reported as replaced rather than as success. A user who sees that knows the
+     * cluster holds something this app did not review.
+     */
+    fun workloadRollback(plan: DeployPlan.Workload): ExecResult {
+        val result = guardedMutation(plan, "patch", { _ -> plan.rollbackCommand() }, 120_000)
+        if (result.exitCode != 0) return result
+        val expected = plan.appliedUid ?: return result
+        val after = readIdentity(plan)
+            ?: return ExecResult(
+                DeployPlans.EXIT_IDENTITY_UNAVAILABLE,
+                result.stdout,
+                "The rollback ran, but the object's identity could not be read afterwards, " +
+                    "so it is unknown whether the object is still the one that was reviewed.",
+            )
+        if (after.uid == expected) return result
+        return ExecResult(
+            DeployPlans.EXIT_IDENTITY_CHANGED,
+            result.stdout,
+            "The object was replaced while the rollback ran: the cluster now holds a different " +
+                "object under this name. Nothing further will be done with it.",
+        )
+    }
 
     fun workloadDelete(plan: DeployPlan.Workload): ExecResult =
         // The mutation is built from the reviewed UID, and the cluster checks that

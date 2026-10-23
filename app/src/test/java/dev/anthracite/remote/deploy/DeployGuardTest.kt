@@ -161,6 +161,65 @@ class DeployGuardTest {
     }
 
     @Test
+    fun `a rollback is verified afterwards, not trusted`() {
+        // The object is replaced between the guard and the undo: the undo itself
+        // exits 0, and only the re-read can tell that it touched a different object.
+        var reads = 0
+        val shell = FakeShell { command ->
+            when {
+                command.endsWith("config current-context") -> ExecResult(0, "prod-cluster", "")
+                command.contains("auth can-i") -> ExecResult(0, "yes", "")
+                command.contains("-o jsonpath") -> ExecResult(0, "", "")
+                command.contains(" -o json") -> {
+                    reads += 1
+                    ExecResult(0, objectJson(if (reads == 1) uid else otherUid), "")
+                }
+                else -> ExecResult(0, "rolled back", "")
+            }
+        }
+
+        val result = DeployCreator(shell).workloadRollback(plan())
+
+        assertEquals(DeployPlans.EXIT_IDENTITY_CHANGED, result.exitCode)
+        assertTrue(result.stderr.contains("replaced while the rollback ran"))
+        assertTrue(shell.commands.any { it.contains("rollout undo") })
+        // The identity was read before the undo and again after it.
+        assertEquals(2, reads)
+    }
+
+    @Test
+    fun `a rollback of the same object succeeds and reports success`() {
+        val shell = healthy()
+        val result = DeployCreator(shell).workloadRollback(plan())
+
+        assertEquals(0, result.exitCode)
+        assertEquals("", result.stderr)
+        assertTrue(shell.commands.any { it.contains("rollout undo") })
+    }
+
+    @Test
+    fun `a rollback whose identity cannot be re-read afterwards is not reported as success`() {
+        var reads = 0
+        val shell = FakeShell { command ->
+            when {
+                command.endsWith("config current-context") -> ExecResult(0, "prod-cluster", "")
+                command.contains("auth can-i") -> ExecResult(0, "yes", "")
+                command.contains("-o jsonpath") -> ExecResult(0, "", "")
+                command.contains(" -o json") -> {
+                    reads += 1
+                    if (reads == 1) ExecResult(0, objectJson(uid), "") else ExecResult(1, "", "NotFound")
+                }
+                else -> ExecResult(0, "rolled back", "")
+            }
+        }
+
+        val result = DeployCreator(shell).workloadRollback(plan())
+
+        assertEquals(DeployPlans.EXIT_IDENTITY_UNAVAILABLE, result.exitCode)
+        assertTrue(result.stderr.contains("could not be read afterwards"))
+    }
+
+    @Test
     fun `a consistent host allows exactly one delete of the named resource`() {
         val shell = healthy()
         val result = DeployCreator(shell).workloadDelete(plan())
