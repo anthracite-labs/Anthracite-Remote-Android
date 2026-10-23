@@ -317,7 +317,7 @@ public actor SFTPClient {
         /// first caller's continuation, which then never resumed: the first caller
         /// waited forever on a reply that had already been delivered to somebody
         /// else.
-        case starting(Task<Void, Error>)
+        case starting
         case open
         /// The connection can no longer be trusted: either the handshake failed or
         /// the stream ended. Every later call fails with this error instead of
@@ -379,19 +379,18 @@ public actor SFTPClient {
             // caller would have waited out the whole handshake timeout.
             return try await waitForHandshake()
         case .idle:
-            let task = Task { [weak self] in
-                guard let self else { throw SFTPError.notConnected }
+            Task { [weak self] in
+                guard let self else { return }
                 do {
                     try await self.performHandshake()
                     await self.handshakeSucceeded()
                 } catch {
                     await self.handshakeFailed(error)
-                    throw error
                 }
             }
             // Assigned before the task can run: the task is actor-isolated too, so
             // it cannot observe `.idle` and start a second handshake.
-            state = .starting(task)
+            state = .starting
             return try await waitForHandshake()
         }
     }
@@ -400,9 +399,9 @@ public actor SFTPClient {
     ///
     /// The waiter is registered on the actor before anything can answer it, and it
     /// is removed by exactly one of: the handshake finishing, the connection
-    /// failing, `close()`, or this caller's own cancellation. Every path goes
-    /// through `takeWaiter`, so the continuation is resumed once and never left
-    /// suspended.
+    /// failing, `close()`, or this caller's own cancellation — each of them takes
+    /// the entry out of the dictionary before resuming it, so the continuation is
+    /// resumed once and never left suspended.
     private func waitForHandshake() async throws {
         let id = nextWaiterId
         nextWaiterId += 1
@@ -430,12 +429,8 @@ public actor SFTPClient {
         }
     }
 
-    private func takeWaiter(_ id: Int) -> CheckedContinuation<Void, Error>? {
-        handshakeWaiters.removeValue(forKey: id)
-    }
-
     private func abandonWaiter(_ id: Int) {
-        takeWaiter(id)?.resume(throwing: CancellationError())
+        handshakeWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
     }
 
     private func releaseWaiters(_ result: Result<Void, Error>) {

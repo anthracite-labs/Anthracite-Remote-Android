@@ -357,6 +357,30 @@ class DeployEnvFileShellTest {
     }
 
     @Test
+    fun `cleanup never removes a file it did not create, even beside its own`() {
+        val shell = shells.first()
+        val root = preparedHome("cleanup-foreign")
+        val plan = plan()
+        val directory = targetPath(plan, root).parentFile
+        directory.mkdirs()
+        targetPath(plan, root).writeText("TOKEN=ours\n")
+        val foreign = File(directory, "foreign").apply { writeText("FOREIGN\n") }
+
+        // Cleanup removes this operation's file, and then leaves the directory
+        // alone because something else is in it.
+        val outcome = run(shell, plan.envFileRemoveCommand(), root)
+
+        assertEquals(outcome.stderr, 0, outcome.exit)
+        assertFalse("this operation's file was not removed", targetPath(plan, root).exists())
+        assertTrue("a foreign file inside the directory was deleted", foreign.isFile)
+        assertEquals("FOREIGN\n", foreign.readText())
+        assertTrue("the directory was removed with someone else's file in it", directory.isDirectory)
+        // Idempotent: running it again changes nothing and still succeeds.
+        assertEquals(0, run(shell, plan.envFileRemoveCommand(), root).exit)
+        assertTrue(foreign.isFile)
+    }
+
+    @Test
     fun `a stale partial file is never deleted by a different operation`() {
         val shell = shells.first()
         val root = preparedHome("stale")

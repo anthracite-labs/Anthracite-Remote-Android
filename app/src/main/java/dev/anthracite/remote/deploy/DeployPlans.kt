@@ -369,7 +369,10 @@ internal sealed class DeployPlan {
          * retry or a duplicated cleanup is harmless.
          */
         fun envFileRemoveCommand(): String =
-            "rm -f ${envFilePath()}; rmdir ${envFileDir()} 2>/dev/null || true"
+            // The last test is what the command reports: removed (0), or still
+            // there (non-zero). A directory that still holds something is left in
+            // place without turning that into a failure of the removal itself.
+            "rm -f ${envFilePath()}; rmdir ${envFileDir()} 2>/dev/null; [ ! -e ${envFilePath()} ]"
 
         /** The exact bytes the container will receive, as `docker --env-file` reads them. */
         fun envFileBytes(): ByteArray =
