@@ -303,6 +303,10 @@ public actor SFTPClient {
     private var nextRequestId: UInt32 = 1
     private var pending: [UInt32: CheckedContinuation<Data, Error>] = [:]
     private var timers: [UInt32: Task<Void, Never>] = [:]
+    /// Callers waiting for the shared handshake, so one of them being cancelled
+    /// resolves that caller only — and immediately.
+    private var handshakeWaiters: [Int: CheckedContinuation<Void, Error>] = [:]
+    private var nextWaiterId = 1
     private var readTask: Task<Void, Never>?
     private var state = State.idle
 
@@ -339,38 +343,129 @@ public actor SFTPClient {
         for continuation in pending.values {
             continuation.resume(throwing: SFTPError.notConnected)
         }
+        for continuation in handshakeWaiters.values {
+            continuation.resume(throwing: SFTPError.notConnected)
+        }
     }
 
     // MARK: Transport
 
     /// The version exchange, run once no matter how many callers arrive at the
     /// same moment.
+    ///
+    /// **Cancellation contract.** A caller that is cancelled while the handshake
+    /// is still pending returns immediately with `CancellationError` and changes
+    /// nothing about the connection: it stops waiting, and the shared handshake
+    /// carries on for whoever else is attached to it. That is the opposite of a
+    /// failure — the handshake itself decides whether the connection opens or
+    /// becomes terminal, in `handshakeSucceeded` / `handshakeFailed` — so one
+    /// caller giving up can never close a channel another caller is using, and a
+    /// cancelled waiter can never start a second handshake.
+    ///
+    /// Awaiting an unstructured `Task` does not propagate cancellation into it,
+    /// which is what makes this work; the terminal transition lives inside the
+    /// task instead of in the caller that happened to start it.
     private func start() async throws {
         switch state {
         case .open:
             return
         case .failed(let error):
             throw error
-        case .starting(let task):
-            // The same task every caller waits on, so only one INIT is ever sent.
-            return try await task.value
+        case .starting:
+            // Every caller waits on the same handshake, through a waiter of its
+            // own: one INIT is ever sent, and cancelling a waiter resolves that
+            // waiter only. Awaiting the task directly would have been wrong —
+            // `Task.value` ignores the caller's cancellation, so a cancelled
+            // caller would have waited out the whole handshake timeout.
+            return try await waitForHandshake()
         case .idle:
-            let task = Task { try await self.performHandshake() }
-            state = .starting(task)
-            do {
-                try await task.value
-                // Only now, and only if the connection did not die while the
-                // handshake ran: resurrecting a dead channel here would make every
-                // later request wait out its full timeout.
-                if case .starting = state { state = .open }
-            } catch {
-                let failure = error as? SFTPError ?? .notConnected
-                state = .failed(failure)
-                failAll(failure)
-                await transport.close()
-                throw error
+            let task = Task { [weak self] in
+                guard let self else { throw SFTPError.notConnected }
+                do {
+                    try await self.performHandshake()
+                    await self.handshakeSucceeded()
+                } catch {
+                    await self.handshakeFailed(error)
+                    throw error
+                }
             }
+            // Assigned before the task can run: the task is actor-isolated too, so
+            // it cannot observe `.idle` and start a second handshake.
+            state = .starting(task)
+            return try await waitForHandshake()
         }
+    }
+
+    /// Waits for the shared handshake in a way cancellation can end.
+    ///
+    /// The waiter is registered on the actor before anything can answer it, and it
+    /// is removed by exactly one of: the handshake finishing, the connection
+    /// failing, `close()`, or this caller's own cancellation. Every path goes
+    /// through `takeWaiter`, so the continuation is resumed once and never left
+    /// suspended.
+    private func waitForHandshake() async throws {
+        let id = nextWaiterId
+        nextWaiterId += 1
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                // Cancelled before this waiter existed: answer now, register
+                // nothing. A cancellation that lands after this point reaches the
+                // actor through `abandonWaiter` and can only run after this
+                // synchronous registration completes.
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                switch state {
+                case .open:
+                    continuation.resume()
+                case .failed(let error):
+                    continuation.resume(throwing: error)
+                case .idle, .starting:
+                    handshakeWaiters[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { [weak self] in await self?.abandonWaiter(id) }
+        }
+    }
+
+    private func takeWaiter(_ id: Int) -> CheckedContinuation<Void, Error>? {
+        handshakeWaiters.removeValue(forKey: id)
+    }
+
+    private func abandonWaiter(_ id: Int) {
+        takeWaiter(id)?.resume(throwing: CancellationError())
+    }
+
+    private func releaseWaiters(_ result: Result<Void, Error>) {
+        let waiters = handshakeWaiters
+        handshakeWaiters.removeAll()
+        for continuation in waiters.values { continuation.resume(with: result) }
+    }
+
+    /// The connection is usable. Only a handshake that finished may say so: if the
+    /// stream already died, that earlier verdict stands.
+    private func handshakeSucceeded() async {
+        if case .starting = state { state = .open }
+        releaseWaiters(.success(()))
+    }
+
+    /// The handshake itself failed — timeout, wrong version, disconnect, a fatal
+    /// framing error. That is terminal, so the channel is closed and every waiter
+    /// is released now rather than at its own deadline.
+    private func handshakeFailed(_ error: Error) async {
+        var failure = error as? SFTPError ?? .notConnected
+        if case .failed(let existing) = state {
+            // Already terminal — a disconnect, say — so the first cause is the one
+            // the callers are told about.
+            failure = existing
+        } else {
+            state = .failed(failure)
+        }
+        failAll(failure)
+        releaseWaiters(.failure(failure))
+        await transport.close()
     }
 
     private func performHandshake() async throws {
@@ -795,6 +890,7 @@ public actor SFTPClient {
         // Release every caller first: a request in flight would otherwise wait out
         // its timeout on a connection that is being torn down.
         failAll(SFTPError.notConnected)
+        releaseWaiters(.failure(SFTPError.notConnected))
         state = .failed(.notConnected)
         readTask?.cancel()
         await transport.close()

@@ -152,6 +152,9 @@ class DeployEnvFileShellTest {
             assertEquals(String(plan.envFileBytes()), file.readText())
             assertFalse("${shell.path}: the values must not be readable by others", file.readableByOthers())
             assertEquals("${shell.path}", "rw-------", permissions(file))
+            // The claimed directory is private too: it is what makes the cleanup
+            // safe, so its mode is part of the guarantee.
+            assertEquals("${shell.path}", "rwx------", permissions(file.parentFile))
         }
     }
 
