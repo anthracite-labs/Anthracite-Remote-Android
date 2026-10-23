@@ -19,6 +19,7 @@ import dev.anthracite.remote.ui.addActionButton
 import dev.anthracite.remote.workspace.Workspace
 import dev.anthracite.remote.workspace.connectWorkspace
 import dev.anthracite.remote.workspace.io
+import dev.anthracite.remote.workspace.resolveHostOrFinish
 import kotlinx.coroutines.launch
 
 /**
@@ -51,8 +52,12 @@ class WorkspaceActivity : AppCompatActivity() {
         findViewById<View>(R.id.workspace_refresh).setOnClickListener { probe() }
         buildActions()
         val hostId = intent.getStringExtra(HostsActivity.EXTRA_HOST_ID)
-        val store = Workspace.store(this)
-        host = runCatching { hostId?.let(store::find) }.getOrNull() ?: Workspace.profile
+        host = resolveHostOrFinish(
+            this,
+            hostId,
+            runCatching { Workspace.store(this).list() }.getOrDefault(emptyList()),
+            Workspace.profile,
+        ) ?: return
         render()
         ensureConnected()
     }

@@ -36,13 +36,31 @@ public final class KeychainSecretStore: SecretStore {
         ]
     }
 
+    /// Replaces a credential without ever leaving the key absent.
+    ///
+    /// Delete-then-add had a real failure mode: if the add failed (locked device,
+    /// quota, a Keychain daemon hiccup) the only working credential was already
+    /// gone. The update path keeps the existing item in place, and `add` is used
+    /// only when there is nothing to keep.
     public func set(_ value: Data, for key: String) throws {
-        var attributes = query(key)
-        attributes[kSecValueData as String] = value
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemDelete(attributes as CFDictionary)
-        let status = SecItemAdd(attributes as CFDictionary, nil)
-        guard status == errSecSuccess else { throw CredentialStoreError.keychain(status) }
+        let attributes: [String: Any] = [
+            kSecValueData as String: value,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let updated = SecItemUpdate(query(key) as CFDictionary, attributes as CFDictionary)
+        if updated == errSecSuccess { return }
+        guard updated == errSecItemNotFound else { throw CredentialStoreError.keychain(updated) }
+        var insert = query(key)
+        insert.merge(attributes) { _, new in new }
+        let added = SecItemAdd(insert as CFDictionary, nil)
+        // A concurrent writer may have created the item between update and add;
+        // updating again is the correct resolution and keeps the value.
+        if added == errSecDuplicateItem {
+            let retried = SecItemUpdate(query(key) as CFDictionary, attributes as CFDictionary)
+            guard retried == errSecSuccess else { throw CredentialStoreError.keychain(retried) }
+            return
+        }
+        guard added == errSecSuccess else { throw CredentialStoreError.keychain(added) }
     }
 
     public func value(for key: String) throws -> Data? {

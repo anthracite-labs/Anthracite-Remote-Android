@@ -9,7 +9,8 @@ import dev.anthracite.remote.json.MiniJson
  * Native, Docker, Podman and Kubernetes controls built on the host's own CLIs.
  *
  * Rules enforced here:
- * * no implicit `--privileged`, no socket forwarding, no container creation;
+ * * no implicit `--privileged` and no socket forwarding: creation only ever names
+ *   an existing image and never escalates;
  * * every mutation names one target that the user selected, and destructive
  *   actions are only offered for an identifier the host just reported;
  * * Kubernetes always names the confirmed context and namespace, and checks RBAC
@@ -31,8 +32,14 @@ internal data class ContainerSummary(
 
 internal data class KubeContextInfo(val name: String, val current: Boolean)
 
-/** What a creation produced: the last command result and the identity, if confirmed. */
-internal data class DeployOutcome(val result: ExecResult, val appliedUid: String? = null)
+/**
+ * What a creation produced: the last command result and the identity the host
+ * confirmed — a Kubernetes UID or a container id — when there is one.
+ */
+internal data class DeployOutcome(val result: ExecResult, val identity: String? = null)
+
+/** A container as the runtime reports it: immutable id and ownership label. */
+internal data class ContainerIdentity(val id: String, val managedLabel: String?)
 
 /** The outcome of a guard check, with the text a screen may show verbatim. */
 internal data class WorkloadPreflight(
@@ -349,35 +356,51 @@ internal class DeployCreator(private val shell: RemoteShell) {
      * with the runtime socket can still read them with `inspect`, which the plan's
      * warnings state.
      */
-    fun containerRun(plan: DeployPlan.Container): ExecResult {
-        if (plan.environment.isEmpty()) return shell.exec(plan.runCommand(), null, 180_000)
-        val written = shell.exec(plan.envFileCommand(), plan.envFileBytes(), 30_000)
-        if (written.exitCode != 0) return written
-        return try {
+    fun containerRun(plan: DeployPlan.Container): DeployOutcome {
+        val started = if (plan.environment.isEmpty()) {
             shell.exec(plan.runCommand(), null, 180_000)
-        } finally {
-            shell.exec(plan.envFileRemoveCommand(), null, 20_000)
+        } else {
+            // The file name carries a per-plan token, so it can only be ours: the
+            // cleanup below is safe on every path, including a write that failed
+            // half-way and left a partial file behind.
+            try {
+                val written = shell.exec(plan.envFileCommand(), plan.envFileBytes(), 30_000)
+                if (written.exitCode != 0) written else shell.exec(plan.runCommand(), null, 180_000)
+            } finally {
+                shell.exec(plan.envFileRemoveCommand(), null, 20_000)
+            }
         }
+        if (started.exitCode != 0) return DeployOutcome(started)
+        // Record the immutable id now; without it the container is never removed
+        // by this app, which fails closed rather than deleting on a name alone.
+        return DeployOutcome(started, containerIdentity(plan)?.id)
     }
 
-    /** Reads the ownership label; null means the container does not carry it. */
-    fun containerLabel(runtime: DeployCommands.Runtime, name: String): String? {
-        require(DeployPlans.isManagedName(name)) { "invalid container name" }
-        val binary = if (runtime == DeployCommands.Runtime.PODMAN) "podman" else "docker"
-        val result = shell.exec(
-            "$binary inspect --format '{{index .Config.Labels \"${DeployPlans.MANAGED_LABEL}\"}}' " +
-                "${PosixShell.quote(name)} 2>/dev/null || true",
-            null,
-            20_000,
-        )
-        return result.stdout.trim().ifBlank { null }
+    /** Reads the container's immutable id and ownership label, or null. */
+    fun containerIdentity(plan: DeployPlan.Container): ContainerIdentity? {
+        val result = shell.exec(plan.identityCommand(), null, 20_000)
+        if (result.exitCode != 0) return null
+        val parts = result.stdout.trim().split('|')
+        if (parts.size != 2) return null
+        val id = parts[0].trim()
+        if (!PosixShell.isContainerId(id)) return null
+        return ContainerIdentity(id, parts[1].trim().ifBlank { null })
     }
 
-    /** Null when the host does not confirm the label, so nothing is removed. */
-    fun removeOwnedContainer(runtime: DeployCommands.Runtime, name: String): ExecResult? {
-        if (!DeployPlans.isOwnedResource(name, containerLabel(runtime, name))) return null
-        val binary = if (runtime == DeployCommands.Runtime.PODMAN) "podman" else "docker"
-        return shell.exec("$binary rm --force ${PosixShell.quote(name)}", null, 60_000)
+    /**
+     * Removes only the exact container this app created.
+     *
+     * Both facts must still hold: the id the runtime reports for the name is the
+     * id recorded at creation, and the container carries our label. Removal then
+     * names the full id, so a container that took the same name afterwards cannot
+     * be hit. Null means the host did not confirm ownership and nothing was sent.
+     */
+    fun removeOwnedContainer(plan: DeployPlan.Container): ExecResult? {
+        val recorded = plan.createdId ?: return null
+        val observed = containerIdentity(plan) ?: return null
+        if (observed.id != recorded) return null
+        if (!DeployPlans.isOwnedResource(plan.name, observed.managedLabel)) return null
+        return shell.exec(plan.removeCommand(recorded), null, 60_000)
     }
 
     /**
@@ -401,15 +424,31 @@ internal class DeployCreator(private val shell: RemoteShell) {
                 null,
             )
         }
-        val canI = shell.exec(plan.permissionCommand("patch"), null, 20_000)
+        // `create`, not `patch`: this path may only make a new object.
+        val canI = shell.exec(plan.permissionCommand("create"), null, 20_000)
         if (WorkloadGuard.authority(plan, active, canI.stdout) != WorkloadMutationVerdict.ALLOWED) {
             return DeployOutcome(
-                ExecResult(64, "", "RBAC does not allow creating or patching ${plan.kind.resource} in ${plan.namespace}"),
+                ExecResult(64, "", "RBAC does not allow creating ${plan.kind.resource} in ${plan.namespace}"),
                 null,
             )
         }
-        val applied = shell.exec(plan.applyCommand(), plan.manifest().toByteArray(Charsets.UTF_8), 120_000)
-        if (applied.exitCode != 0) return DeployOutcome(applied, null)
+        val applied = shell.exec(plan.createCommand(), plan.manifest().toByteArray(Charsets.UTF_8), 120_000)
+        if (applied.exitCode != 0) {
+            val alreadyExists = applied.stderr.contains("AlreadyExists", ignoreCase = true)
+            return DeployOutcome(
+                ExecResult(
+                    if (alreadyExists) 64 else applied.exitCode,
+                    applied.stdout,
+                    if (alreadyExists) {
+                        "An object named ${plan.name} already exists in ${plan.namespace}. It was left " +
+                            "untouched: this app never adopts an object it did not create."
+                    } else {
+                        applied.stderr
+                    },
+                ),
+                null,
+            )
+        }
         val identity = readIdentity(plan) ?: return DeployOutcome(applied, null)
         if (!DeployPlans.isOwnedResource(plan.name, identity.managedLabel)) {
             return DeployOutcome(applied, null)
@@ -465,7 +504,10 @@ internal class DeployCreator(private val shell: RemoteShell) {
         }
         val preflight = workloadPreflight(plan, verb)
         if (!preflight.allowed) return ExecResult(64, "", preflight.detail)
-        return shell.exec(command, null, timeoutMs)
+        // The last identity check and the mutation travel as one host command, so
+        // no round trip can slip between them.
+        val uid = plan.appliedUid ?: return ExecResult(64, "", preflight.detail)
+        return shell.exec(plan.guardedMutationCommand(command, uid), null, timeoutMs)
     }
 
     private fun readIdentity(plan: DeployPlan.Workload): WorkloadIdentity? {

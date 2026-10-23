@@ -283,17 +283,19 @@ final class SFTPWireTests: XCTestCase {
         let framed = writer.framed()
         var decoder = SFTPPacketDecoder()
         decoder.append(framed.prefix(6))
-        XCTAssertNil(decoder.next())
+        XCTAssertNil(try decoder.next())
         decoder.append(framed.dropFirst(6))
-        let packet = decoder.next()
+        let packet = try decoder.next()
         XCTAssertNotNil(packet)
         var reader = SFTPReader(packet!)
         XCTAssertEqual(try? reader.readByte(), SFTP.replyData)
         XCTAssertEqual(try? reader.readUInt32(), 7)
 
+        // An impossible frame length is fatal: a stuck decoder would leave every
+        // pending request waiting for a reply that cannot arrive.
         var bad = SFTPPacketDecoder()
         bad.append(Data([0x7F, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]))
-        XCTAssertNil(bad.next())
+        XCTAssertThrowsError(try bad.next())
     }
 }
 

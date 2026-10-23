@@ -181,15 +181,79 @@ class DeployGuardTest {
         assertTrue(shell.commands[3].contains("delete deployment/"))
     }
 
-    // ---------------------------------------------------------------------- apply
+    // ------------------------------------------------------------------- creation
 
     @Test
-    fun `an apply sends the generated manifest on stdin and records the uid`() {
+    fun `creation is create-only and never adopts an existing object`() {
         val shell = FakeShell { command ->
             when {
                 command.endsWith("config current-context") -> ExecResult(0, "prod-cluster", "")
                 command.contains("auth can-i") -> ExecResult(0, "yes", "")
-                command.endsWith("apply -f -") -> ExecResult(0, "deployment.apps/x created", "")
+                command.endsWith("create -f -") -> ExecResult(
+                    0,
+                    "",
+                    "Error from server (AlreadyExists): error when creating \"-\": " +
+                        "deployments.apps \"anthracite-1a2b3c4d\" already exists",
+                )
+                else -> ExecResult(0, "", "")
+            }
+        }
+        val outcome = DeployCreator(shell).workloadApply(plan(uid = null))
+
+        assertEquals(64, outcome.result.exitCode)
+        assertNull(outcome.identity)
+        assertTrue(outcome.result.stderr.contains("left untouched"))
+        // It asked for `create`, not `apply`, and never tried to read or label it.
+        assertTrue(shell.commands.any { it.endsWith("create -f -") })
+        assertFalse(shell.commands.any { it.endsWith("apply -f -") })
+        assertFalse(shell.commands.any { it.contains(" -o json") })
+    }
+
+    @Test
+    fun `creation checks create permission, not patch`() {
+        val shell = healthy()
+        DeployCreator(shell).workloadApply(plan(uid = null))
+        val verbs = shell.commands.filter { it.contains("auth can-i") }
+        assertEquals(1, verbs.size)
+        assertTrue(verbs.single().endsWith("auth can-i create deployment"))
+    }
+
+    @Test
+    fun `creation is refused when create is not allowed`() {
+        val shell = healthy(canI = "no")
+        val outcome = DeployCreator(shell).workloadApply(plan(uid = null))
+        assertEquals(64, outcome.result.exitCode)
+        assertNull(outcome.identity)
+        assertTrue(outcome.result.stderr.contains("creating"))
+        assertFalse(shell.commands.any { it.contains("create -f -") })
+    }
+
+    // --------------------------------------------------- same-command UID check (H-05)
+
+    @Test
+    fun `the mutation re-checks the uid on the host in the same command`() {
+        val shell = healthy()
+        val result = DeployCreator(shell).workloadDelete(plan())
+
+        assertEquals(0, result.exitCode)
+        val mutation = shell.commands.last { it.contains("delete deployment/") }
+        // One shell invocation: read the uid, compare, then act.
+        assertTrue(mutation.startsWith("set -eu; uid=\$(kubectl --context 'prod-cluster' --namespace 'demo' get deployment/"))
+        assertTrue(mutation.contains("exit ${DeployPlans.EXIT_IDENTITY_UNAVAILABLE}"))
+        assertTrue(mutation.contains("if [ \"\$uid\" != '${uid}' ]"))
+        assertTrue(mutation.contains("exit ${DeployPlans.EXIT_IDENTITY_CHANGED}"))
+        assertTrue(mutation.trimEnd().endsWith("delete deployment/anthracite-1a2b3c4d --ignore-not-found --wait=false"))
+    }
+
+    // ---------------------------------------------------------------------- apply
+
+    @Test
+    fun `a creation sends the generated manifest on stdin and records the uid`() {
+        val shell = FakeShell { command ->
+            when {
+                command.endsWith("config current-context") -> ExecResult(0, "prod-cluster", "")
+                command.contains("auth can-i") -> ExecResult(0, "yes", "")
+                command.endsWith("create -f -") -> ExecResult(0, "deployment.apps/x created", "")
                 command.contains(" -o json") -> ExecResult(0, objectJson(uid), "")
                 else -> ExecResult(0, "", "")
             }
@@ -198,8 +262,8 @@ class DeployGuardTest {
         val outcome = DeployCreator(shell).workloadApply(target)
 
         assertEquals(0, outcome.result.exitCode)
-        assertEquals(uid, outcome.appliedUid)
-        val applyIndex = shell.commands.indexOfFirst { it.endsWith("apply -f -") }
+        assertEquals(uid, outcome.identity)
+        val applyIndex = shell.commands.indexOfFirst { it.endsWith("create -f -") }
         assertTrue(applyIndex >= 0)
         assertEquals(target.manifest(), String(shell.stdins[applyIndex]!!))
         // The manifest never travels as an argument.
@@ -207,26 +271,27 @@ class DeployGuardTest {
     }
 
     @Test
-    fun `an apply the cluster did not label yields no identity`() {
+    fun `a creation the cluster did not label yields no identity`() {
         val shell = FakeShell { command ->
             when {
                 command.endsWith("config current-context") -> ExecResult(0, "prod-cluster", "")
                 command.contains("auth can-i") -> ExecResult(0, "yes", "")
-                command.endsWith("apply -f -") -> ExecResult(0, "", "")
+                command.endsWith("create -f -") -> ExecResult(0, "", "")
                 command.contains(" -o json") -> ExecResult(0, objectJson(uid, label = null), "")
                 else -> ExecResult(0, "", "")
             }
         }
-        assertNull(DeployCreator(shell).workloadApply(plan(uid = null)).appliedUid)
+        assertNull(DeployCreator(shell).workloadApply(plan(uid = null)).identity)
     }
 
     @Test
-    fun `an apply to a changed context never runs kubectl apply`() {
+    fun `a creation in a changed context never runs kubectl create`() {
         val shell = healthy(current = "other")
         val outcome = DeployCreator(shell).workloadApply(plan(uid = null))
 
         assertEquals(64, outcome.result.exitCode)
-        assertNull(outcome.appliedUid)
+        assertNull(outcome.identity)
+        assertFalse(shell.commands.any { it.endsWith("create -f -") })
         assertFalse(shell.commands.any { it.endsWith("apply -f -") })
     }
 

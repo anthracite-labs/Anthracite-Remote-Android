@@ -22,6 +22,7 @@ public enum SFTPError: Error, Equatable {
     case tooLarge
     case tooManyEntries
     case invalidPath
+    case timedOut
 }
 
 // MARK: - Wire constants
@@ -150,6 +151,10 @@ struct SFTPWriter {
 }
 
 /// Splits the channel's byte stream into complete SFTP packets.
+///
+/// A frame whose length is impossible is a **fatal protocol error**, not a pause:
+/// silently dropping the buffer left every pending request waiting for a reply
+/// that could never arrive.
 struct SFTPPacketDecoder {
     private var buffer = Data()
 
@@ -157,13 +162,15 @@ struct SFTPPacketDecoder {
         buffer.append(data)
     }
 
-    mutating func next() -> Data? {
+    /// The next complete packet, or nil if more bytes are needed.
+    /// Throws when the stream cannot be a well-formed SFTP packet stream.
+    mutating func next() throws -> Data? {
         guard buffer.count >= 4 else { return nil }
         let length = Int(buffer[buffer.startIndex]) << 24 | Int(buffer[buffer.startIndex + 1]) << 16
             | Int(buffer[buffer.startIndex + 2]) << 8 | Int(buffer[buffer.startIndex + 3])
         guard length > 0, length < 1 << 22 else {
             buffer.removeAll()
-            return nil
+            throw SFTPError.protocolViolation("invalid SFTP packet length")
         }
         guard buffer.count >= length + 4 else { return nil }
         let body = buffer.subdata(in: 4..<(4 + length))
@@ -194,10 +201,22 @@ final class SFTPChannelCollector: ChannelInboundHandler, @unchecked Sendable {
         lock.lock()
         decoder.append(Data(bytes))
         var ready: [Data] = []
-        while let packet = decoder.next() { ready.append(packet) }
+        var failure: Error?
+        do {
+            while let packet = try decoder.next() { ready.append(packet) }
+        } catch {
+            failure = error
+        }
         let continuation = self.continuation
+        if failure != nil { self.continuation = nil }
         lock.unlock()
         for packet in ready { continuation?.yield(packet) }
+        if let failure {
+            // Fatal: every pending request must learn that this connection can
+            // no longer answer, instead of waiting forever.
+            continuation?.finish(throwing: failure)
+            context.close(promise: nil)
+        }
     }
 
     func channelInactive(context: ChannelHandlerContext) {
@@ -228,8 +247,12 @@ public actor SFTPClient {
     private let collector: SFTPChannelCollector
     private var nextRequestId: UInt32 = 1
     private var pending: [UInt32: CheckedContinuation<Data, Error>] = [:]
+    private var queuedFrames: [UInt32: Data] = [:]
     private var readTask: Task<Void, Never>?
     private var handshakeComplete = false
+
+    /// A request that never gets a reply must fail, not hang the UI forever.
+    static let requestTimeout: Duration = .seconds(30)
 
     init(channel: Channel, collector: SFTPChannelCollector) {
         self.channel = channel
@@ -305,6 +328,9 @@ public actor SFTPClient {
     /// One request/response round trip. Every operation below is built from this,
     /// so request ids can never collide. The reply type is returned unexamined:
     /// EOF is a normal reply for reads, and only the caller knows that.
+    ///
+    /// The wait is bounded: a silent or wedged server fails this request with
+    /// `timedOut` and drops its pending entry, so nothing is left suspended.
     private func call(_ type: UInt8, _ build: (inout SFTPWriter) -> Void) async throws -> (UInt8, SFTPReader) {
         try await start()
         let id = nextRequestId
@@ -313,16 +339,45 @@ public actor SFTPClient {
         writer.write(byte: type)
         writer.write(uint32: id)
         build(&writer)
-        let packet = try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            Task { [weak self] in
-                do { try await self?.write(writer.framed()) } catch { await self?.fail(id, error) }
+        queuedFrames[id] = writer.framed()
+        let packet = try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask { try await self.awaitReply(id) }
+            group.addTask {
+                try await Task.sleep(for: SFTPClient.requestTimeout)
+                await self.expire(id)
+                throw SFTPError.timedOut
             }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw SFTPError.notConnected }
+            return first
         }
         var reader = SFTPReader(packet)
         let replyType = UInt8((try reader.readUInt32()) & 0xff)
         _ = try reader.readUInt32()
         return (replyType, reader)
+    }
+
+    private func awaitReply(_ id: UInt32) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            pending[id] = continuation
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.sendPending(id)
+                } catch {
+                    await self.fail(id, error)
+                }
+            }
+        }
+    }
+
+    private func expire(_ id: UInt32) {
+        pending.removeValue(forKey: id)?.resume(throwing: SFTPError.timedOut)
+    }
+
+    private func sendPending(_ id: UInt32) async throws {
+        guard let framed = queuedFrames.removeValue(forKey: id) else { return }
+        try await write(framed)
     }
 
     /// Reads a STATUS reply. Throws unless it is `SSH_FX_OK`.
@@ -462,7 +517,13 @@ public actor SFTPClient {
                 _ = try? await self?.call(SFTP.packetClose) { writer in writer.write(string: handle) }
             }
         }
-        while data.count < cap {
+        // Read until the server says EOF, or until the answer is provably bigger
+        // than the cap. Stopping at "cap bytes arrived" is not the same thing: a
+        // file of exactly cap bytes and a truncated prefix of a larger file look
+        // identical at that point, and returning the prefix as a whole file is
+        // silent data loss.
+        var reachedEOF = false
+        while true {
             var (type, reader) = try await call(SFTP.packetRead) { writer in
                 writer.write(string: handle)
                 writer.write(uint64: UInt64(data.count))
@@ -470,25 +531,38 @@ public actor SFTPClient {
             }
             if type == SFTP.replyStatus {
                 let code = try reader.readUInt32()
-                if code == SFTP.statusEOF { break }
+                if code == SFTP.statusEOF {
+                    reachedEOF = true
+                    break
+                }
                 let message = (try? reader.readString()) ?? ""
                 throw SFTPError.server(code: code, message: message)
             }
             guard type == SFTP.replyData else { throw SFTPError.protocolViolation("expected DATA") }
             let payload = try reader.readBytes()
-            if payload.isEmpty { break }
+            if payload.isEmpty {
+                // A zero-length DATA reply is not an EOF marker: only STATUS(EOF)
+                // proves the file ended.
+                throw SFTPError.protocolViolation("empty DATA reply without EOF")
+            }
             data.append(payload)
+            if data.count > cap { throw SFTPError.tooLarge }
         }
-        guard data.count <= cap else { throw SFTPError.tooLarge }
+        guard reachedEOF, data.count <= cap else { throw SFTPError.protocolViolation("read ended without EOF") }
         return data
     }
 
     /// Writes to a temporary name and renames it. A final name never points at a
-    /// half-written file, and a failed write leaves no debris behind.
+    /// half-written file.
+    ///
+    /// The temporary name is random per attempt. A fixed suffix meant one
+    /// interrupted upload left `<file>.anthracite-part` behind, and every later
+    /// attempt then failed on the exclusive create until someone removed it by
+    /// hand. Every failure path removes the temporary name before rethrowing.
     public func writeFile(_ path: String, data: Data, mode: UInt32 = 0o600) async throws {
         guard RemotePath.isValidAbsolute(path) else { throw SFTPError.invalidPath }
         guard data.count <= Self.maxTransferBytes else { throw SFTPError.tooLarge }
-        let temporary = path + ".anthracite-part"
+        let temporary = path + ".anthracite-part-" + SFTPClient.newPartToken()
         let opened = try await call(SFTP.packetOpen) { writer in
             writer.write(string: temporary)
             writer.write(uint32: SFTP.flagWrite | SFTP.flagCreat | SFTP.flagTrunc | SFTP.flagExcl)
@@ -514,17 +588,45 @@ public actor SFTPClient {
             }
             offset = end
         }
-        let closed = try? await call(SFTP.packetClose) { writer in writer.write(string: handle) }
-        if let closed { try expectOK(closed.0, closed.1) }
+        let closed: (UInt8, ByteBuffer)?
+        do {
+            closed = try await call(SFTP.packetClose) { writer in writer.write(string: handle) }
+        } catch {
+            await removeQuietly(temporary)
+            throw error
+        }
         if let failure {
-            _ = try? await call(SFTP.packetRemove) { writer in writer.write(string: temporary) }
+            await removeQuietly(temporary)
             throw failure
         }
-        let renamed = try await call(SFTP.packetRename) { writer in
-            writer.write(string: temporary)
-            writer.write(string: path)
+        if let closed, (try? expectOK(closed.0, closed.1)) == nil {
+            // The server did not confirm the close, so the bytes on disk are not
+            // proven complete: do not rename them into place.
+            await removeQuietly(temporary)
+            throw SFTPError.protocolViolation("the server did not confirm the uploaded file")
         }
-        try expectOK(renamed.0, renamed.1)
+        do {
+            let renamed = try await call(SFTP.packetRename) { writer in
+                writer.write(string: temporary)
+                writer.write(string: path)
+            }
+            try expectOK(renamed.0, renamed.1)
+        } catch {
+            await removeQuietly(temporary)
+            throw error
+        }
+    }
+
+    /// Best-effort removal of a temporary name this call created.
+    private func removeQuietly(_ path: String) async {
+        _ = try? await call(SFTP.packetRemove) { writer in writer.write(string: path) }
+    }
+
+    /// A random token for the temporary upload name.
+    static func newPartToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 8)
+        for index in bytes.indices { bytes[index] = UInt8.random(in: 0...255) }
+        return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     public func mkdir(_ path: String, mode: UInt32 = 0o755) async throws {

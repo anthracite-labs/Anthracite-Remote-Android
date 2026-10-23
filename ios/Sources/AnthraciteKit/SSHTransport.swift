@@ -53,184 +53,150 @@ public struct CommandResult: Sendable {
 
 // MARK: - Keyscan
 
-/// Reads the server's host key the way `ssh-keyscan` does: version exchange,
-/// key-exchange initiation, then the key from the reply.
+/// Reads the server's host key with a real SSH handshake.
 ///
-/// This exists because the fingerprint is the only part of host-key pinning a
-/// user can verify out of band. The scan is unauthenticated by design: its only
-/// output is a key that the user must approve, and that the real connection is
-/// then required to present again.
+/// An earlier version spoke the wire protocol by hand — version exchange, a
+/// KEXINIT-less `KEX_ECDH_INIT`, and a payload offset that ignored the padding
+/// length. Each of those is enough to make a conforming server drop the
+/// connection, and the padding mistake would have mis-read the reply even if the
+/// exchange had succeeded. So this now uses the same ``NIOSSHHandler`` that the
+/// real connection uses: NIOSSH performs version exchange, algorithm negotiation
+/// and key exchange, and hands the parsed host key to a delegate.
+///
+/// The scan stays unauthenticated by design: the delegate records the key and
+/// then fails the validation promise, so the handshake ends *before* any user
+/// authentication offer is made. The only output is a key the user must approve,
+/// and the real connection is then required to present that exact key again.
 public enum HostKeyScanner {
     public static func scan(host: String, port: Int, timeout: TimeAmount = .seconds(15)) async throws -> HostKey {
+        guard !host.isEmpty, port > 0, port < 65536 else {
+            throw SSHError.connectionFailed("Invalid host or port.")
+        }
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        let collector = ScannerHandler(host: host)
+        let collector = KeyCaptureDelegate()
         do {
             let channel = try await ClientBootstrap(group: group)
-                .channelInitializer { channel in
-                    channel.pipeline.addHandler(collector)
-                }
+                .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+                .connectTimeout(.seconds(20))
                 .connect(host: host, port: port)
                 .get()
-            try await collector.run(channel: channel, timeout: timeout)
-            try await channel.close().get()
-            try await group.shutdownGracefully()
-            guard let key = collector.key else { throw SSHError.connectionFailed("no host key") }
-            return key
-        } catch let error as SSHError {
+            // A closed or broken channel is an answer too: it must not leave the
+            // waiter parked forever.
+            channel.closeFuture.whenComplete { _ in
+                collector.fail(SSHError.connectionFailed("the connection closed before the key exchange"))
+            }
+            let handler = NIOSSHHandler(
+                role: .client(.init(userAuthDelegate: NeverAuthenticateDelegate(), serverAuthDelegate: collector)),
+                allocator: channel.allocator,
+                inboundChildChannelInitializer: nil
+            )
+            do {
+                try await channel.pipeline.addHandler(handler).get()
+            } catch {
+                try? await channel.close().get()
+                try? await group.shutdownGracefully()
+                throw SSHError.connectionFailed(String(describing: error))
+            }
+            let key = try await collector.wait(timeout: timeout)
+            try? await channel.close().get()
             try? await group.shutdownGracefully()
-            throw error
+            return key
         } catch {
             try? await group.shutdownGracefully()
-            throw SSHError.connectionFailed(String(describing: error))
+            throw error
         }
     }
 }
 
-private final class ScannerHandler: ChannelInboundHandler, @unchecked Sendable {
-    typealias InboundIn = ByteBuffer
-    typealias OutboundOut = ByteBuffer
+/// Converts an NIOSSH key into the OpenSSH string the pin stores, using NIOSSH's
+/// own serializer rather than re-deriving wire bytes here.
+private func openSSHKey(from key: NIOSSHPublicKey) -> HostKey? {
+    let text = String(openSSHPublicKey: key)
+    let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+    guard parts.count == 2, !parts[1].isEmpty else { return nil }
+    return HostKey(algorithm: String(parts[0]), base64: String(parts[1]))
+}
 
-    private let host: String
-    private var buffer = Data()
-    private var sentVersion = false
-    private var sentExchange = false
-    private var continuation: CheckedContinuation<Void, Error>?
-    private var finished = false
-    private var channel: Channel?
-    private(set) var key: HostKey?
+/// Records the first host key the server presents, then aborts the handshake.
+///
+/// The terminal result is stored before any waiter is resumed, and a waiter that
+/// arrives late is resumed from that stored result — so an error or a key that
+/// arrives before `wait` is never lost.
+private final class KeyCaptureDelegate: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<HostKey, Error>?
+    private var waiter: CheckedContinuation<HostKey, Error>?
 
-    init(host: String) {
-        self.host = host
+    func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
+        guard let key = openSSHKey(from: hostKey) else {
+            resolve(.failure(SSHError.connectionFailed("the server presented an unsupported host key")))
+            validationCompletePromise.fail(SSHError.connectionFailed("unsupported host key"))
+            return
+        }
+        resolve(.success(key))
+        // Stop before authentication: a scan must never send a credential.
+        validationCompletePromise.fail(SSHError.hostKeyNotApproved("the scan does not authenticate"))
     }
 
-    func run(channel: Channel, timeout: TimeAmount) async throws {
-        self.channel = channel
-        let timeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(max(1, timeout.nanoseconds)))
-            self?.finish(.failure(SSHError.timeout))
+    func wait(timeout: TimeAmount) async throws -> HostKey {
+        try await withThrowingTaskGroup(of: HostKey.self) { group in
+            group.addTask { try await self.awaitKey() }
+            group.addTask {
+                let nanos = UInt64(max(1, timeout.nanoseconds))
+                try await Task.sleep(nanoseconds: nanos)
+                self.fail(SSHError.timeout)
+                throw SSHError.timeout
+            }
+            do {
+                let key = try await group.next()!
+                group.cancelAll()
+                return key
+            } catch {
+                group.cancelAll()
+                throw error
+            }
         }
-        defer { timeoutTask.cancel() }
+    }
+
+    func fail(_ error: Error) {
+        resolve(.failure(error))
+    }
+
+    private func awaitKey() async throws -> HostKey {
         try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-            if self.key != nil { self.finish(.success(())) }
-        }
-    }
-
-    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        var incoming = unwrapInboundIn(data)
-        if let bytes = incoming.readBytes(length: incoming.readableBytes) {
-            buffer.append(contentsOf: bytes)
-        }
-        process(context: context)
-    }
-
-    func channelInactive(context: ChannelHandlerContext) {
-        finish(.failure(SSHError.connectionFailed("connection closed before the key exchange")))
-        context.fireChannelInactive()
-    }
-
-    func errorCaught(context: ChannelHandlerContext, error: Error) {
-        finish(.failure(SSHError.connectionFailed(String(describing: error))))
-        context.close(promise: nil)
-    }
-
-    private func finish(_ result: Result<Void, Error>) {
-        guard !finished else { return }
-        finished = true
-        guard let continuation else { return }
-        self.continuation = nil
-        switch result {
-        case .success:
-            continuation.resume()
-        case .failure(let error):
-            continuation.resume(throwing: error)
-        }
-    }
-
-    private func process(context: ChannelHandlerContext) {
-        if !sentVersion {
-            guard let range = buffer.range(of: Data("\r\n".utf8)) else {
-                if buffer.count > 4096 { finish(.failure(SSHError.connectionFailed("no identification line"))) }
-                return
-            }
-            let line = buffer.subdata(in: 0..<range.lowerBound)
-            guard HostKeyWire.identification(line) != nil else {
-                finish(.failure(SSHError.connectionFailed("not an SSH server")))
-                return
-            }
-            buffer.removeSubrange(0..<range.upperBound)
-            write(Data("SSH-2.0-AnthraciteScan_1.0\r\n".utf8), context: context)
-            sentVersion = true
-        }
-        // Server identification may be preceded by comment lines; the packet
-        // stream starts at the first uint32 length.
-        while buffer.count >= 4 {
-            let length = Int(buffer[buffer.startIndex]) << 24 | Int(buffer[buffer.startIndex + 1]) << 16
-                | Int(buffer[buffer.startIndex + 2]) << 8 | Int(buffer[buffer.startIndex + 3])
-            guard length > 0, length < 1 << 20 else {
-                finish(.failure(SSHError.connectionFailed("invalid packet length")))
-                return
-            }
-            guard buffer.count >= length + 4 else { return }
-            let packet = buffer.subdata(in: 4..<(4 + length))
-            buffer.removeSubrange(0..<(4 + length))
-            let paddingLength = Int(packet[packet.startIndex])
-            guard paddingLength > 0, paddingLength + 1 <= packet.count else {
-                finish(.failure(SSHError.connectionFailed("invalid padding")))
-                return
-            }
-            let payload = packet.subdata(in: (1 + paddingLength)..<packet.count)
-            guard let message = payload.first else { continue }
-            if message == 20 && !sentExchange {
-                sendExchange(context: context)
-            } else if message == 31 {
-                do {
-                    key = try HostKeyWire.hostKeyFromKeyExchangeReply(payload.dropFirst())
-                    finish(.success(()))
-                } catch {
-                    finish(.failure(SSHError.connectionFailed("unsupported host key")))
-                }
-                return
+            lock.lock()
+            if let result {
+                lock.unlock()
+                continuation.resume(with: result)
+            } else {
+                waiter = continuation
+                lock.unlock()
             }
         }
     }
 
-    private func sendExchange(context: ChannelHandlerContext) {
-        sentExchange = true
-        var builder = Data()
-        builder.append(30) // SSH_MSG_KEX_ECDH_INIT
-        var publicKey = Data()
-        #if canImport(CryptoKit)
-        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
-        publicKey = ephemeral.publicKey.rawRepresentation
-        #endif
-        builder.append(uint32: UInt32(publicKey.count))
-        builder.append(publicKey)
-        write(builder, context: context)
-    }
-
-    private func write(_ payload: Data, context: ChannelHandlerContext) {
-        var packet = Data()
-        let blockSize = 8
-        var padding = blockSize - ((payload.count + 1 + 4) % blockSize)
-        if padding < 4 { padding += blockSize }
-        let length = payload.count + 1 + padding
-        packet.append(uint32: UInt32(length))
-        packet.append(UInt8(padding))
-        packet.append(payload)
-        packet.append(Data(repeating: 0, count: padding))
-        var buffer = context.channel.allocator.buffer(capacity: packet.count)
-        buffer.writeBytes(packet)
-        context.writeAndFlush(wrapOutboundOut(buffer), promise: nil)
+    private func resolve(_ result: Result<HostKey, Error>) {
+        lock.lock()
+        guard self.result == nil else {
+            lock.unlock()
+            return
+        }
+        self.result = result
+        let waiter = self.waiter
+        self.waiter = nil
+        lock.unlock()
+        waiter?.resume(with: result)
     }
 }
 
-extension Data {
-    mutating func append(uint32 value: UInt32) {
-        append(UInt8((value >> 24) & 0xff))
-        append(UInt8((value >> 16) & 0xff))
-        append(UInt8((value >> 8) & 0xff))
-        append(UInt8(value & 0xff))
+/// Reached only if a server asks for authentication during a scan, which the
+/// capture delegate prevents. It offers nothing rather than sending a credential.
+private final class NeverAuthenticateDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
+    func nextAuthenticationType(
+        availableMethods: NIOSSHAvailableUserAuthenticationMethods,
+        nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
+    ) {
+        nextChallengePromise.succeed(nil)
     }
 }
 
@@ -304,7 +270,9 @@ final class PinDelegate: NIOSSHClientServerAuthenticationDelegate, @unchecked Se
 
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
         guard let offered = try? NIOSSHPublicKey(openSSHPublicKey: expected.openSSH), offered == hostKey else {
-            onMismatch(expected)
+            // Report what the server actually presented, so the user can compare
+            // fingerprints instead of reading the one they already expected.
+            onMismatch(openSSHKey(from: hostKey) ?? expected)
             validationCompletePromise.fail(SSHError.hostKeyChanged("The server presented a different host key."))
             return
         }

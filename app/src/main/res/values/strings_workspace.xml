@@ -30,6 +30,7 @@
     <!-- Workspace hub -->
     <string name="workspace_title">Workspace</string>
     <string name="workspace_no_host">Choose a host first.</string>
+    <string name="host_no_longer_available">That host is no longer saved on this device, so nothing was opened.</string>
     <string name="workspace_probe">Re-run read-only probe</string>
     <string name="workspace_probing">Reading host facts…</string>
     <string name="workspace_probe_failed">The probe failed: %1$s</string>

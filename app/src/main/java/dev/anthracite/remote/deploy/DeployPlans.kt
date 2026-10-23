@@ -24,8 +24,21 @@ internal object DeployPlans {
     const val MAX_ENV = 16
     const val MAX_REPLICAS = 10
 
+    /** Distinct statuses so the screen can tell "gone" from "replaced". */
+    const val EXIT_IDENTITY_UNAVAILABLE = 65
+    const val EXIT_IDENTITY_CHANGED = 66
+
+    /** The private directory or file could not be created safely. */
+    const val EXIT_INSECURE_PATH = 73
+
+    /** A per-plan token: unique file names, never a guessable fixed path. */
+    fun newToken(random: SecureRandom = SecureRandom()): String {
+        val bytes = ByteArray(8).also(random::nextBytes)
+        return bytes.joinToString("") { byte -> "%02x".format(byte) }
+    }
+
     /** Verbs this app will ever use against a workload it created. */
-    val WORKLOAD_VERBS = setOf("get", "patch", "delete")
+    val WORKLOAD_VERBS = setOf("get", "create", "patch", "delete")
 
     /** Kubernetes object UIDs are UUIDs; anything else is not an identity. */
     fun isKubernetesUid(value: String): Boolean =
@@ -36,8 +49,14 @@ internal object DeployPlans {
 
     private val MANAGED_NAME = Regex("^anthracite-[a-z0-9][a-z0-9-]*$")
 
+    /**
+     * 128 random bits. Sixteen bytes keep a collision out of reach even for a
+     * large fleet of managed objects; the create-only rule below is the real
+     * safety property, but a name that cannot realistically repeat removes a
+     * whole class of confusion.
+     */
     fun newName(random: SecureRandom = SecureRandom()): String {
-        val bytes = ByteArray(4).also(random::nextBytes)
+        val bytes = ByteArray(16).also(random::nextBytes)
         return PREFIX + bytes.joinToString("") { byte -> "%02x".format(byte) }
     }
 
@@ -198,9 +217,18 @@ internal sealed class DeployPlan {
         val ports: List<PortMapping> = emptyList(),
         val volumes: List<VolumeMount> = emptyList(),
         val environment: List<EnvVar> = emptyList(),
+        val envToken: String = DeployPlans.newToken(),
+        /** The immutable id the runtime assigned; required before removal. */
+        val createdId: String? = null,
     ) : DeployPlan() {
         init {
             require(DeployPlans.isManagedName(name)) { "invalid container name" }
+            if (createdId != null) {
+                require(PosixShell.isContainerId(createdId)) { "invalid container id" }
+            }
+            require(envToken.length == 16 && envToken.all { it in "0123456789abcdef" }) {
+                "invalid environment file token"
+            }
             require(PosixShell.isImageReference(image)) { "invalid image reference" }
             require(ports.size <= DeployPlans.MAX_PORTS) { "too many ports" }
             require(volumes.size <= DeployPlans.MAX_VOLUMES) { "too many volumes" }
@@ -213,8 +241,9 @@ internal sealed class DeployPlan {
         override val warnings: List<String>
             get() = listOf(
                 runtime.warning,
-                "The container is labelled ${DeployPlans.MANAGED_LABEL}=1. Only a container that " +
-                    "still carries this name and label is stopped or removed later.",
+                "The container is labelled ${DeployPlans.MANAGED_LABEL}=1 and its runtime id is " +
+                    "recorded when it is created. Removal re-reads that id and refuses if the name " +
+                    "now belongs to a different container.",
                 "Environment values are written to a 0600 file on the host and passed with " +
                     "--env-file, so they never appear in this screen or in a process list. Anyone who " +
                     "can use the container runtime's socket can still read them from `${binary} inspect`.",
@@ -234,11 +263,41 @@ internal sealed class DeployPlan {
          * shell history of anything that echoes the command and in this app's own
          * review screen. Values are therefore written once, with mode 0600, and
          * removed straight after the container starts.
+         *
+         * The name carries a per-plan token, so the path is ours alone: cleanup
+         * can never delete a file this app did not create, and a leftover from a
+         * crashed run cannot block the next one.
          */
-        fun envFilePath(): String = "\"\$HOME/.anthracite/deploy/$name.env\""
+        fun envFilePath(): String = "\"\$HOME/.anthracite/deploy/$name-$envToken.env\""
 
-        fun envFileCommand(): String =
-            "umask 077; mkdir -p \"\$HOME/.anthracite/deploy\" && cat > ${envFilePath()}"
+        /**
+         * Creates the file exclusively and writes the values to it.
+         *
+         * `umask 077` protects the *creation* of a file; it says nothing about a
+         * path that already exists. Two additional rules matter:
+         *
+         * * the directory must not be a symlink and must not be readable or
+         *   writable by group or other — a pre-planted `~/.anthracite/deploy`
+         *   pointing elsewhere would otherwise redirect a secret;
+         * * `set -C` (noclobber) makes the redirect `O_CREAT|O_EXCL`, which fails
+         *   on an existing file *and* on a symlink instead of truncating or
+         *   following it.
+         */
+        fun envFileCommand(): String = buildString {
+            append("umask 077; ")
+            append("d=\"\$HOME/.anthracite/deploy\"; ")
+            append("f=").append(envFilePath()).append("; ")
+            append("if [ -L \"\$d\" ]; then echo 'Anthracite refused: the deployment directory is a symbolic link.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
+            append("mkdir -p \"\$d\" || exit ").append(DeployPlans.EXIT_INSECURE_PATH).append("; ")
+            append("if [ -L \"\$d\" ] || [ ! -d \"\$d\" ]; then echo 'Anthracite refused: the deployment directory is not a plain directory.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
+            append("case \"\$(ls -ld \"\$d\" | cut -c1-10)\" in ")
+            append("d????------) : ;; ")
+            append("*) echo 'Anthracite refused: the deployment directory is accessible to other users.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append(" ;; esac; ")
+            append("set -C; cat > \"\$f\"")
+        }
 
         fun envFileRemoveCommand(): String = "rm -f ${envFilePath()}"
 
@@ -246,6 +305,20 @@ internal sealed class DeployPlan {
         fun envFileBytes(): ByteArray =
             environment.joinToString("") { variable -> "${variable.key}=${variable.value}\n" }
                 .toByteArray(Charsets.UTF_8)
+
+        /** The same plan, now carrying the id the runtime assigned. */
+        fun withCreatedId(id: String): Container = copy(createdId = id)
+
+        fun identityCommand(): String = buildString {
+            append(binary).append(" inspect --format ")
+            append(PosixShell.quote("{{.Id}}|{{index .Config.Labels \"${DeployPlans.MANAGED_LABEL}\"}}"))
+            append(' ').append(PosixShell.quote(name)).append(" 2>/dev/null")
+        }
+
+        fun removeCommand(id: String): String {
+            require(PosixShell.isContainerId(id)) { "invalid container id" }
+            return "$binary rm --force " + PosixShell.quote(id)
+        }
 
         /** What the reviewer may see: names in full, values never. */
         fun environmentPreview(): List<String> = environment.map { variable -> "${variable.key}=***" }
@@ -312,8 +385,10 @@ internal sealed class DeployPlan {
         override val warnings: List<String> = listOf(
             "Applies to context $context, namespace $namespace. Both are re-read on the host " +
                 "immediately before every mutation, and only ${kind.apiValue}/$name is rolled back or deleted.",
-            "The object carries ${DeployPlans.MANAGED_LABEL}=1 and its cluster UID is recorded when it " +
-                "is created. Rollback and delete refuse to run if the object was replaced.",
+            "Creation is create-only: if anything already has this name the cluster refuses, and " +
+                "nothing that already exists is adopted or modified. The object carries " +
+                "${DeployPlans.MANAGED_LABEL}=1 and its cluster UID is recorded when it is created; " +
+                "rollback and delete re-read that UID on the host immediately before acting.",
             "No Secret, Namespace or cluster-scoped resource is created here, and no other resource " +
                 "is ever touched.",
         )
@@ -361,8 +436,16 @@ internal sealed class DeployPlan {
             return kubectl("auth can-i $verb ${kind.resource}")
         }
 
-        /** The manifest arrives on stdin: nothing from it is parsed by a shell. */
-        fun applyCommand(): String = kubectl("apply -f -")
+        /**
+         * Creation is **create-only**. `apply` would adopt an object that already
+         * carries this name — a collaborator's, or one left by an earlier run —
+         * and then stamp our label on it, so the app could later delete something
+         * it never made. `create` fails with AlreadyExists instead, which is a
+         * refusal, not a retry.
+         *
+         * The manifest arrives on stdin: nothing from it is parsed by a shell.
+         */
+        fun createCommand(): String = kubectl("create -f -")
 
         /**
          * The object as the cluster holds it, including its immutable UID and its
@@ -378,6 +461,33 @@ internal sealed class DeployPlan {
             kubectl("logs ${kind.resource}/${PosixShell.quote(name)} --tail=200 --all-containers 2>&1")
 
         fun rollbackCommand(): String = kubectl("rollout undo ${kind.resource}/${PosixShell.quote(name)}")
+
+        /**
+         * A single host command that re-reads the object's UID and only then runs
+         * [mutation].
+         *
+         * The preflight runs over separate connections, so an object could in
+         * principle be replaced between the check and the action. Doing the last
+         * check and the mutation inside one shell invocation removes the round
+         * trip (and the phone) from that window. The residual risk is the
+         * milliseconds between two commands the host runs itself, which is stated
+         * in the plan's warnings rather than hidden.
+         */
+        fun guardedMutationCommand(mutation: String, uid: String): String {
+            require(DeployPlans.isKubernetesUid(uid)) { "invalid Kubernetes UID" }
+            return buildString {
+                append("set -eu; ")
+                append("uid=$(kubectl --context ").append(PosixShell.quote(context))
+                append(" --namespace ").append(PosixShell.quote(namespace))
+                append(" get ").append(kind.resource).append('/').append(PosixShell.quote(name))
+                append(" -o jsonpath='{.metadata.uid}' 2>/dev/null) || exit ")
+                append(DeployPlans.EXIT_IDENTITY_UNAVAILABLE).append("; ")
+                append("if [ \"\$uid\" != ").append(PosixShell.quote(uid))
+                append(" ]; then echo 'Anthracite refused: the object was replaced after it was reviewed.' >&2; exit ")
+                append(DeployPlans.EXIT_IDENTITY_CHANGED).append("; fi; ")
+                append(mutation)
+            }
+        }
 
         fun deleteCommand(): String =
             kubectl("delete ${kind.resource}/${PosixShell.quote(name)} --ignore-not-found --wait=false")

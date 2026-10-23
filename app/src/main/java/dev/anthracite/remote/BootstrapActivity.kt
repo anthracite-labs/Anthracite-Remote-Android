@@ -6,7 +6,6 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
@@ -35,6 +34,7 @@ import dev.anthracite.remote.ui.confirm
 import dev.anthracite.remote.workspace.Workspace
 import dev.anthracite.remote.workspace.connectWorkspace
 import dev.anthracite.remote.workspace.io
+import dev.anthracite.remote.workspace.resolveHostOrFinish
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -83,14 +83,13 @@ class BootstrapActivity : AppCompatActivity() {
         }
         buildActions()
 
-        val store = Workspace.store(this)
         val hostId = intent.getStringExtra(HostsActivity.EXTRA_HOST_ID)
-        host = (runCatching { hostId?.let(store::find) }.getOrNull() ?: Workspace.profile)
-            ?: run {
-                Toast.makeText(this, R.string.workspace_no_host, Toast.LENGTH_LONG).show()
-                finish()
-                return
-            }
+        host = resolveHostOrFinish(
+            this,
+            hostId,
+            runCatching { Workspace.store(this).list() }.getOrDefault(emptyList()),
+            Workspace.profile,
+        ) ?: return
         jobId = savedInstanceState?.getString(KEY_JOB)
         subtitle.text = getString(R.string.bootstrap_subtitle, host.displayLabel)
         ensureConnected()

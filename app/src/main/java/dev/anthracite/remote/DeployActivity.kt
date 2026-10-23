@@ -31,6 +31,7 @@ import dev.anthracite.remote.ui.choose
 import dev.anthracite.remote.ui.confirm
 import dev.anthracite.remote.ui.promptText
 import dev.anthracite.remote.workspace.Workspace
+import dev.anthracite.remote.workspace.resolveHostOrFinish
 import dev.anthracite.remote.workspace.connectWorkspace
 import dev.anthracite.remote.workspace.io
 import kotlinx.coroutines.launch
@@ -93,7 +94,12 @@ class DeployActivity : AppCompatActivity() {
         toolbar.setNavigationOnClickListener { finish() }
 
         val hostId = intent.getStringExtra(HostsActivity.EXTRA_HOST_ID)
-        host = runCatching { hostId?.let(Workspace.store(this)::find) }.getOrNull() ?: Workspace.profile
+        host = resolveHostOrFinish(
+            this,
+            hostId,
+            runCatching { Workspace.store(this).list() }.getOrDefault(emptyList()),
+            Workspace.profile,
+        ) ?: return
         runtime = if (savedInstanceState?.getString(STATE_RUNTIME) == DeployCommands.Runtime.PODMAN.name) {
             DeployCommands.Runtime.PODMAN
         } else {
@@ -399,7 +405,11 @@ class DeployActivity : AppCompatActivity() {
                     when (plan) {
                         is DeployPlan.Container -> {
                             val pull = deploy.containerPull(plan)
-                            DeployOutcome(if (pull.exitCode != 0) pull else deploy.containerRun(plan))
+                            if (pull.exitCode != 0) {
+                                DeployOutcome(pull)
+                            } else {
+                                deploy.containerRun(plan)
+                            }
                         }
                         is DeployPlan.Workload -> deploy.workloadApply(plan)
                         is DeployPlan.Native -> DeployOutcome(deploy.nativeStart(plan))
@@ -409,10 +419,26 @@ class DeployActivity : AppCompatActivity() {
             setBusy(false)
             result.onSuccess { outcome ->
                 val exec = outcome.result
+                if (exec.exitCode == 0 && plan is DeployPlan.Container) {
+                    // Removal later names the exact id the runtime reported now.
+                    val id = outcome.identity
+                    if (id == null) {
+                        created = null
+                        setStatus(getString(R.string.deploy_created_unverified, plan.name))
+                        buildActions()
+                        refresh()
+                        return@onSuccess
+                    }
+                    created = plan.withCreatedId(id)
+                    setStatus(getString(R.string.deploy_created, plan.name))
+                    buildActions()
+                    refresh()
+                    return@onSuccess
+                }
                 if (exec.exitCode == 0 && plan is DeployPlan.Workload) {
                     // Only an object whose identity the cluster confirmed may be
                     // rolled back or deleted later: no UID, no cleanup offered.
-                    val uid = outcome.appliedUid
+                    val uid = outcome.identity
                     if (uid == null) {
                         created = null
                         setStatus(getString(R.string.deploy_created_unverified, plan.name))
@@ -508,7 +534,7 @@ class DeployActivity : AppCompatActivity() {
                     io {
                         when (plan) {
                             is DeployPlan.Container ->
-                                deploy.removeOwnedContainer(runtime, plan.name)
+                                deploy.removeOwnedContainer(plan)
                                     ?: return@io ExecResult(64, "", getString(R.string.deploy_remove_refused))
                             is DeployPlan.Workload -> deploy.workloadDelete(plan)
                             is DeployPlan.Native -> deploy.nativeStop(plan)

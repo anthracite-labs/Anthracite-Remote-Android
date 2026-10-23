@@ -121,7 +121,11 @@ final class ProvisioningViewModel: ObservableObject {
             self.jobId = jobId
             let home = try await remoteHome()
             let absolute = "\(home)/\(ProvisionJobs.jobRoot)/\(jobId)"
-            let directory = "'" + absolute + "'"
+            // Every interpolated path goes through the one quoting helper. A home
+            // directory containing a quote or a newline is unusual but legitimate,
+            // and hand-wrapping it in single quotes would let the rest of the path
+            // become shell syntax.
+            let directory = ShellText.quote(absolute)
             let mkdir = try await model.exec("umask 077; mkdir -p \(directory)")
             guard mkdir.succeeded else {
                 message = "The job directory could not be created: \(mkdir.stderr.prefix(200))"
@@ -191,10 +195,10 @@ final class ProvisioningViewModel: ObservableObject {
     /// The host's own idea of `$HOME`; never guessed from the profile.
     private func remoteHome() async throws -> String {
         guard let model else { throw SSHError.connectionFailed("Not connected.") }
-        if let home = facts?.home, home.hasPrefix("/") { return home }
+        if let home = facts?.home, isUsableHome(home) { return home }
         let result = try await model.exec("printf '%s' \"$HOME\"")
         let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard home.hasPrefix("/"), !home.contains("'") else {
+        guard isUsableHome(home) else {
             throw NSError(
                 domain: "anthracite",
                 code: 2,
@@ -202,6 +206,13 @@ final class ProvisioningViewModel: ObservableObject {
             )
         }
         return home
+    }
+
+    /// A home directory is only usable if it is absolute and free of control
+    /// characters. Quotes and spaces are fine: the path is quoted, not wrapped.
+    private func isUsableHome(_ home: String) -> Bool {
+        home.hasPrefix("/") && !home.isEmpty && home.count <= 4096
+            && !home.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
     }
 
     private func isVerifiedHost(_ tier: SupportTier) -> Bool {

@@ -441,10 +441,7 @@ struct TmuxSessionsSheet: View {
                         Button("Attach") {
                             Task {
                                 dismiss()
-                                await model.openTab(
-                                    command: "tmux attach-session -t \(session.id)",
-                                    title: session.name
-                                )
+                                await model.attach(tmuxSession: session)
                             }
                         }
                         .buttonStyle(.borderedProminent)

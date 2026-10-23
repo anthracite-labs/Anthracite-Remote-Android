@@ -24,6 +24,7 @@ import dev.anthracite.remote.ui.promptText
 import dev.anthracite.remote.workspace.Workspace
 import dev.anthracite.remote.workspace.connectWorkspace
 import dev.anthracite.remote.workspace.io
+import dev.anthracite.remote.workspace.resolveHostOrFinish
 import kotlinx.coroutines.launch
 
 /**
@@ -64,7 +65,12 @@ class GitActivity : AppCompatActivity() {
         toolbar.setNavigationOnClickListener { finish() }
 
         val hostId = intent.getStringExtra(HostsActivity.EXTRA_HOST_ID)
-        host = runCatching { hostId?.let(Workspace.store(this)::find) }.getOrNull() ?: Workspace.profile
+        host = resolveHostOrFinish(
+            this,
+            hostId,
+            runCatching { Workspace.store(this).list() }.getOrDefault(emptyList()),
+            Workspace.profile,
+        ) ?: return
         directory = savedInstanceState?.getString(STATE_DIRECTORY)
             ?: Workspace.lastFacts?.workingDirectory?.takeIf { it.startsWith("/") }
             ?: "/"

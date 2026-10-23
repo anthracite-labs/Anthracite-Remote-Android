@@ -25,6 +25,7 @@ import dev.anthracite.remote.ui.promptText
 import dev.anthracite.remote.workspace.Workspace
 import dev.anthracite.remote.workspace.connectWorkspace
 import dev.anthracite.remote.workspace.io
+import dev.anthracite.remote.workspace.resolveHostOrFinish
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
@@ -79,7 +80,12 @@ class FilesActivity : AppCompatActivity() {
         }
 
         val hostId = intent.getStringExtra(HostsActivity.EXTRA_HOST_ID)
-        host = runCatching { hostId?.let(Workspace.store(this)::find) }.getOrNull() ?: Workspace.profile
+        host = resolveHostOrFinish(
+            this,
+            hostId,
+            runCatching { Workspace.store(this).list() }.getOrDefault(emptyList()),
+            Workspace.profile,
+        ) ?: return
         path = savedInstanceState?.getString(STATE_PATH)
             ?: Workspace.lastFacts?.workingDirectory?.takeIf { RemotePath.isValid(it) }
             ?: "/"

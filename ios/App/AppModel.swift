@@ -194,12 +194,21 @@ final class AppModel: ObservableObject {
 
     /// Opening a tmux attachment and opening a plain shell are different acts, so
     /// the caller chooses; closing the tab is a detach for the former.
-    func openTab(command: String?, title: String = "Shell") async {
+    ///
+    /// `attachment` is what makes the difference durable: a tab that holds a
+    /// verified tmux session can detach, and every other tab cannot. Blanket-sending
+    /// Ctrl-B D from an arbitrary shell would type into whatever happens to be
+    /// running there and then claim the work survived.
+    func openTab(
+        command: String?,
+        title: String = "Shell",
+        attachment: TmuxSession? = nil
+    ) async {
         guard let connection else { return }
         let screen = TerminalScreen(columns: 80, rows: 24)
         do {
             let session = try await connection.openShell(columns: screen.columns, rows: screen.rows, environment: ["LANG": "C.UTF-8"])
-            let tab = TerminalTab(title: title, screen: screen, session: session, tmux: nil)
+            let tab = TerminalTab(title: title, screen: screen, session: session, tmux: attachment)
             screen.onReply = { [weak session] data in
                 Task { try? await session?.write(data) }
             }
@@ -259,11 +268,54 @@ final class AppModel: ObservableObject {
         if activeTabID == tab.id { activeTabID = tabs.last?.id }
     }
 
-    /// Detaching leaves the host session untouched, and says so.
+    /// Detaching closes the SSH channel; tmux itself notices the client is gone.
+    ///
+    /// This does not pretend to have sent a keystroke. The earlier version wrote
+    /// Ctrl-B D, which is only the default prefix, does nothing when the user has
+    /// remapped it, and types those bytes into a plain shell. Closing the PTY is
+    /// what actually detaches a client, and it is only offered for a tab that
+    /// holds a verified attachment.
     func detach(_ tab: TerminalTab) {
+        guard tab.tmux != nil else {
+            banner = Banner(
+                text: "This tab is not attached to a tmux session, so there is nothing to detach.",
+                isError: true
+            )
+            return
+        }
         Task {
-            await tab.session.detach()
-            banner = Banner(text: "Detached. The tmux session keeps running on the host.", isError: false)
+            await tab.session.close()
+            banner = Banner(
+                text: "Closed the attachment. The tmux session keeps running on the host.",
+                isError: false
+            )
+        }
+    }
+
+    /// Attaches to one exact tmux session, after checking it is still the session
+    /// the user picked.
+    ///
+    /// Identity is name **and** id, re-read from the host: a name alone can point
+    /// at somebody else's work after a session is recycled. If the listing is
+    /// unavailable or inconclusive, nothing is opened.
+    func attach(tmuxSession: TmuxSession) async {
+        guard connection != nil else { return }
+        do {
+            let listed = try await tmuxSessions()
+            guard Tmux.identityMatches(listed, name: tmuxSession.name, id: tmuxSession.id) else {
+                banner = Banner(
+                    text: "That session is no longer listed exactly as it was, so nothing was attached.",
+                    isError: true
+                )
+                return
+            }
+            guard let command = Tmux.attachCommand(tmuxSession) else {
+                banner = Banner(text: "That session could not be attached: its identity is not valid.", isError: true)
+                return
+            }
+            await openTab(command: command, title: tmuxSession.name, attachment: tmuxSession)
+        } catch {
+            banner = Banner(text: describe(error), isError: true)
         }
     }
 

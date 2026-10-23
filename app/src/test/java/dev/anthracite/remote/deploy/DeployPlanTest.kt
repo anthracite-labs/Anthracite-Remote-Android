@@ -183,14 +183,15 @@ class DeployPlanTest {
     fun `a reviewed workload plan names one context, namespace and resource`() {
         val plan = workload()
         assertTrue(plan.applyCommand().startsWith("kubectl --context prod-cluster --namespace demo"))
-        assertTrue(plan.applyCommand().endsWith("apply -f -"))
+        assertTrue(plan.createCommand().endsWith("create -f -"))
         assertTrue(plan.deleteCommand().endsWith("delete deployment/anthracite-1a2b3c4d --ignore-not-found --wait=false"))
         assertTrue(plan.rollbackCommand().contains("rollout undo deployment/anthracite-1a2b3c4d"))
         assertTrue(plan.rolloutCommand().contains("rollout status deployment/anthracite-1a2b3c4d"))
         assertEquals("kubectl config current-context", plan.contextCommand())
         assertTrue(plan.permissionCommand("patch").endsWith("auth can-i patch deployment"))
         assertTrue(plan.permissionCommand("delete").endsWith("auth can-i delete deployment"))
-        assertTrue(rejected { plan.permissionCommand("create") })
+        assertTrue(plan.permissionCommand("create").endsWith("auth can-i create deployment"))
+        assertTrue(rejected { plan.permissionCommand("exec") })
     }
 
     @Test
