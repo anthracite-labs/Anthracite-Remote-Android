@@ -387,6 +387,95 @@ final class SFTPClientStateTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(handled, 3, "INIT, OPEN and READ should have reached the server")
     }
 
+    // MARK: Cancelling the handshake itself
+
+    func testCancellingThePendingHandshakeReturnsAtOnce() async throws {
+        // A server that never answers INIT, with a handshake timeout long enough
+        // that only cancellation can end the wait.
+        let fixture = SFTPFixture(requestTimeout: .seconds(30), handshakeTimeout: .seconds(30))
+        await fixture.server.configure(handshake: true)
+        await fixture.server.seed("/a.txt", "alpha")
+
+        let task = Task { try await fixture.client.readFile("/a.txt") }
+        try await Task.sleep(for: .milliseconds(150))
+        let started = Date()
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("a cancelled handshake must not succeed")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "unexpected error \(error)")
+        }
+        XCTAssertLessThan(
+            Date().timeIntervalSince(started),
+            5,
+            "cancellation waited for the handshake timeout instead of returning"
+        )
+
+        // One INIT, not two: cancelling a waiter must not start a new handshake.
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+        // Nothing was closed behind the other callers' backs.
+        XCTAssertEqual(fixture.peer.closeCount, 0)
+    }
+
+    func testALaterCallAfterACancelledHandshakeHasADefinedOutcome() async throws {
+        let fixture = SFTPFixture(requestTimeout: .seconds(2), handshakeTimeout: .seconds(2))
+        await fixture.server.configure(handshake: true)
+        await fixture.server.seed("/a.txt", "alpha")
+
+        let cancelled = Task { try await fixture.client.readFile("/a.txt") }
+        try await Task.sleep(for: .milliseconds(100))
+        cancelled.cancel()
+        _ = try? await cancelled.value
+
+        // The connection is still mid-handshake and still silent, so the next
+        // caller waits on that same handshake and gets its timeout — never a
+        // second INIT and never an answer from a stream that never greeted.
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a silent server must not answer")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+        XCTAssertEqual(fixture.peer.handshakeCount, 1, "the client started a second handshake")
+
+        // And it is terminal now: the same failure, with no further traffic.
+        do {
+            _ = try await fixture.client.readFile("/a.txt")
+            XCTFail("a failed handshake must not be retried")
+        } catch {
+            XCTAssertEqual(error as? SFTPError, .timedOut)
+        }
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+    }
+
+    func testCancellingOneCallerDoesNotFailTheOtherSharingTheHandshake() async throws {
+        // The version reply is delayed so both callers are attached to the same
+        // handshake when one of them is cancelled.
+        let fixture = SFTPFixture(requestTimeout: .seconds(5), handshakeTimeout: .seconds(5))
+        await fixture.server.configure(delayMilliseconds: 300)
+        await fixture.server.seed("/a.txt", "alpha")
+        await fixture.server.seed("/b.txt", "beta")
+
+        async let survivor = fixture.client.readFile("/b.txt")
+        let victim = Task { try await fixture.client.readFile("/a.txt") }
+        try await Task.sleep(for: .milliseconds(80))
+        victim.cancel()
+        do {
+            _ = try await victim.value
+            XCTFail("the cancelled caller must not succeed")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "unexpected error \(error)")
+        }
+
+        // The other caller's result must be its own: one caller giving up is not
+        // the connection failing.
+        let data = try await survivor
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "beta")
+        XCTAssertEqual(fixture.peer.handshakeCount, 1)
+        XCTAssertEqual(fixture.peer.closeCount, 0, "one caller's cancellation closed the channel")
+    }
+
     func testASilentServerTimesOutTheHandshakeInsteadOfHanging() async throws {
         let fixture = SFTPFixture(requestTimeout: .milliseconds(200), handshakeTimeout: .milliseconds(200))
         await fixture.server.configure(handshake: true)
