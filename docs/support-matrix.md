@@ -80,9 +80,12 @@ image a claim came from, on which date, from which run.
 | GitHub device flow + PAT, rate-limit and 401 handling | unit tested against a mock transport; live API untested |
 | GitHub issues: list, detail, comments, open/close, create | mocked-transport tests only; no live API write test |
 | GitHub PR: list, diff, reviews, checks, SHA-pinned merge | mocked-transport tests; live merge untested |
-| Container creation, logs, ownership-checked removal | plan/command unit tests, including that no environment value is an argument or appears in the review text; no live daemon in CI |
-| Environment values for created containers | written to a `0600` file on the host through stdin and passed with `--env-file`; unit tested; anyone with the runtime socket can still read them with `inspect`, which the screen states |
-| Kubernetes workload apply/rollout/rollback/delete | typed manifest generator (`Deployment`/`StatefulSet` only) plus a run-time guard: active context, RBAC for the exact verb, and the object's label and immutable UID, all re-read immediately before the mutation; unit tested against a fake host; **no live cluster in CI** |
+| Container creation, logs, ownership-checked removal | plan/command unit tests: removal re-reads the runtime id recorded at creation, requires it and the label to match, and removes by id; no live daemon in CI |
+| Environment values for created containers | written through stdin to a per-plan-token `0600` file created under noclobber in a directory checked to be private and not a symlink, passed with `--env-file`, removed on every path; unit tested; anyone with the runtime socket can still read them with `inspect`, which the screen states; a racing local process inside the user's own home is not fully excluded |
+| Android SFTP upload no-overwrite | **not guaranteed**: SFTP v3 has no atomic no-replace rename, so another client can create the target between the final check and the rename |
+| SFTP recursive delete vs. a path swapped to a symlink | **narrowed, not eliminated**: `lstat` before descent does not bind the later list/delete to that inode (SFTP v3 TOCTOU) |
+| Kubernetes workload creation | `kubectl create` only: an existing object is refused with `AlreadyExists` and left untouched; creation is authorised by `can-i create`; names carry 128 random bits. Unit tested against a fake host; **no live cluster in CI** |
+| Kubernetes workload rollback/delete | typed plans plus a run-time guard: active context, RBAC for the exact verb, and the object's label and immutable UID; the final UID read and the mutation run as one host command. A server-side UID precondition is **not** used (kubectl offers none), so the residual window is between two host-local commands |
 | Kubernetes object identity | the UID is recorded after a confirmed apply; without it no rollback or delete is offered: unit tested; a real API server was never contacted |
 
 ## iOS
@@ -95,10 +98,14 @@ including a simulator launch test.
 | Behaviour | Status |
 | --- | --- |
 | Host-key fingerprint in `ssh-keygen -lf` form, first-use approval, refusal on change | unit tested |
+| Host-key scan | runs a real NIOSSH handshake and stops at the key delegate before authenticating; conversion and fingerprint unit tested; **no live OpenSSH handshake in CI** |
+| SFTP read/upload | reads until EOF is proven (a capped prefix is never returned as a file); requests time out; malformed framing is fatal; upload temp names are random and cleaned up on every failure. Unit tested at the framing level; no SFTP server in CI |
 | Pinned key compared again on the real handshake (equality against the approved key) | implemented; no live-server run yet |
 | Password and unencrypted Ed25519 auth, secrets in a this-device-only Keychain item | implemented, storage tested; no live-server run |
 | Encrypted private keys, RSA host keys | **not supported**, refused with a message |
 | tmux presence (`present`/`absent`/`unknown`) and stop verification | unit tested, including permission-denied, connection-refused and malformed listings; an unreadable listing is an error, never an empty host; no live tmux server contacted |
+| Attaching to a tmux session | name **and** id are re-read before the tab opens; detach closes the channel rather than typing a presumed prefix; the attachment flow itself has no automated test |
+| iOS GitHub issue/comment lists | first page only (100 items); pagination is not implemented |
 | PTY shell, resize, byte streaming, multiple tabs | implemented; compile-tested; no live-server run |
 | VT emulation: CSI/SGR/alt screen/scroll regions/wide glyphs, OSC 52 blocked, OSC 8 `https` only | unit tested |
 | Key encoding: Ctrl/Alt, arrows in both cursor modes, F1–F12, bracketed paste | unit tested |

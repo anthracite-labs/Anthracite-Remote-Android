@@ -57,6 +57,39 @@ tests on the merge commit. What they do **not** prove is in the section below:
 no kubectl, no container runtime and no tmux server was contacted, so the rules
 about what a real cluster returns are still untested against a cluster.
 
+## Permanent CI after the full-repository audit
+
+The audit of `1dad773` found two critical and nine high findings. The fixes are in
+`f011e3f`, `6a07c65`, `d1be30f`, `8df3df8` and `be88d27`; the permanent workflows
+ran on `be88d27` and every check passed:
+
+| Workflow | Run | Notable jobs |
+| --- | --- | --- |
+| Android CI | [39904238199](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39904238199) | compile, lint, APK inspection, static checks, every JUnit shard including `DeployContainerIdentityTest`, `DeployGuardTest` and `HostSelectionTest` |
+| Android instrumented | [39904238274](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39904238274) | emulator (API 35) |
+| Security checks | [39904238370](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39904238370) | ShellCheck, installer and workflow validation, dependency review |
+| CodeQL | [39904238235](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39904238235) | actions and java-kotlin analysis |
+| iOS CI | [39904238515](https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39904238515) | Swift package tests including `HostKeyConversionTests`, `TmuxPresenceTests` and `TransferSafetyTests`; simulator build; simulator UI tests |
+
+Three earlier runs of the same work failed and are kept here rather than tidied
+away, because each exposed a real defect:
+
+* `39902230234` / `39902230217` — the reviewed command list still called a
+  `applyCommand()` that no longer existed, the SFTP close result had the wrong
+  type, and the new decoder tests did not handle throwing.
+* `39902588518` — the same test-compilation defects, fixed in `d1be30f`.
+* `39902942021` — Kotlin string escaping: the guarded mutation interpolated the
+  Kotlin `uid` into the shell comparison instead of `$uid`, so the check could
+  never have matched, and its test had the mirror-image error. Fixed in `8df3df8`.
+* `39903808724` — three test defects: a command built from a *different* plan
+  (a different token) can never match, the expected `--env-file` path predated the
+  token, and the `AlreadyExists` fake returned success where kubectl returns 1.
+
+What these runs prove: the new guard, create-only path, container identity,
+environment-file hardening, host selection, SFTP framing/timeout rules and the
+NIOSSH-based scan compile and pass their unit tests. What they do not prove is
+unchanged and is listed below and in `docs/support-matrix.md`.
+
 ## Run index
 
 | What | Workflow | Run | Commit | Result |

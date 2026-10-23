@@ -48,10 +48,12 @@ workspace for the same Linux machine, reached from **Manage → Host workspace**
   `systemd --user` unit. The name and the manifest are generated before the form
   is shown, so the object you review is the object that is applied. Creation
   shows the exact commands first. Removal only ever targets the resource this app
-  created: a container while the host still reports its label, a workload only
-  after the active context, your permission for the exact verb, and the object's
-  label and immutable Kubernetes UID have all been re-read, and any unreadable
-  answer refuses. Container environment values are treated as secrets: they are
+  created: a container only while the runtime still reports the id recorded when
+  it was created and the ownership label, and a workload only after the active
+  context, your permission for the exact verb, and the object's label and
+  immutable Kubernetes UID have all been re-read in the same host command as the
+  action — any unreadable answer refuses. Workloads are **create-only**: a name
+  that already exists is refused and left untouched, never adopted. Container environment values are treated as secrets: they are
   written to a `0600` file on the host through stdin and read with
   `--env-file`, so they are never in an argument, in this screen, or in `ps`;
   anyone who can reach the container runtime's socket can still read them with

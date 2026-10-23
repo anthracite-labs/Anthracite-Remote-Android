@@ -20,7 +20,14 @@ jobs:
         with:
           persist-credentials: false
       - name: Install XcodeGen
-        run: brew install xcodegen
+        # Not pinned to a checksum: no verified artifact was available for this
+        # repository's CI, and printing the version is honest about what ran
+        # rather than pretending the toolchain is reproducible. Recorded as a gap
+        # in docs/support-matrix.md.
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen --version
       - name: Build and test
         run: sh ci/ios-build.sh
       - name: Keep the result bundle
