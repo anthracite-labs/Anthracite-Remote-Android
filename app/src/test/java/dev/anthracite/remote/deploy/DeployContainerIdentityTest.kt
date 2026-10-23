@@ -106,11 +106,11 @@ class DeployContainerIdentityTest {
     fun `the environment file is created exclusively in a private directory`() {
         val command = plan().envFileCommand()
         // A symlinked or world-accessible directory is refused before writing.
-        assertTrue(command.contains("[ -L \"\\$d\" ]"))
+        assertTrue(command.contains("[ -L \"\$d\" ]"))
         assertTrue(command.contains("d????------"))
         assertTrue(command.contains("exit ${DeployPlans.EXIT_INSECURE_PATH}"))
         // noclobber: an existing file or a symlink is an error, not a truncation.
-        assertTrue(command.endsWith("set -C; cat > \"\\$f\""))
+        assertTrue(command.endsWith("set -C; cat > \"\$f\""))
         assertTrue(command.startsWith("umask 077; "))
     }
 
