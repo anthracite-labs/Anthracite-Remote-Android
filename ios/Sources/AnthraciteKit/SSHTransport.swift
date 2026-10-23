@@ -125,7 +125,7 @@ private final class ScannerHandler: ChannelInboundHandler, @unchecked Sendable {
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         finish(.failure(SSHError.connectionFailed(String(describing: error))))
-        context.close(push: nil, promise: nil)
+        context.close(promise: nil)
     }
 
     private func finish(_ result: Result<Void, Error>) {
@@ -658,7 +658,7 @@ final class ShellCollector: ChannelInboundHandler, @unchecked Sendable {
         self.continuation = nil
         lock.unlock()
         continuation?.finish(throwing: SSHError.channelFailed(String(describing: error)))
-        context.close(push: nil, promise: nil)
+        context.close(promise: nil)
     }
 }
 
@@ -774,7 +774,7 @@ final class ExecCollector: ChannelInboundHandler, @unchecked Sendable {
         clearContinuation()
         stderrData.append(contentsOf: Data(String(describing: error).utf8))
         lock.unlock()
-        context.close(push: nil, promise: nil)
+        context.close(promise: nil)
     }
 
     private func finish() {

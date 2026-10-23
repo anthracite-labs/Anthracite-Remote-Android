@@ -208,7 +208,7 @@ final class SFTPChannelCollector: ChannelInboundHandler, @unchecked Sendable {
         self.continuation = nil
         lock.unlock()
         continuation?.finish(throwing: SFTPError.protocolViolation(String(describing: error)))
-        context.close(push: nil, promise: nil)
+        context.close(promise: nil)
     }
 }
 
@@ -332,6 +332,7 @@ public actor SFTPClient {
 
     private func readHandle(_ type: UInt8, _ reader: SFTPReader) throws -> String {
         guard type == SFTP.replyHandle else { throw SFTPError.protocolViolation("expected HANDLE") }
+        var reader = reader
         return try reader.readString()
     }
 
