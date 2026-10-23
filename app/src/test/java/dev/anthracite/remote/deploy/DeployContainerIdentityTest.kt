@@ -113,11 +113,14 @@ class DeployContainerIdentityTest {
         assertTrue(command.contains("!= 700"))
         assertFalse(command.contains("d????------"))
         assertTrue(command.contains("exit ${DeployPlans.EXIT_INSECURE_PATH}"))
+        // The operation claims its own directory first: a won `mkdir` is the proof
+        // of ownership the cleanup relies on, and a lost one is somebody else's.
+        assertTrue(command.contains("set -C; mkdir \"\$p\""))
         // noclobber: an existing file or a symlink is an error, not a truncation.
-        // The redirect is exclusive, and a half-written file is removed by the
-        // same command that created it.
-        assertTrue(command.contains("set -C; if ! cat > \"\$f\""))
-        assertTrue(command.contains("then rm -f \"\$f\""))
+        assertTrue(command.contains("if ! cat > \"\$f\""))
+        // A partial file is removed, and only from the directory this operation
+        // claimed: `rmdir` refuses to delete a directory that still holds anything.
+        assertTrue(command.contains("then rm -f \"\$f\"; rmdir \"\$p\""))
         assertTrue(command.startsWith("umask 077; "))
     }
 

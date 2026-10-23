@@ -61,9 +61,10 @@ a host. That gap is stated in `docs/support-matrix.md` and is not claimed.
 in the confirmation dialog, in the process list of the host, and in any log of the
 command.
 
-**Now.** Values are written through stdin to `$HOME/.anthracite/deploy/<name>.env`
-under `umask 077`, passed with `--env-file`, and removed immediately after the
-container starts. The review screen shows `KEY=***` only. The plan's warnings state
+**Now.** Values are written through stdin to
+`$HOME/.anthracite/deploy/<name>-<token>/env` under `umask 077`, inside a directory
+this operation claims exclusively with `mkdir`, passed with `--env-file`, and
+removed together with that directory immediately after the container starts. The review screen shows `KEY=***` only. The plan's warnings state
 the remaining exposure independently: anyone who can reach the container runtime's
 socket can read the values with `inspect`.
 

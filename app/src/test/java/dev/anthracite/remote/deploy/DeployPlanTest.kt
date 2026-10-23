@@ -106,11 +106,17 @@ class DeployPlanTest {
         assertEquals("TOKEN=$secret\n", String(plan.envFileBytes()))
         // The file is created with a private umask and removed by path only.
         assertTrue(plan.envFileCommand().startsWith("umask 077; d=\"\$HOME/.anthracite/deploy\""))
-        // Exclusive create, and the command that creates the file is the one that
-        // removes a half-written one: a refusal never leaves a partial secret.
-        assertTrue(plan.envFileCommand().contains("set -C; if ! cat > \"\$f\""))
-        assertTrue(plan.envFileCommand().contains("then rm -f \"\$f\""))
+        // The operation claims a private directory of its own, creates the file
+        // exclusively inside it, and removes only what it created there.
+        assertTrue(plan.envFileCommand().contains("set -C; mkdir \"\$p\""))
+        assertTrue(plan.envFileCommand().contains("if ! cat > \"\$f\""))
+        assertTrue(plan.envFileCommand().contains("then rm -f \"\$f\"; rmdir \"\$p\""))
         assertTrue(plan.envFileRemoveCommand().startsWith("rm -f \""))
+        // Cleanup removes the file, then the directory only while it is empty, and
+        // is idempotent. It is never a recursive delete.
+        assertTrue(plan.envFileRemoveCommand().contains("; rmdir "))
+        assertTrue(plan.envFileRemoveCommand().endsWith("|| true"))
+        assertFalse(plan.envFileRemoveCommand().contains("rm -rf"))
         assertFalse(plan.envFileRemoveCommand().contains(secret))
     }
 

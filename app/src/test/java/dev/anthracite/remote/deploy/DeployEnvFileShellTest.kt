@@ -85,7 +85,7 @@ class DeployEnvFileShellTest {
 
     /** The exact path the generated command writes to, with `$HOME` resolved. */
     private fun targetPath(plan: DeployPlan.Container, home: File): File =
-        File(home, ".anthracite/deploy/${plan.name}-${plan.envToken}.env")
+        File(home, ".anthracite/deploy/${plan.name}-${plan.envToken}/env")
 
     private fun deployDir(home: File) = File(home, ".anthracite/deploy")
 
@@ -206,7 +206,10 @@ class DeployEnvFileShellTest {
             val plan = plan()
             deployDir(home).apply { mkdirs() }
             tool("/bin/chmod", "700", deployDir(home).path)
-            val file = targetPath(plan, home).apply { writeText("OLD=1\n") }
+            val file = targetPath(plan, home).apply {
+                parentFile.mkdirs()
+                writeText("OLD=1\n")
+            }
 
             val outcome = run(shell, plan.envFileCommand(), home, plan.envFileBytes())
 
@@ -223,6 +226,7 @@ class DeployEnvFileShellTest {
             deployDir(home).apply { mkdirs() }
             tool("/bin/chmod", "700", deployDir(home).path)
             val victim = File(home, "victim.txt").apply { writeText("SECRET-VICTIM\n") }
+            targetPath(plan, home).parentFile.mkdirs()
             tool("/bin/ln", "-s", victim.path, targetPath(plan, home).path)
 
             val outcome = run(shell, plan.envFileCommand(), home, plan.envFileBytes())
@@ -264,7 +268,7 @@ class DeployEnvFileShellTest {
             // The competing process wins the window and writes its own file.
             val command = withCompetitor(
                 plan.envFileCommand(),
-                "printf 'FOREIGN=1\n' > \"\$f\"; chmod 644 \"\$f\"",
+                "mkdir \"\$p\"; printf 'FOREIGN=1\n' > \"\$f\"; chmod 644 \"\$f\"",
             )
 
             val outcome = run(shell, command, root, plan.envFileBytes())
@@ -288,11 +292,15 @@ class DeployEnvFileShellTest {
         val plan = plan()
         val directory = deployDir(root)
         val before = directory.listFiles()!!.map { it.name }.toSet()
-        val command = withCompetitor(plan.envFileCommand(), "printf 'FOREIGN=1\n' > \"\$f\"")
+        val command = withCompetitor(plan.envFileCommand(), "mkdir \"\$p\"; printf 'FOREIGN=1\n' > \"\$f\"")
 
         assertEquals(DeployPlans.EXIT_INSECURE_PATH, run(shell, command, root, plan.envFileBytes()).exit)
 
-        assertEquals("a stray file was left behind", before + targetPath(plan, root).name, directory.listFiles()!!.map { it.name }.toSet())
+        assertEquals(
+            "a stray file was left behind",
+            before + "anthracite-1a2b3c4d-${plan.envToken}",
+            directory.listFiles()!!.map { it.name }.toSet(),
+        )
         assertEquals("the secret was written anyway", "FOREIGN=1\n", targetPath(plan, root).readText())
     }
 
@@ -318,7 +326,10 @@ class DeployEnvFileShellTest {
         val cancelled = plan("anthracite-cccc3333")
         val other = plan("anthracite-dddd4444")
         // A second operation has already claimed and written its own file.
-        val otherFile = targetPath(other, root).apply { writeText("OTHER=1\n") }
+        val otherFile = targetPath(other, root).apply {
+            parentFile.mkdirs()
+            writeText("OTHER=1\n")
+        }
 
         // Start the operation, wait until it has claimed its file, then kill it
         // while it is still reading the secret from stdin.
@@ -348,7 +359,10 @@ class DeployEnvFileShellTest {
         val root = preparedHome("stale")
         val stale = plan("anthracite-eeee5555")
         val fresh = plan("anthracite-ffff6666")
-        val staleFile = targetPath(stale, root).apply { writeText("TOKEN=leftover") }
+        val staleFile = targetPath(stale, root).apply {
+            parentFile.mkdirs()
+            writeText("TOKEN=leftover")
+        }
 
         // The fresh operation has its own name, so it neither claims nor cleans
         // the leftover: only the operation that owns it may remove it.

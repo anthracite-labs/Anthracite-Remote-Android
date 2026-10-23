@@ -271,7 +271,16 @@ internal sealed class DeployPlan {
          * can never delete a file this app did not create, and a leftover from a
          * crashed run cannot block the next one.
          */
-        fun envFilePath(): String = "\"\$HOME/.anthracite/deploy/$name-$envToken.env\""
+        /**
+         * The directory this operation claims, and the file the values land in.
+         *
+         * The directory is the claim: `mkdir` is atomic and fails if the name is
+         * taken, so a won `mkdir` is proof that this operation created it. That is
+         * what makes the cleanup safe — see [envFileCommand].
+         */
+        fun envFileDir(): String = "\"\$HOME/.anthracite/deploy/$name-$envToken\""
+
+        fun envFilePath(): String = "\"\$HOME/.anthracite/deploy/$name-$envToken/env\""
 
         /**
          * Creates the file exclusively and writes the values to it.
@@ -284,13 +293,30 @@ internal sealed class DeployPlan {
          *   owned by the connected user and must be exactly `0700` — a pre-planted
          *   `~/.anthracite/deploy` pointing elsewhere, or one other users can
          *   read, would otherwise expose the values;
+         * * **this operation's own directory is claimed with `mkdir`.** `mkdir` is
+         *   atomic and fails when the name is taken, and the name carries the same
+         *   random per-plan token as the file, so a won `mkdir` proves this
+         *   operation created the directory. A lost one means somebody else holds
+         *   the name: nothing is written, nothing is removed, and the status says
+         *   so;
          * * an existing target is refused and left untouched: this command must
          *   never truncate a file it did not create;
          * * `set -C` (noclobber) makes the redirect `O_CREAT|O_EXCL`, so the
          *   create itself cannot follow a symlink or clobber a file even if one
          *   appears between the check and the write;
-         * * if the write fails half-way, the partial file is removed here, so the
-         *   caller never has to guess whether a file it sees is its own.
+         * * if the write fails half-way, the partial file is removed — and removed
+         *   only because the claim above proved the directory is this operation's
+         *   own. Removal never leaves that directory: `rmdir` refuses to remove it
+         *   while anything else is still in it, so nothing a competitor created is
+         *   ever deleted. An earlier version removed the destination on any write
+         *   failure, which also deleted a file that a competing process had created
+         *   between the existence check and the exclusive create.
+         *
+         * The claim is `mkdir` rather than an observed `exec 3>"$f"` on purpose:
+         * POSIX makes a failed redirection on `exec` (or on the special builtin
+         * `:`) terminate a non-interactive shell, so that form cannot report "the
+         * file is not mine" — dash exits with status 2 instead. `mkdir` fails as an
+         * ordinary command in every shell tested (dash, bash, busybox ash).
          *
          * Permissions are read with `stat`, trying the GNU and then the BSD form,
          * and compared as a number. An earlier version compared a ten-character
@@ -300,7 +326,7 @@ internal sealed class DeployPlan {
         fun envFileCommand(): String = buildString {
             append("umask 077; ")
             append("d=\"\$HOME/.anthracite/deploy\"; ")
-            append("f=").append(envFilePath()).append("; ")
+            append("p=").append(envFileDir()).append("; f=\"\$p/env\"; ")
             append("stat_owner() { stat -c %u \"\$1\" 2>/dev/null || stat -f %u \"\$1\" 2>/dev/null; }; ")
             append("stat_mode() { stat -c %a \"\$1\" 2>/dev/null || stat -f %Lp \"\$1\" 2>/dev/null; }; ")
             append("if [ -L \"\$d\" ]; then echo 'Anthracite refused: the deployment directory is a symbolic link.' >&2; exit ")
@@ -316,17 +342,34 @@ internal sealed class DeployPlan {
             append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
             append("if [ \"\$m\" != 700 ]; then echo \"Anthracite refused: the deployment directory must be 0700 (found 0\$m).\" >&2; exit ")
             append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
-            append("if [ -e \"\$f\" ] || [ -L \"\$f\" ]; then echo 'Anthracite refused: the environment file already exists and was left untouched.' >&2; exit ")
+            // The claim. A won `mkdir` is the proof of ownership the cleanup below
+            // relies on; a lost one is somebody else's directory and is never
+            // touched — not entered, not written, not removed.
+            append("set -C; mkdir \"\$p\" 2>/dev/null || { echo 'Anthracite refused: the directory for this operation is already held and was left untouched.' >&2; exit ")
+            append(DeployPlans.EXIT_INSECURE_PATH).append("; }; ")
+            append("if [ -e \"\$f\" ] || [ -L \"\$f\" ]; then rmdir \"\$p\" 2>/dev/null; echo 'Anthracite refused: the environment file already exists and was left untouched.' >&2; exit ")
             append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
-            append("set -C; if ! cat > \"\$f\"; then rm -f \"\$f\"; echo 'Anthracite refused: the environment file could not be written.' >&2; exit ")
+            // The directory is ours, so a partial file here is ours to remove, and
+            // `rmdir` only succeeds while it is empty: a competitor's file inside it
+            // would stop the removal instead of being deleted.
+            append("if ! cat > \"\$f\"; then rm -f \"\$f\"; rmdir \"\$p\" 2>/dev/null; echo 'Anthracite refused: the environment file could not be written.' >&2; exit ")
             append(DeployPlans.EXIT_ENV_WRITE_FAILED).append("; fi; ")
-            append("if [ -L \"\$f\" ] || [ ! -f \"\$f\" ]; then rm -f \"\$f\"; echo 'Anthracite refused: the environment file is not a plain file.' >&2; exit ")
+            append("if [ -L \"\$f\" ] || [ ! -f \"\$f\" ]; then rm -f \"\$f\"; rmdir \"\$p\" 2>/dev/null; echo 'Anthracite refused: the environment file is not a plain file.' >&2; exit ")
             append(DeployPlans.EXIT_INSECURE_PATH).append("; fi; ")
-            append("fm=\$(stat_mode \"\$f\"); if [ \"\$fm\" != 600 ]; then rm -f \"\$f\"; echo \"Anthracite refused: the environment file is not private (found 0\$fm).\" >&2; exit ")
+            append("fm=\$(stat_mode \"\$f\"); if [ \"\$fm\" != 600 ]; then rm -f \"\$f\"; rmdir \"\$p\" 2>/dev/null; echo \"Anthracite refused: the environment file is not private (found 0\$fm).\" >&2; exit ")
             append(DeployPlans.EXIT_INSECURE_PATH).append("; fi")
         }
 
-        fun envFileRemoveCommand(): String = "rm -f ${envFilePath()}"
+        /**
+         * Removes this operation's file, then its now-empty directory.
+         *
+         * Both steps fail closed on anything this operation did not create: the
+         * file is at a fixed path inside the claimed directory, and `rmdir` refuses
+         * a directory that still holds anything. The command is idempotent, so a
+         * retry or a duplicated cleanup is harmless.
+         */
+        fun envFileRemoveCommand(): String =
+            "rm -f ${envFilePath()}; rmdir ${envFileDir()} 2>/dev/null || true"
 
         /** The exact bytes the container will receive, as `docker --env-file` reads them. */
         fun envFileBytes(): ByteArray =
