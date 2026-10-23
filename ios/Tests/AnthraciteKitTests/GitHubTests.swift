@@ -302,10 +302,16 @@ extension GitHubTests {
     }
 
     func testAPageLimitIsReportedNotSilentlyTruncated() async {
-        // Every page claims another one is waiting: a loop with no end.
+        // Every page offers a new one, so the walk only ends at the page limit.
         StubURLProtocol.handler = { [weak self] request in
             self?.requests.append(request)
-            return (200, ["Link": "<https://api.github.com/loop?page=1>; rel=\"next\""], Data((self?.issueJSON([1]) ?? "[]").utf8))
+            let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value.flatMap(Int.init) ?? 1
+            return (
+                200,
+                ["Link": "<https://api.github.com/loop?page=\(page + 1)>; rel=\"next\""],
+                Data((self?.issueJSON([page]) ?? "[]").utf8)
+            )
         }
         do {
             _ = try await client.listIssues(repository, limit: 100)
@@ -365,14 +371,18 @@ extension GitHubTests {
             self?.requests.append(request)
             let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
                 .queryItems?.first { $0.name == "page" }?.value
-            if page == "2" { throw GitHubError.transport("connection reset") }
+            if page == "2" { throw URLError(.networkConnectionLost) }
             return (200, ["Link": "<https://api.github.com/x?page=2>; rel=\"next\""], Data((self?.issueJSON([1]) ?? "[]").utf8))
         }
         do {
             _ = try await client.listIssues(repository, limit: 100)
             XCTFail("an incomplete listing must not be returned")
         } catch let error as GitHubError {
-            XCTAssertEqual(error, .transport("connection reset"))
+            // The message comes from URLSession, so only the kind is asserted; what
+            // matters is that the prefix was not returned as the listing.
+            guard case .transport = error else {
+                return XCTFail("unexpected error \(error)")
+            }
         }
     }
 

@@ -64,6 +64,14 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
         return buffered
     }
 
+    /// True while a consumer is waiting for a chunk. Test hook, and the only way a
+    /// test can wait for the state cancellation has to resolve.
+    var hasParkedConsumer: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return parked != nil
+    }
+
     /// True while the reader has been asked to stop.
     public var isPaused: Bool {
         lock.lock()
@@ -130,7 +138,7 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
         if !queue.isEmpty {
             let chunk = queue.removeFirst()
             buffered -= chunk.count
-            if paused, buffered < Self.lowWaterMark {
+            if paused, buffered <= Self.lowWaterMark {
                 paused = false
                 resume = true
             }
@@ -160,7 +168,7 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
                 if !queue.isEmpty {
                     let chunk = queue.removeFirst()
                     buffered -= chunk.count
-                    if paused, buffered < Self.lowWaterMark {
+                    if paused, buffered <= Self.lowWaterMark {
                         paused = false
                         resume = true
                     }
@@ -174,6 +182,17 @@ public final class TerminalOutput: AsyncSequence, @unchecked Sendable {
                     } else {
                         continuation.resume(returning: nil)
                     }
+                } else if Task.isCancelled {
+                    // `onCancel` can run before this continuation exists, so the
+                    // abandonment above may have found nothing to release. Parking
+                    // here would strand the continuation for ever.
+                    if paused {
+                        paused = false
+                        resume = true
+                    }
+                    lock.unlock()
+                    if resume { flowControl?(false) }
+                    continuation.resume(throwing: CancellationError())
                 } else {
                     parked = continuation
                     lock.unlock()

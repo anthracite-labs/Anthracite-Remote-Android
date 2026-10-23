@@ -59,8 +59,9 @@ final class TerminalOutputTests: XCTestCase {
             TerminalOutput.highWaterMark + 32 * 1024,
             "the queue outgrew its bound"
         )
-        // Asked once, not once per chunk.
-        XCTAssertEqual(reader.states, [true], "the reader was told the same thing repeatedly")
+        // The current state is delivered when the hook is connected, then asked to
+        // stop once — not once per chunk.
+        XCTAssertEqual(reader.states, [false, true], "the reader was told the same thing repeatedly")
     }
 
     func testConsumingBelowTheLowWaterMarkStartsTheReaderAgain() async throws {
@@ -76,7 +77,7 @@ final class TerminalOutputTests: XCTestCase {
             _ = try await iterator.next()
         }
         XCTAssertFalse(reader.paused, "the reader was never restarted")
-        XCTAssertEqual(reader.states, [true, false])
+        XCTAssertEqual(reader.states, [false, true, false])
     }
 
     // MARK: Losslessness
@@ -184,11 +185,22 @@ final class TerminalOutputTests: XCTestCase {
             var iterator = stream.makeAsyncIterator()
             return try await iterator.next()
         }
+        // Wait until the consumer is actually parked on next(), so cancellation is
+        // the thing under test rather than a task that never started.
+        for _ in 0..<10_000 where !stream.hasParkedConsumer {
+            await Task.yield()
+        }
+        XCTAssertTrue(stream.hasParkedConsumer, "the consumer never reached next()")
+
         consumer.cancel()
-        _ = try? await consumer.value
+        let outcome = await consumer.result
+        guard case .failure(let error) = outcome else {
+            return XCTFail("a cancelled consumer must not receive a chunk")
+        }
+        XCTAssertTrue(error is CancellationError, "unexpected error: \(error)")
 
         // The reader is not left stopped because one consumer walked away: the next
-        // consumer must be able to drain, and the queue must still be bounded.
+        // consumer must be able to drain, and nothing queued was discarded.
         XCTAssertFalse(stream.isPaused, "the reader was left stopped after cancellation")
         XCTAssertEqual(reader.states.last, false)
         var iterator = stream.makeAsyncIterator()
