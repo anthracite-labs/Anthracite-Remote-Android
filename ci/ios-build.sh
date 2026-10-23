@@ -14,9 +14,13 @@ cd "$ROOT/ios"
 
 annotate_failures() {
     file=$1
-    grep -E "(error:|xcodebuild: error:)" "$file" | head -n 10 | while IFS= read -r line; do
-        echo "::error title=ios-build::$line"
-    done
+    # Compiler and test failures, plus the runtime messages a crash leaves behind:
+    # a fatal error's text is not part of an "error:" line, and the workflow log is
+    # not always retrievable.
+    grep -E "(error:|xcodebuild: error:|Fatal error:|SWIFT TASK CONTINUATION MISUSE|signal code)" "$file" |
+        head -n 12 | while IFS= read -r line; do
+            echo "::error title=ios-build::$line"
+        done
 }
 
 # ------------------------------------------------------------------ resolutions

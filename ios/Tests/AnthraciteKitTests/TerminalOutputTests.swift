@@ -174,19 +174,23 @@ final class TerminalOutputTests: XCTestCase {
 
     // MARK: Cancellation
 
-    func testACancelledConsumerDoesNotLeaveTheReaderStopped() async throws {
+    func testACancelledConsumerDoesNotStrandTheStream() async throws {
         let reader = Reader()
         let stream = TerminalOutput()
         stream.onFlowControl { reader.record($0) }
+        // Fill past the bound, then drain every byte: the stream is empty, so the
+        // next consumer really parks on next() instead of taking a queued chunk.
         for number in 0..<32 { stream.append(chunk(number)) }
-        XCTAssertTrue(stream.isPaused)
+        var iterator = stream.makeAsyncIterator()
+        while stream.bufferedByteCount > 0 {
+            _ = try await iterator.next()
+        }
+        XCTAssertFalse(stream.isPaused, "the reader was not restarted after draining")
 
         let consumer = Task { () -> Data? in
-            var iterator = stream.makeAsyncIterator()
-            return try await iterator.next()
+            var parked = stream.makeAsyncIterator()
+            return try await parked.next()
         }
-        // Wait until the consumer is actually parked on next(), so cancellation is
-        // the thing under test rather than a task that never started.
         for _ in 0..<10_000 where !stream.hasParkedConsumer {
             await Task.yield()
         }
@@ -198,14 +202,13 @@ final class TerminalOutputTests: XCTestCase {
             return XCTFail("a cancelled consumer must not receive a chunk")
         }
         XCTAssertTrue(error is CancellationError, "unexpected error: \(error)")
-
-        // The reader is not left stopped because one consumer walked away: the next
-        // consumer must be able to drain, and nothing queued was discarded.
         XCTAssertFalse(stream.isPaused, "the reader was left stopped after cancellation")
-        XCTAssertEqual(reader.states.last, false)
-        var iterator = stream.makeAsyncIterator()
-        let next = try await iterator.next()
-        XCTAssertNotNil(next)
+
+        // The stream is still usable: a later chunk still arrives in order.
+        stream.append(Data("after".utf8))
+        var resumed = stream.makeAsyncIterator()
+        let next = try await resumed.next()
+        XCTAssertEqual(next, Data("after".utf8))
     }
 
     // MARK: The channel handler actually stops reading
