@@ -299,7 +299,7 @@ install_packages() {
         zypper) run_privileged "$INSTALL_BIN" --non-interactive install --no-recommends "$@" ;;
         pacman) run_privileged "$INSTALL_BIN" -S --noconfirm --needed "$@" ;;
         apk) run_privileged "$INSTALL_BIN" add --no-progress "$@" ;;
-        *) return 1 ;;
+        *) echo "unsupported package manager: ${MANAGER:-none}" >&2; return 1 ;;
     esac
 }
 
@@ -309,7 +309,7 @@ verify_package() {
         dnf|zypper) "$VERIFY_BIN" -q "$1" >/dev/null 2>&1 ;;
         pacman) "$VERIFY_BIN" -Q "$1" >/dev/null 2>&1 ;;
         apk) "$VERIFY_BIN" info -e "$1" >/dev/null 2>&1 ;;
-        *) return 1 ;;
+        *) echo "unsupported package manager: ${MANAGER:-none}" >&2; return 1 ;;
     esac
 }
 

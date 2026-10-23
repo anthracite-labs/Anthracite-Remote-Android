@@ -46,16 +46,26 @@ RECORDED_TICKS=$(owned_read "$JOB/start_ticks" || echo "")
 RECORDED_TICKS=$(printf '%s' "$RECORDED_TICKS" | tr -d '[:space:]')
 emit pid "${PID:-none}"
 
-process_gone() {
-    pid=$1
-    [ -e "/proc/$pid" ] || return 0
-    line=$(cat "/proc/$pid/stat" 2>/dev/null) || return 0
-    rest=${line##*) }
-    # shellcheck disable=SC2086
-    set -- $rest
-    [ "${1:-}" = Z ] && return 0
-    return 1
-}
+# process_gone() lives in anthracite-provision-lib.sh (single source of truth).
+# The inline fallback is byte-identical and only runs when the lib was not
+# installed alongside this script.
+_LIB_DIR=$(dirname "$0" 2>/dev/null || echo .)
+if [ -f "$_LIB_DIR/anthracite-provision-lib.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$_LIB_DIR/anthracite-provision-lib.sh"
+else
+    process_gone() {
+        pid=$1
+        [ -e "/proc/$pid" ] || return 0
+        line=$(cat "/proc/$pid/stat" 2>/dev/null) || return 0
+        rest=${line##*) }
+        # shellcheck disable=SC2086
+        set -- $rest
+        [ "${1:-}" = Z ] && return 0
+        return 1
+    }
+fi
+unset _LIB_DIR
 
 PROCESS_ALIVE=no
 TICKS_MATCH=unknown
