@@ -19,6 +19,24 @@ public struct TerminalStyle: Equatable, Sendable {
 
     public init() {}
 
+    public init(
+        foreground: TerminalColor = .default,
+        background: TerminalColor = .default,
+        bold: Bool = false,
+        faint: Bool = false,
+        italic: Bool = false,
+        underline: Bool = false,
+        reverse: Bool = false
+    ) {
+        self.foreground = foreground
+        self.background = background
+        self.bold = bold
+        self.faint = faint
+        self.italic = italic
+        self.underline = underline
+        self.reverse = reverse
+    }
+
     public var isEmpty: Bool {
         foreground == .default && background == .default && !bold && !faint && !italic
             && !underline && !reverse
