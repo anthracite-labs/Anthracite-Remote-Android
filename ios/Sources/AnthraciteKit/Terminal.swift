@@ -183,13 +183,19 @@ public final class TerminalScreen {
                 if altActive {
                     alternate.removeFirst(min(drop, alternate.count))
                     while alternate.count < targetRows { alternate.append(Self.blankLine(columns)) }
-                } else {
-                    // The disappearing lines above the cursor belong in the
-                    // scrollback: they were output, not noise.
-                    for line in primary.prefix(min(drop, row)) { appendScrollback(line) }
+                } else if row >= drop {
+                    // Lines that scroll off the top are output, not noise: they
+                    // belong in the scrollback.
+                    for line in primary.prefix(drop) { appendScrollback(line) }
                     primary.removeFirst(min(drop, primary.count))
                     while primary.count < targetRows { primary.append(Self.blankLine(columns)) }
-                    row = max(0, min(row - drop, targetRows - 1))
+                    row = max(0, row - drop)
+                } else {
+                    // The cursor is near the top, so the disappearing lines are
+                    // the ones at the bottom. Dropping from the top would throw
+                    // away content the user is looking at.
+                    primary.removeLast(min(drop, primary.count))
+                    while primary.count < targetRows { primary.append(Self.blankLine(columns)) }
                 }
             } else {
                 let add = targetRows - rows
