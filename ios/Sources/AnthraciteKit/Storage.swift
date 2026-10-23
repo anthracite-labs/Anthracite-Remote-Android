@@ -162,8 +162,8 @@ public final class ProfileStore {
         var list = try profiles()
         list.removeAll { $0.id == id }
         try persist(list)
-        try store.remove(key: secretKey(id, kind: .password))
-        try store.remove(key: secretKey(id, kind: .privateKey))
+        try store.remove(secretKey(id, kind: .password))
+        try store.remove(secretKey(id, kind: .privateKey))
     }
 
     private func persist(_ list: [ServerProfile]) throws {
@@ -184,7 +184,7 @@ public final class ProfileStore {
     }
 
     public func clearSecret(for profile: ServerProfile) throws {
-        try store.remove(key: secretKey(profile.id, kind: profile.authKind))
+        try store.remove(secretKey(profile.id, kind: profile.authKind))
     }
 
     public func hostKeys() throws -> HostKeyStore {
