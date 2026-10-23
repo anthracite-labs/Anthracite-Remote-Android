@@ -36,15 +36,25 @@ workspace for the same Linux machine, reached from **Manage → Host workspace**
   fast-forward-only pull, branch switch, and push. Force push is limited to
   `--force-with-lease` and is never offered by a single tap.
 * **GitHub** — a fine-grained personal access token (or GitHub's device flow when
-  a public client id is configured). Repositories, pull requests, checks, diff,
-  comment, review and merge. A merge carries the head SHA you reviewed.
-* **Deployments** — Docker, Podman and Kubernetes **read-mostly** views: list,
-  logs, start/stop/restart a host-reported container, delete one named pod.
-  Docker socket access is root-equivalent and the screen says so.
+  a public client id is configured). Repositories, **issues** (list, detail,
+  comments, open/close, create), pull requests, checks, diff, comment, review and
+  merge. A merge carries the head SHA you reviewed; an issue mutation names its
+  repository and number before it runs.
+* **Deployments** — list, logs, start/stop/restart a host-reported container,
+  delete one named pod, **and create**: a container from an existing image
+  (ports, volumes, environment; labelled `anthracite.managed=1`), a reviewed
+  Kubernetes Deployment/StatefulSet in one confirmed context and namespace, or a
+  native program as a `systemd --user` unit. Creation shows the exact commands
+  first; removal only ever targets the resource this app created, and a container
+  is removed only while the host still reports its label. Docker socket access is
+  root-equivalent and the screen says so.
 * **Set up tools** — guided provisioning from a shipped catalogue of native
-  packages. The phone uploads a reviewed host script plus a plan digest; the host
-  re-verifies both before running anything. No `curl | sh`, no downloaded
-  artifacts, no stored `sudo` password.
+  packages, with presets and per-tool selection. The phone uploads a reviewed host
+  script plus a plan digest; the host re-verifies both before running anything. No
+  `curl | sh`, no downloaded artifacts, no stored `sudo` password. Coding-agent
+  CLIs (OpenCode, Claude Code, Codex, Gemini) are listed as **manual**
+  instructions, because their vendors publish no pin-verifiable artifact for every
+  distribution; nothing is executed for them.
 
 ### What the terminal does not promise
 
@@ -58,7 +68,14 @@ host owns durable work, and reattaching to a `tmux` session is the honest
 equivalent of session restore.
 
 The full decision record is in `docs/adr/0001-ssh-workspace.md`; verified and
-unverified behaviour is listed in `docs/support-matrix.md`.
+unverified behaviour is listed in `docs/support-matrix.md`. Guided provisioning
+was exercised end to end (install, verify, failure, cancel, cleanup) in six
+disposable distribution containers — see
+`docs/evidence/container-matrix.md`. No real host, no live container daemon and no
+Kubernetes cluster has been used yet, so those paths stay unverified and the app
+says so.
+
+There is **no iOS client** in this repository yet: decision 10B is not delivered.
 
 ## Persistence limitation
 

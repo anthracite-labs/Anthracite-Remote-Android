@@ -470,11 +470,89 @@ internal enum class SupportTier(val label: String) {
 }
 
 internal object ProvisioningSupport {
+    private const val MATRIX_RUN =
+        "https://github.com/anthracite-labs/Anthracite-Remote-Android/actions/runs/39881616212"
+
+    private val containerCapabilities: Set<ProvisionCapability> = setOf(
+        ProvisionCapability.OS_DISCOVERY,
+        ProvisionCapability.PLAN_GENERATION,
+        ProvisionCapability.PACKAGE_INSTALL,
+        ProvisionCapability.PACKAGE_VERIFY,
+        ProvisionCapability.CANCELLATION,
+        ProvisionCapability.CLEANUP,
+    )
+
     /**
-     * Populated only from a real matrix run. Empty is the truthful default:
-     * read-only discovery does not prove that a package can be installed.
+     * One record per image that completed install -> verify -> failure handling ->
+     * cancellation -> cleanup in a disposable container. The digest, the date and
+     * the run are part of the record: the image name alone proves nothing, because
+     * a mutable tag can resolve to a different image tomorrow.
+     *
+     * Nothing here lists SSH, tmux, supervisor, logout or reboot: those were not
+     * exercised by this run and are separate capabilities.
      */
-    val evidence: List<DistributionEvidence> = emptyList()
+    val evidence: List<DistributionEvidence> = listOf(
+        DistributionEvidence(
+            osId = "debian",
+            osVersion = "12",
+            arch = "x86_64",
+            image = "debian:12",
+            imageDigest = "debian@sha256:854dd8ab51d62866dbd8f5431d15ce77b12983a2a4a1e1fe43a2395dc7ef9f61",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "ubuntu",
+            osVersion = "24.04",
+            arch = "x86_64",
+            image = "ubuntu:24.04",
+            imageDigest = "ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "fedora",
+            osVersion = "42",
+            arch = "x86_64",
+            image = "fedora:42",
+            imageDigest = "fedora@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "arch",
+            osVersion = "",
+            arch = "x86_64",
+            image = "archlinux:latest",
+            imageDigest = "archlinux@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "opensuse-tumbleweed",
+            osVersion = "20261021",
+            arch = "x86_64",
+            image = "opensuse/tumbleweed:latest",
+            imageDigest = "opensuse/tumbleweed@sha256:0c6f00841281acf55a8ef29e777fc2db40d0923289ba933d566542cff2cddc00",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+        DistributionEvidence(
+            osId = "alpine",
+            osVersion = "3.21",
+            arch = "x86_64",
+            image = "alpine:3.21",
+            imageDigest = "alpine@sha256:bbfcd601d7cd20d35bb0b8b866ad1a8a0d107ca3e1c20870c75c5ce2c1186d30",
+            testedAt = "2026-10-23",
+            runUrl = MATRIX_RUN,
+            capabilities = containerCapabilities,
+        ),
+    )
 
     /** Evidence keyed to a specific machine (VM or host), never to a distro name. */
     val hostEvidence: Map<String, Set<ProvisionCapability>> = emptyMap()

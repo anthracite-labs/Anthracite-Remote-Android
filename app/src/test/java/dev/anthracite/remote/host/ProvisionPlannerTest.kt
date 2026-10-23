@@ -178,6 +178,32 @@ class ProvisionPlannerTest {
     )
 
     @Test
+    fun `shipped evidence lists only capabilities the matrix actually exercised`() {
+        assertTrue(ProvisioningSupport.evidence.isNotEmpty())
+        for (record in ProvisioningSupport.evidence) {
+            assertTrue("${record.image} has no install evidence", record.installTested)
+            assertTrue(record.imageDigest.startsWith("${record.image.substringBefore(':')}@sha256:"))
+            assertEquals(64, record.imageDigest.substringAfter("sha256:").length)
+            assertTrue(record.runUrl.contains("/actions/runs/"))
+            assertTrue(record.testedAt.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")))
+            // SSH, session and reboot behaviour were not part of that run.
+            assertFalse(ProvisionCapability.SSH_PTY in record.capabilities)
+            assertFalse(ProvisionCapability.SESSION_DURABILITY in record.capabilities)
+            assertFalse(ProvisionCapability.REBOOT_DURABILITY in record.capabilities)
+        }
+        assertTrue(ProvisioningSupport.hostEvidence.isEmpty())
+    }
+
+    @Test
+    fun `a tested image still cannot certify a real host of that name`() {
+        val realHost = facts()
+        val plan = ProvisionPlanner.plan(realHost, request("tmux"))
+        assertEquals(SupportTier.UNVERIFIED, plan.supportTier)
+        assertTrue(plan.warnings.any { it.contains("not on this host") })
+        assertEquals(PlanDecision.ALLOWED_UNVERIFIED, ProvisionPlanner.decide(plan, realHost).decision)
+    }
+
+    @Test
     fun `read-only discovery never certifies package provisioning`() {
         val host = facts(container = true)
         val discoveredOnly = listOf(
