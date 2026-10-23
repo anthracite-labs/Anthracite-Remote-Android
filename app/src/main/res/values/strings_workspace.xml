@@ -365,6 +365,10 @@
     <string name="deploy_remove_native_confirm">Stop the user unit %1$s? The unit itself is collected afterwards.</string>
     <string name="deploy_remove_refused">The host does not confirm this container carries the Anthracite label, so it was not removed.</string>
     <string name="deploy_removed">%1$s was removed from the host.</string>
+    <string name="deploy_record_failed">%1$s was created, but it could not be recorded on this phone, so it will not be offered for cleanup after a restart.</string>
+    <string name="deploy_managed_replaced">A different object now has the name %1$s. It was not created by this app, so nothing is offered for it.</string>
+    <string name="deploy_managed_gone">%1$s is no longer on the host. Its record is kept until you create something else.</string>
+    <string name="deploy_managed_unknown">The identity of %1$s could not be read, so it is unknown whether it is still the object this app created. Nothing is offered until it can be read.</string>
     <string name="deploy_refresh">Refresh</string>
     <string name="deploy_loading">Reading what the host reports…</string>
     <string name="deploy_load_failed">The host could not be read.</string>

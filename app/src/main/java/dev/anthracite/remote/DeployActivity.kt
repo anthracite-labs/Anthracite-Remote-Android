@@ -20,10 +20,18 @@ import dev.anthracite.remote.deploy.DeployPlan
 import dev.anthracite.remote.deploy.DeployPlanReview
 import dev.anthracite.remote.deploy.DeployPlans
 import dev.anthracite.remote.deploy.DeployWizard
+import dev.anthracite.remote.deploy.DeploymentTarget
 import dev.anthracite.remote.deploy.KubePod
+import dev.anthracite.remote.deploy.LiveIdentity
+import dev.anthracite.remote.deploy.ManagedDeploymentStore
+import dev.anthracite.remote.deploy.ManagedPlans
+import dev.anthracite.remote.deploy.ManagedReconciliation
+import dev.anthracite.remote.deploy.ManagedRecords
+import dev.anthracite.remote.deploy.ManagedState
 import dev.anthracite.remote.deploy.SshShell
 import dev.anthracite.remote.deploy.WorkloadKind
 import dev.anthracite.remote.host.HostProfile
+import dev.anthracite.remote.host.SharedPreferencesAdapter
 import dev.anthracite.remote.ui.Row
 import dev.anthracite.remote.ui.RowAdapter
 import dev.anthracite.remote.ui.addActionButton
@@ -66,6 +74,8 @@ class DeployActivity : AppCompatActivity() {
     private var busy = false
     private var creator: DeployCreator? = null
     private var created: DeployPlan? = null
+    /** The persisted deployment this screen may offer operations on, when it matched. */
+    private var managedPlan: DeployPlan? = null
     private var wizardImage = ""
     private var wizardPorts = ""
     private var wizardVolumes = ""
@@ -145,11 +155,127 @@ class DeployActivity : AppCompatActivity() {
         }
     }
 
+    /** The created plan that may be inspected or removed: never one that only matches a name. */
+    private fun activePlan(): DeployPlan? = created ?: managedPlan
+
+    private fun managedStore(): ManagedDeploymentStore? {
+        val profile = host ?: return null
+        return ManagedDeploymentStore(
+            SharedPreferencesAdapter(getSharedPreferences("deploy", MODE_PRIVATE)),
+            ManagedDeploymentStore.keyFor(profile.id),
+        )
+    }
+
+    /**
+     * Where the app is looking now.
+     *
+     * Only what this screen actually knows is filled in; the rest stays null and
+     * is not compared. A container runtime is known in container mode, and the
+     * context and namespace are known once a cluster has been chosen — the plan
+     * guards themselves re-read both on the host before any mutation.
+     */
+    private fun currentTarget(): DeploymentTarget? {
+        val profile = host ?: return null
+        return DeploymentTarget(
+            hostId = profile.id,
+            hostFingerprint = profile.fingerprint,
+            runtime = if (mode == Mode.CONTAINERS) runtime else null,
+            context = kubeContext,
+            namespace = kubeContext?.let { namespace },
+        )
+    }
+
+    /**
+     * Records the creation that just succeeded.
+     *
+     * A record is written only when the runtime or cluster reported an immutable
+     * identity; without one nothing is persisted, so a later screen cannot offer
+     * an operation based on the name alone.
+     */
+    private fun recordCreation(plan: DeployPlan) {
+        val profile = host ?: return
+        val store = managedStore() ?: return
+        val record = ManagedRecords.of(plan, profile.id, profile.fingerprint, System.currentTimeMillis())
+        if (record == null) {
+            // A new creation replaces whatever this screen offered before; without
+            // an identity there is nothing to offer, and stale records go away.
+            store.clear()
+            managedPlan = null
+            return
+        }
+        if (!store.save(record)) {
+            setStatus(getString(R.string.deploy_record_failed, plan.name))
+        }
+        managedPlan = null
+    }
+
+    private fun forgetRecord() {
+        managedStore()?.clear()
+        managedPlan = null
+    }
+
+    /**
+     * Rebuilds what this screen may offer after it was recreated.
+     *
+     * The record is compared with where the app is now before anything is read,
+     * and the live identity is read before any operation is offered. Only an
+     * identity that equals the recorded one enables the actions; every other
+     * outcome is shown as its own state instead of being treated as "probably
+     * still ours".
+     */
+    private fun restoreManaged() {
+        if (busy || created != null) return
+        val store = managedStore() ?: return
+        val record = store.load()
+        if (record == null) {
+            managedPlan = null
+            buildActions()
+            return
+        }
+        val target = currentTarget()
+        if (target == null || !ManagedReconciliation.sameTarget(record, target)) {
+            // Another host, runtime, context or namespace: nothing is read here and
+            // nothing is offered, because the record is not evidence about this one.
+            managedPlan = null
+            buildActions()
+            return
+        }
+        val plan = ManagedPlans.of(record)
+        if (plan == null) {
+            managedPlan = null
+            buildActions()
+            setStatus(getString(R.string.deploy_managed_unknown, record.name))
+            return
+        }
+        val deploy = creator ?: DeployCreator(SshShell(Workspace.ssh)).also { creator = it }
+        lifecycleScope.launch {
+            val live = runCatching {
+                io {
+                    when (plan) {
+                        is DeployPlan.Container -> deploy.observeIdentity(plan)
+                        is DeployPlan.Workload -> deploy.observeIdentity(plan)
+                        is DeployPlan.Native -> LiveIdentity.Unreadable("no identity")
+                    }
+                }
+            }.getOrElse { LiveIdentity.Unreadable(it.message.orEmpty()) }
+            val state = ManagedReconciliation.evaluate(record, currentTarget() ?: target, live)
+            managedPlan = if (state == ManagedState.MATCH) plan else null
+            buildActions()
+            when (state) {
+                ManagedState.MATCH -> Unit
+                ManagedState.ELSEWHERE -> Unit
+                ManagedState.REPLACED -> setStatus(getString(R.string.deploy_managed_replaced, record.name))
+                ManagedState.GONE -> setStatus(getString(R.string.deploy_managed_gone, record.name))
+                ManagedState.UNKNOWN -> setStatus(getString(R.string.deploy_managed_unknown, record.name))
+            }
+        }
+    }
+
     private fun buildActions() {
         actions.removeAllViews()
         action(R.string.deploy_refresh) { refresh() }
         action(R.string.deploy_create) { newDeployment() }
-        if (created != null) {
+        if (activePlan() != null) {
             action(R.string.deploy_created_inspect) { inspectCreated() }
             action(R.string.deploy_created_remove) { removeCreated() }
         }
@@ -429,7 +555,9 @@ class DeployActivity : AppCompatActivity() {
                         refresh()
                         return@onSuccess
                     }
-                    created = plan.withCreatedId(id)
+                    val confirmedContainer = plan.withCreatedId(id)
+                    created = confirmedContainer
+                    recordCreation(confirmedContainer)
                     setStatus(getString(R.string.deploy_created, plan.name))
                     buildActions()
                     refresh()
@@ -448,6 +576,7 @@ class DeployActivity : AppCompatActivity() {
                     }
                     val confirmed = plan.withAppliedUid(uid)
                     created = confirmed
+                    recordCreation(confirmed)
                     setStatus(getString(R.string.deploy_created, plan.name))
                     buildActions()
                     reportRollout(deploy, confirmed)
@@ -489,7 +618,7 @@ class DeployActivity : AppCompatActivity() {
     }
 
     private fun inspectCreated() {
-        val plan = created ?: return
+        val plan = activePlan() ?: return
         val creatorClient = creator ?: DeployCreator(SshShell(Workspace.ssh)).also { creator = it }
         val deploy = client ?: DeployClient(Workspace.ssh).also { client = it }
         if (busy) return
@@ -516,7 +645,7 @@ class DeployActivity : AppCompatActivity() {
     }
 
     private fun removeCreated() {
-        val plan = created ?: return
+        val plan = activePlan() ?: return
         val deploy = creator ?: DeployCreator(SshShell(Workspace.ssh)).also { creator = it }
         val warning = when (plan) {
             is DeployPlan.Container ->
@@ -545,6 +674,7 @@ class DeployActivity : AppCompatActivity() {
                 result.onSuccess { exec ->
                     if (exec.exitCode == 0) {
                         created = null
+                        forgetRecord()
                         setStatus(getString(R.string.deploy_removed, plan.name))
                         buildActions()
                         refresh()
@@ -648,6 +778,7 @@ class DeployActivity : AppCompatActivity() {
                     pods = loaded
                     containers = emptyList()
                     renderPods(warning)
+                    restoreManaged()
                 }.onFailure { setStatus(it.message ?: getString(R.string.deploy_load_failed)) }
             } else {
                 val result = runCatching { io { deploy.containers(runtime) } }
@@ -656,6 +787,7 @@ class DeployActivity : AppCompatActivity() {
                     containers = loaded
                     pods = emptyList()
                     renderContainers(unparsed)
+                    restoreManaged()
                 }.onFailure { setStatus(it.message ?: getString(R.string.deploy_load_failed)) }
             }
         }

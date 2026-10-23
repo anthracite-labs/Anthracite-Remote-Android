@@ -395,6 +395,47 @@ internal class DeployCreator(private val shell: RemoteShell) {
     }
 
     /**
+     * Reads what the runtime reports for this name, and nothing else.
+     *
+     * Used to reconcile a persisted record after the screen was recreated. Only a
+     * structurally valid id is reported as an identity; a failed or garbled read
+     * is [LiveIdentity.Unreadable], because this code cannot tell "no such
+     * container" from "the runtime is not answering" and does not guess.
+     */
+    fun observeIdentity(plan: DeployPlan.Container): LiveIdentity {
+        val read = shell.exec(plan.identityCommand(), null, 20_000)
+        if (read.exitCode != 0) {
+            return LiveIdentity.Unreadable("The container runtime did not report this name.")
+        }
+        val id = read.stdout.trim().substringBefore('|').trim()
+        if (!PosixShell.isContainerId(id)) {
+            return LiveIdentity.Unreadable("The runtime's answer was not a container identity.")
+        }
+        return LiveIdentity.Present(id)
+    }
+
+    /**
+     * The same for a Kubernetes object.
+     *
+     * A 404 is reported as [LiveIdentity.Missing] only because `kubectl` says so
+     * with its own `(NotFound)` marker; every other failure stays unreadable.
+     */
+    fun observeIdentity(plan: DeployPlan.Workload): LiveIdentity {
+        val read = shell.exec(plan.identityCommand(), null, 20_000)
+        if (read.exitCode != 0) {
+            val detail = (read.stderr + read.stdout).lowercase()
+            return if (detail.contains("(notfound)") || detail.contains("not found")) {
+                LiveIdentity.Missing
+            } else {
+                LiveIdentity.Unreadable("The cluster did not report this object.")
+            }
+        }
+        val identity = WorkloadGuard.parseIdentity(read.stdout)
+            ?: return LiveIdentity.Unreadable("The cluster's answer was not an object identity.")
+        return LiveIdentity.Present(identity.uid)
+    }
+
+    /**
      * Removes only the exact container this app created.
      *
      * Both facts must still hold: the id the runtime reports for the name is the
