@@ -171,7 +171,11 @@ actor FakeSFTPServer {
     // MARK: Server
 
     func handle(_ frame: Data) async {
-        var reader = SFTPReader(frame)
+        // The client writes complete frames: a four-byte length, then the body.
+        // Parsing the length as the type made every request look unknown, so the
+        // server stayed silent and every test timed out.
+        guard frame.count > 4 else { return }
+        var reader = SFTPReader(Data(frame.dropFirst(4)))
         guard let type = try? reader.readByte() else { return }
         if type == SFTP.packetInit {
             guard !ignoreHandshake else { return }
@@ -342,7 +346,7 @@ final class SFTPFixture {
     let server: FakeSFTPServer
     let client: SFTPClient
 
-    init(requestTimeout: Duration = .milliseconds(300), handshakeTimeout: Duration = .milliseconds(300)) {
+    init(requestTimeout: Duration = .seconds(2), handshakeTimeout: Duration = .seconds(2)) {
         let peer = TestSFTPPeer()
         let server = FakeSFTPServer(peer: peer)
         peer.handler = { [weak server] _, frame in

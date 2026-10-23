@@ -107,7 +107,11 @@ class DeployContainerIdentityTest {
         val command = plan().envFileCommand()
         // A symlinked or world-accessible directory is refused before writing.
         assertTrue(command.contains("[ -L \"\$d\" ]"))
-        assertTrue(command.contains("d????------"))
+        // The permission comes from `stat`, never from a pattern matched against
+        // `ls -ld`: that pattern was eleven characters wide and could not match.
+        assertTrue(command.contains("stat -c %a"))
+        assertTrue(command.contains("!= 700"))
+        assertFalse(command.contains("d????------"))
         assertTrue(command.contains("exit ${DeployPlans.EXIT_INSECURE_PATH}"))
         // noclobber: an existing file or a symlink is an error, not a truncation.
         // The redirect is exclusive, and a half-written file is removed by the
@@ -143,7 +147,9 @@ class DeployContainerIdentityTest {
 
         assertEquals(DeployPlans.EXIT_INSECURE_PATH, outcome.result.exitCode)
         assertNull(outcome.identity)
-        assertFalse(shell.commands.any { it.contains("rm -f") })
+        // No removal is sent: the write command's own `rm -f` is the only one
+        // allowed to run, and only for a partial file it created.
+        assertFalse(shell.commands.any { it.startsWith("rm -f") })
         assertFalse(shell.commands.any { it.contains("docker run") })
     }
 
