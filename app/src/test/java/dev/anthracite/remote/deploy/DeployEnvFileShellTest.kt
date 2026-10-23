@@ -3,10 +3,12 @@ package dev.anthracite.remote.deploy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.rules.Timeout
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -26,6 +28,13 @@ import kotlin.concurrent.thread
 class DeployEnvFileShellTest {
     @get:Rule
     val temp = TemporaryFolder()
+
+    /**
+     * A test that spawns processes must never be able to hold the runner. Every
+     * wait below is bounded, and this is the backstop if one of them is not.
+     */
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(180)
 
     private val secret = "s3cr3t-token-value"
 
@@ -47,13 +56,31 @@ class DeployEnvFileShellTest {
 
     private fun home(name: String = "home"): File = temp.newFolder(name)
 
-    /** Runs a setup tool and fails loudly if it did not succeed. */
+    /**
+     * A scratch file outside `TemporaryFolder`, which is not safe to use from two
+     * threads at once.
+     */
+    private fun scratch(suffix: String): File =
+        File.createTempFile("anthracite-test", suffix).apply { deleteOnExit() }
+
+    private fun finish(process: Process, what: String): Int {
+        if (!process.waitFor(60, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            fail("$what did not finish")
+        }
+        return process.exitValue()
+    }
+
+    /** Runs a setup tool and fails loudly, with its output, if it did not succeed. */
     private fun tool(vararg arguments: String) {
-        val process = ProcessBuilder(*arguments).start()
-        process.inputStream.close()
-        process.errorStream.close()
-        assertTrue("${arguments.joinToString(" ")} did not finish", process.waitFor(30, TimeUnit.SECONDS))
-        assertEquals("${arguments.joinToString(" ")} failed", 0, process.exitValue())
+        val out = scratch(".out")
+        val err = scratch(".err")
+        val process = ProcessBuilder(*arguments)
+            .redirectOutput(out)
+            .redirectError(err)
+            .start()
+        val exit = finish(process, arguments.joinToString(" "))
+        assertEquals("${arguments.joinToString(" ")}: ${err.readText()}", 0, exit)
     }
 
     /** The exact path the generated command writes to, with `$HOME` resolved. */
@@ -73,8 +100,8 @@ class DeployEnvFileShellTest {
         stdin: ByteArray? = null,
         prefix: String = "",
     ): Outcome {
-        val out = temp.newFile()
-        val err = temp.newFile()
+        val out = scratch(".out")
+        val err = scratch(".err")
         val process = ProcessBuilder(shell.path, "-c", prefix + command)
             .redirectOutput(out)
             .redirectError(err)
@@ -85,9 +112,8 @@ class DeployEnvFileShellTest {
             // closed pipe. That is expected here, not a failure of the test.
             runCatching { if (stdin != null) stream.write(stdin) }
         }
-        // Every command here is bounded; a hung shell is a test failure, never a wait.
-        assertTrue("the shell did not finish", process.waitFor(60, TimeUnit.SECONDS))
-        return Outcome(process.exitValue(), err.readText())
+        val exit = finish(process, "the shell")
+        return Outcome(exit, err.readText())
     }
 
     // ------------------------------------------------------------------ positive
@@ -210,8 +236,10 @@ class DeployEnvFileShellTest {
     fun `a directory owned by another user is refused`() {
         // Only a privileged test process can create the condition. Reporting the
         // skip is honest; pretending to have tested ownership would not be.
-        val uid = ProcessBuilder("/usr/bin/id", "-u").start()
-            .let { it.inputStream.bufferedReader().readText().trim() }
+        val idOut = scratch(".out")
+        val id = ProcessBuilder("/usr/bin/id", "-u").redirectOutput(idOut).start()
+        finish(id, "id")
+        val uid = idOut.readText().trim()
         assumeTrue("ownership can only be forged as root (running as uid $uid)", uid == "0")
 
         val home = home("owner")
@@ -253,10 +281,13 @@ class DeployEnvFileShellTest {
             assertEquals(String(plan.envFileBytes()), file.readText())
         }
         // Cleanup of one plan must not touch the other's file.
+        val removeOut = scratch(".out")
         val remove = ProcessBuilder(shell.path, "-c", first.envFileRemoveCommand())
+            .redirectOutput(removeOut)
+            .redirectErrorStream(true)
             .apply { environment()["HOME"] = home.absolutePath }
             .start()
-        assertTrue(remove.waitFor(30, TimeUnit.SECONDS))
+        assertEquals(removeOut.readText(), 0, finish(remove, "the removal"))
         assertFalse(targetPath(first, home).exists())
         assertTrue("removing one plan's file removed the other's", targetPath(second, home).isFile)
     }
@@ -285,20 +316,28 @@ class DeployEnvFileShellTest {
     }
 
     private fun permissions(file: File): String {
-        val out = temp.newFile()
-        ProcessBuilder("/bin/sh", "-c", "stat -c %A \"\$1\" 2>/dev/null || stat -f %Sp \"\$1\"", "sh", file.path)
+        val out = scratch(".out")
+        val process = ProcessBuilder(
+            "/bin/sh", "-c", "stat -c %A \"\$1\" 2>/dev/null || stat -f %Sp \"\$1\"", "sh", file.path,
+        )
             .redirectOutput(out)
+            .redirectErrorStream(true)
             .start()
-            .waitFor()
+        finish(process, "stat")
         return out.readText().trim().removePrefix("d").removePrefix("-")
     }
 
     /** True when anyone other than the owner may read the file. */
     private fun File.readableByOthers(): Boolean {
-        val stat = ProcessBuilder("/bin/sh", "-c", "stat -c %a \"\$1\" 2>/dev/null || stat -f %Lp \"\$1\"", "sh", path)
+        val out = scratch(".out")
+        val stat = ProcessBuilder(
+            "/bin/sh", "-c", "stat -c %a \"\$1\" 2>/dev/null || stat -f %Lp \"\$1\"", "sh", path,
+        )
+            .redirectOutput(out)
+            .redirectErrorStream(true)
             .start()
-        val mode = stat.inputStream.bufferedReader().readText().trim()
-        stat.waitFor()
+        finish(stat, "stat")
+        val mode = out.readText().trim()
         val other = mode.lastOrNull()?.digitToIntOrNull() ?: return true
         return other and 4 != 0
     }
