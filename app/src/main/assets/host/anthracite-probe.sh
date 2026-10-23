@@ -41,8 +41,13 @@ emit cpu_count "$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || 
 if [ -r /proc/meminfo ]; then
     emit mem_total_kb "$(sed -n 's/^MemTotal:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo 2>/dev/null | head -n 1)"
 fi
-emit disk_avail_kb "$(df -Pk "${HOME:-/}" 2>/dev/null | awk 'NR==2 {print $4}')"
-emit filesystem "$(df -PT "${HOME:-/}" 2>/dev/null | awk 'NR==2 {print $2}')"
+# No awk: a minimal openSUSE image does not ship one, and the probe must work on
+# a host it has never seen. `df -P` gives one line per filesystem.
+df_line() {
+    df "$@" "${HOME:-/}" 2>/dev/null | sed -n '2p' | tr -s ' '
+}
+emit disk_avail_kb "$(df_line -Pk | cut -d' ' -f4)"
+emit filesystem "$(df_line -PT | cut -d' ' -f2)"
 
 emit sudo_present "$(command -v sudo >/dev/null 2>&1 && echo yes || echo no)"
 emit sudo_noninteractive "$(sudo -n -l </dev/null >/dev/null 2>&1 && echo yes || echo no)"

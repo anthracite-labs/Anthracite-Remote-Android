@@ -355,7 +355,7 @@ minbin() { # $1 home
     mkdir -p "$dir"
     # The interpreter under test must be reachable inside the restricted PATH,
     # otherwise the job would fail for the wrong reason.
-    for tool in sh "$SHELL_UNDER_TEST" date sed mv cat mkdir rm awk wc grep tr head tail ls id uname sleep chmod ln basename dirname kill; do
+    for tool in sh "$SHELL_UNDER_TEST" date sed mv cat mkdir rm awk wc grep tr head tail ls id uname sleep chmod ln basename dirname kill cut; do
         target=$(command -v "$tool" 2>/dev/null) || continue
         ln -sf "$target" "$dir/$tool"
     done

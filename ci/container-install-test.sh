@@ -112,9 +112,9 @@ write_plan() { # $1 job dir, $2 manager id, $3 steps content
     # requires the file to end with one, exactly like the phone writes it.
     printf '%s\n' "$3" >"$job/steps"
     if command -v sha256sum >/dev/null 2>&1; then
-        hash=$(sha256sum "$job/steps" | awk '{print $1}')
+        hash=$(sha256sum "$job/steps" | cut -d' ' -f1)
     else
-        hash=$(shasum -a 256 "$job/steps" | awk '{print $1}')
+        hash=$(shasum -a 256 "$job/steps" | cut -d' ' -f1)
     fi
     {
         printf 'job_id=%s\n' "$(basename "$job")"
@@ -160,7 +160,7 @@ set -e
 install_status=$(job_status "$JOB")
 grep -q 'status=installed' "$JOB/result" 2>/dev/null || fail "the runner did not record a verified install"
 package_present "$PKG" || fail "package $PKG is not installed after a successful job"
-INSTALL=ok
+INSTALL_RESULT=ok
 [ "$install_status" = "SUCCEEDED" ] || fail "install job ended as $install_status (exit $install_rc)"
 step "install verified: $PKG"
 
@@ -176,7 +176,7 @@ fail_status=$(job_status "$BAD_JOB")
 [ "$fail_status" = "FAILED" ] || fail "a nonexistent package ended as $fail_status"
 [ "$fail_rc" -ne 0 ] || fail "a failed install reported exit 0"
 grep -q 'status=install_failed' "$BAD_JOB/result" 2>/dev/null || fail "failure was not recorded as install_failed"
-FAILURE=ok
+FAILURE_RESULT=ok
 step "failure handling verified"
 
 # ---------------------------------------------------- cancellation and identity
@@ -219,7 +219,7 @@ printf '%s\n' "$cancel_first" | grep -q '^verification=pid+ticks+uid+cmdline$' |
 wait_for_status "$CANCEL_JOB" CANCELLED 30 || fail "the cancelled job did not reach CANCELLED"
 wait "$runner_pid" 2>/dev/null || true
 grep -qi 'SIGKILL' "$CANCEL_JOB/job.log" 2>/dev/null && fail "the runner used SIGKILL"
-CANCEL=ok
+CANCEL_RESULT=ok
 step "cancellation verified"
 
 # An unproven identity must never be signalled: point the pid file at a live
@@ -236,7 +236,7 @@ refused=$(HOME="$CANCEL_HOME" sh "$CANCEL" "$REUSE_JOB" 2>&1 || true)
 kill "$canary" 2>/dev/null || true
 printf '%s\n' "$refused" | grep -q '^cancel_result=refused_unknown_identity$' ||
     fail "an unproven identity was not refused: $refused"
-IDENTITY=ok
+IDENTITY_RESULT=ok
 step "identity refusal verified"
 
 # ---------------------------------------------------------------------- cleanup
@@ -255,9 +255,9 @@ if package_present "$PKG"; then
     fail "cleanup did not remove $PKG"
 fi
 rm -rf "$WORK"
-CLEANUP=ok
+CLEANUP_RESULT=ok
 step "cleanup verified"
 
 printf '\nANTHRACITE-MATRIX os=%s version=%s arch=%s manager=%s probe=ok install=%s verify=%s failure=%s cancel=%s identity=%s cleanup=%s\n' \
-    "$OS_ID" "${OS_VERSION:-unknown}" "$ARCH" "$MANAGER" "$INSTALL" "$INSTALL" "$FAILURE" "$CANCEL" "$IDENTITY" "$CLEANUP"
+    "$OS_ID" "${OS_VERSION:-unknown}" "$ARCH" "$MANAGER" "$INSTALL_RESULT" "$INSTALL_RESULT" "$FAILURE_RESULT" "$CANCEL_RESULT" "$IDENTITY_RESULT" "$CLEANUP_RESULT"
 printf 'ANTHRACITE-MATRIX-END\n'

@@ -29,7 +29,7 @@ if [ -z "$JOB" ] || [ ! -d "$JOB" ]; then
     exit 64
 fi
 # The directory is ours or nothing here is trustworthy.
-if [ -L "$JOB" ] || [ "$(ls -nd "$JOB" 2>/dev/null | awk '{print $3}')" != "$(id -u)" ]; then
+if [ -L "$JOB" ] || [ "$(ls -nd "$JOB" 2>/dev/null | tr -s ' ' | cut -d' ' -f3)" != "$(id -u)" ]; then
     echo "refusing a job directory that is a symlink or is not owned by this user" >&2
     exit 77
 fi
@@ -89,7 +89,12 @@ process_start_ticks() {
     [ -r "/proc/$pid/stat" ] || return 1
     line=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
     rest=${line##*) }
-    printf '%s\n' "$rest" | awk '{print $20}'
+    # Positional splitting avoids awk, which a minimal image may not ship.
+    # `rest` starts at field 3, so starttime (field 22 overall) is $20 here.
+    # shellcheck disable=SC2086
+    set -- $rest
+    [ "$#" -ge 20 ] || return 1
+    printf '%s\n' "${20}"
 }
 
 plan_value() {
@@ -104,7 +109,7 @@ plan_value() {
 owned_regular() {
     [ -f "$1" ] || return 1
     [ -L "$1" ] && return 1
-    [ "$(ls -nd "$1" 2>/dev/null | awk '{print $3}')" = "$(id -u)" ] || return 1
+    [ "$(ls -nd "$1" 2>/dev/null | tr -s ' ' | cut -d' ' -f3)" = "$(id -u)" ] || return 1
     return 0
 }
 
@@ -193,13 +198,13 @@ fi
 HASH_TOOL=""
 ACTUAL_HASH=""
 if command -v sha256sum >/dev/null 2>&1; then
-    ACTUAL_HASH=$(sha256sum "$STEPS" 2>/dev/null | awk '{print $1}')
+    ACTUAL_HASH=$(sha256sum "$STEPS" 2>/dev/null | cut -d' ' -f1)
     HASH_TOOL=sha256sum
 elif command -v shasum >/dev/null 2>&1; then
-    ACTUAL_HASH=$(shasum -a 256 "$STEPS" 2>/dev/null | awk '{print $1}')
+    ACTUAL_HASH=$(shasum -a 256 "$STEPS" 2>/dev/null | cut -d' ' -f1)
     HASH_TOOL=shasum
 elif command -v openssl >/dev/null 2>&1; then
-    ACTUAL_HASH=$(openssl dgst -sha256 -r "$STEPS" 2>/dev/null | awk '{print $1}')
+    ACTUAL_HASH=$(openssl dgst -sha256 -r "$STEPS" 2>/dev/null | cut -d' ' -f1)
     HASH_TOOL=openssl
 else
     fail "no_checksum_tool: no usable SHA-256 implementation (sha256sum, shasum or openssl); refusing to run an unverified plan"

@@ -95,7 +95,7 @@ esac
 [ "$CANONICAL" = "$ROOT_CANONICAL/$JOB_ID" ] || refuse refused_invalid_job job_dir_outside_root
 
 uid_of() {
-    ls -nd "$1" 2>/dev/null | awk '{print $3}'
+    ls -nd "$1" 2>/dev/null | tr -s ' ' | cut -d' ' -f3
 }
 
 ME=$(id -u)
@@ -109,8 +109,9 @@ process_gone() {
     [ -e "/proc/$pid" ] || return 0
     line=$(cat "/proc/$pid/stat" 2>/dev/null) || return 0
     rest=${line##*) }
-    state=$(printf '%s\n' "$rest" | awk '{print $1}')
-    [ "$state" = Z ] && return 0
+    # shellcheck disable=SC2086
+    set -- $rest
+    [ "${1:-}" = Z ] && return 0
     return 1
 }
 
@@ -151,7 +152,7 @@ fi
 
 # From here the PID exists and must be proven to be *our* runner before any
 # signal. Everything is re-read from the live process, never from the phone.
-PROC_UID=$(awk '/^Uid:/{print $2; exit}' "/proc/$PID/status" 2>/dev/null)
+PROC_UID=$(sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "/proc/$PID/status" 2>/dev/null | head -n 1)
 [ -n "$PROC_UID" ] || refuse refused_unknown_identity proc_uid_unreadable
 [ "$PROC_UID" = "$ME" ] || refuse refused_unknown_identity process_owner_mismatch
 
@@ -164,7 +165,9 @@ esac
 STAT_LINE=$(cat "/proc/$PID/stat" 2>/dev/null) || refuse refused_unknown_identity proc_stat_unreadable
 # Field 22 (starttime) with the comm field skipped: field 3 starts after ") ".
 REST=${STAT_LINE##*) }
-ACTUAL=$(printf '%s\n' "$REST" | awk '{print $20}')
+# shellcheck disable=SC2086
+set -- $REST
+ACTUAL=${20:-}
 case "$ACTUAL" in
     ''|*[!0-9]*) refuse refused_unknown_identity proc_stat_unreadable ;;
 esac

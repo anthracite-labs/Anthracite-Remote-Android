@@ -51,8 +51,9 @@ process_gone() {
     [ -e "/proc/$pid" ] || return 0
     line=$(cat "/proc/$pid/stat" 2>/dev/null) || return 0
     rest=${line##*) }
-    state=$(printf '%s\n' "$rest" | awk '{print $1}')
-    [ "$state" = Z ] && return 0
+    # shellcheck disable=SC2086
+    set -- $rest
+    [ "${1:-}" = Z ] && return 0
     return 1
 }
 
@@ -62,11 +63,13 @@ IDENTITY=absent
 if [ -n "$PID" ] && ! process_gone "$PID"; then
     PROCESS_ALIVE=yes
     IDENTITY=unverified
-    PROC_UID=$(awk '/^Uid:/{print $2; exit}' "/proc/$PID/status" 2>/dev/null)
+    PROC_UID=$(sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "/proc/$PID/status" 2>/dev/null | head -n 1)
     if [ -n "$PROC_UID" ] && [ "$PROC_UID" = "$(id -u)" ] && [ -r "/proc/$PID/stat" ]; then
         line=$(cat "/proc/$PID/stat" 2>/dev/null || echo "")
         rest=${line##*) }
-        ACTUAL_TICKS=$(printf '%s\n' "$rest" | awk '{print $20}')
+        # shellcheck disable=SC2086
+        set -- $rest
+        ACTUAL_TICKS=${20:-}
         CMDLINE=$(tr '\0' ' ' <"/proc/$PID/cmdline" 2>/dev/null || echo "")
         case "$RECORDED_TICKS" in
             ''|*[!0-9]*) : ;;
