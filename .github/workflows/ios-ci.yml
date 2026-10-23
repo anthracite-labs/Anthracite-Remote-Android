@@ -19,22 +19,34 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Install XcodeGen
-        # Not pinned to a checksum: no verified artifact was available for this
-        # repository's CI, and printing the version is honest about what ran
-        # rather than pretending the toolchain is reproducible. Recorded as a gap
-        # in docs/support-matrix.md.
+      - name: Install XcodeGen (pinned, checksum verified)
+        # The release artifact is fetched by version and checked against the
+        # SHA-256 published for that asset. Homebrew's formula would install
+        # whatever is current when the job runs, which makes the generated
+        # project unreproducible.
+        env:
+          XCODEGEN_VERSION: "2.46.0"
+          XCODEGEN_SHA256: "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
         run: |
           set -euo pipefail
-          brew install xcodegen
-          xcodegen --version
+          url="https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          curl --fail --silent --show-error --location --retry 3 --output /tmp/xcodegen.zip "$url"
+          echo "${XCODEGEN_SHA256}  /tmp/xcodegen.zip" | shasum -a 256 -c -
+          mkdir -p /tmp/xcodegen
+          unzip -q -o /tmp/xcodegen.zip -d /tmp/xcodegen
+          binary=$(find /tmp/xcodegen -type f -name xcodegen -perm -u+x | head -n 1)
+          test -n "$binary"
+          echo "$(dirname "$binary")" >> "$GITHUB_PATH"
+          "$binary" --version
       - name: Build and test
         run: sh ci/ios-build.sh
-      - name: Keep the result bundle
+      - name: Keep the result bundle and build evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ios-uitests-${{ github.run_id }}
-          path: /tmp/ios-uitests.xcresult
+          path: |
+            /tmp/ios-uitests.xcresult
+            /tmp/ios-build-evidence.txt
           if-no-files-found: ignore
           retention-days: 14
